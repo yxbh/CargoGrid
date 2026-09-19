@@ -52,7 +52,7 @@ uv run cargo-grid layout --build-width-mm 150 --build-depth-mm 150 --build-heigh
 
 ## Browse and generate accessories
 
-At the standard 60/13 settings, the documented 350x320x325 mm build envelope fits 61 accessories: female and male ramps, attachment plates, five vertical tile brackets, eight normal stops, two angled stops, edge/corner pieces and separate support rails/connectors. A different unit size or build envelope can change what fits.
+At the standard 60/13 settings, the documented 350x320x325 mm build envelope fits 65 accessories: female and male ramps, attachment plates, five vertical tile brackets, eight normal stops, two angled stops, round-hole rods and upper braces, edge/corner pieces and separate support rails/connectors. A different unit size or build envelope can change what fits.
 
 ![Three plates, five tile brackets, eight normal stops and two angled stops that use the X attachment interface.](docs/images/x-attachments.png)
 
@@ -76,7 +76,7 @@ The manifest lists anything omitted because it did not fit.
 
 ## Make the full H2D catalogue
 
-This standard-only command creates the documented H2D project: 25 tile sizes with the full 10 mm hole pattern and all 61 accessories. It packs actual part bounds onto named, family-grouped plates; the manifest records the plate count. It requires 60 mm units, 13 mm thickness and zero fit offset.
+This standard-only command creates the documented H2D project: 25 tile sizes with the full 10 mm hole pattern and all 65 accessories. It packs actual part bounds onto named, family-grouped plates, including `Rods and upper braces`; the manifest records the plate count. It requires 60 mm units, 13 mm thickness and zero fit offset.
 
 ```sh
 uv run cargo-grid catalogue --h2d-dual-safe --build-width-mm 350 --build-depth-mm 320 --build-height-mm 325 --bambu --material "Bambu PETG Basic @BBL H2D 0.8 nozzle" PETG "#637b70" --nozzle-diameter-mm 0.8 --layer-height-mm 0.32 --no-stl --output outputs/full-catalogue
@@ -87,6 +87,21 @@ Open `outputs/full-catalogue/job.3mf` as a project. Common plates keep model bou
 The project names the H2D 0.8 nozzle, 0.32 mm Balanced Strength process, Textured PEI plate and Bambu PETG Basic profile. Confirm those profiles and your loaded filament before slicing. The catalogue does not add PLA roof interfaces to tiles; the PETG/PLA roof-support job below remains a separate tile-only workflow.
 
 The 3MF is an unsliced project. Open it as a project, then slice and inspect every plate you plan to print.
+
+## Round-hole rods and upper braces
+
+Rods fit the mat's round holes, with a collar resting on its top. Choose 120 or 240 mm above-mat height; the peg adds another 12 mm at standard tile thickness. Upper braces connect two Ø10 mm shafts at 60 or 120 mm centres. That spacing stays in physical millimetres when unit size changes.
+
+![Two round-hole rods and two labelled upper braces, with scale shared within each family.](docs/images/rods-and-braces.png)
+
+```sh
+uv run cargo-grid part --family rod --rod-height-mm 120 --peg-diameter-mm 10 --build-width-mm 350 --build-depth-mm 320 --build-height-mm 325 --bambu --material "Model PETG" PETG "#637b70" --nozzle-diameter-mm 0.8 --layer-height-mm 0.32 --output outputs/rod
+uv run cargo-grid part --family rod-brace --brace-spacing-mm 60 --bore-diameter-mm 10 --build-width-mm 150 --build-depth-mm 150 --build-height-mm 50 --output outputs/upper-brace
+```
+
+Bambu projects lay rods horizontally at Y=90 degrees with normal Auto support for rod objects only. Braces print flat, bores upright, without object support; their nominal 10 mm fit still needs a print test. Individual brace exports also offer 10.2 and 10.4 mm bores. Remove rod support before fitting.
+
+Keep bags resting on the mat, not hanging from the rods. A brace may slide or jam on its rods; it is not a positive height lock. These parts have no hooks or load/crash rating.
 
 ## Vertical tile brackets
 
@@ -199,6 +214,8 @@ Common options:
 - `--width-cells`, `--depth-cells`: one tile or two-axis accessory;
 - `--panel-height-cells`: bracket wall rows, separate from floor depth;
 - `--length-cells`: edge strips and support rails;
+- `--rod-height-mm`, `--peg-diameter-mm`: rod height above the mat and round insertion peg;
+- `--brace-spacing-mm`, `--bore-diameter-mm`: physical brace centre spacing and bore diameter;
 - `--copy-count`: repeated copies of one design;
 - `--layout-width-mm`, `--layout-depth-mm`: finished rectangular layout;
 - `--packing-gap-mm`: catalogue separation.
@@ -252,7 +269,7 @@ design = tile_design(Tile(nx=2, ny=1))
 export_job(Job([design], BuildVolume(150, 150, 50), "part"), Path("outputs/python-job"))
 ```
 
-For a custom matching set, pass the same `Interface` to every tile and accessory. The API keeps the stable `pitch` and `height` field names:
+For a custom matching tile/X-joint set, pass the same `Interface` to each part. Round rods and braces instead have their own millimetre parameters; changing rod tile thickness adjusts only its insertion depth. The API keeps the stable `pitch` and `height` field names:
 
 ```python
 from cargo_grid import Interface, Tile

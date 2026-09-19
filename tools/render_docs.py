@@ -20,6 +20,7 @@ from cargo_grid.accessories import (
     make_accessory,
 )
 from cargo_grid.catalogue import BRACKET_DISPLAY_NAMES, accessory_variants
+from cargo_grid.rods import Rod, RodBrace
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILD = BuildVolume(350, 320, 325)
@@ -30,6 +31,7 @@ GEOMETRY_FILES = (
     "interfaces.py",
     "tiles.py",
     "accessories.py",
+    "rods.py",
     "catalogue.py",
     "jobs.py",
     "layout.py",
@@ -44,6 +46,7 @@ IMAGE_NAMES = (
     "vertical-stops.png",
     "ramps.png",
     "interface-sizes.png",
+    "rods-and-braces.png",
 )
 SHEETS = (
     (
@@ -54,6 +57,14 @@ SHEETS = (
     ),
 )
 FAMILIES = {
+    "rod": (
+        "Round-hole rods",
+        "A 10 mm shaft with a stop collar and a round mat peg. Height is measured above the mat; Bambu projects lay rods horizontally at Y=90 with normal Auto support for these objects.",
+    ),
+    "rod-brace": (
+        "Upper rod braces",
+        "A labelled two-bore link for round rods. Spacing is physical millimetres, not unit cells. Print flat with bores upright and no object support. Nominal 10 mm brace fit still needs a print test.",
+    ),
     "ramp": (
         "Floor ramps",
         "A floor-to-mat transition with a 50 mm body run and broad R32 shelf blend, capped for thicker custom ramps. Side/nose rounds stay R2. Width and tile-edge joints follow unit size; rise follows tile thickness.",
@@ -111,13 +122,19 @@ class Item:
     key: str
     title: str
     detail: str
-    spec: Accessory | None = None
+    spec: Accessory | Rod | RodBrace | None = None
 
 
 def inventory() -> list[Item]:
     items = []
     for spec in accessory_variants(BUILD):
-        if spec.family in ("edge-x", "edge-y", "support"):
+        if spec.family == "rod":
+            suffix = f"{spec.above_mat_height_mm:g}"
+            detail = f"{spec.above_mat_height_mm:g} mm above mat / {spec.peg_diameter_mm:g} mm peg"
+        elif spec.family == "rod-brace":
+            suffix = f"{spec.center_spacing_mm:g}-d{spec.bore_diameter_mm:g}"
+            detail = f"{spec.center_spacing_mm:g} mm centres / {spec.bore_diameter_mm:g} mm bores"
+        elif spec.family in ("edge-x", "edge-y", "support"):
             suffix, detail = str(spec.nx), f"{spec.nx} cell" + ("s" if spec.nx != 1 else "")
         elif spec.family == "ramp":
             suffix = f"male-{spec.nx}" if spec.ramp_join == "male" else str(spec.nx)
@@ -147,9 +164,9 @@ def inventory() -> list[Item]:
     return items
 
 
-def item_parameters(spec: Accessory) -> dict:
+def item_parameters(spec: Accessory | Rod | RodBrace) -> dict:
     parameters = asdict(spec)
-    if spec.ramp_join == "female":
+    if isinstance(spec, Accessory) and spec.ramp_join == "female":
         del parameters["ramp_join"]
     return parameters
 
@@ -404,6 +421,7 @@ def render_items(
     tools = workbench / ".agents/skills/cad/scripts"
     environment = os.environ.copy()
     environment["PYTHONPATH"] = os.pathsep.join((str(ROOT), str(ROOT / "src")))
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
     for subdir in ("source", "steps", "renders", "facts", "logs"):
         (work / subdir).mkdir(parents=True, exist_ok=True)
     items = hero_items() + interface_scale_items() + inventory() + bracket_assembly_items()
@@ -595,7 +613,11 @@ def thumbnail_entries(
                     "parameters": item_parameters(item.spec),
                     "size_mm": fact["size_mm"],
                     "file": path.relative_to(ROOT / "docs").as_posix(),
-                    "alt": f"{item.title}, {item.detail}, original joints: isometric STEP-derived render",
+                    "alt": (
+                        f"{item.title}, {item.detail}"
+                        + ("" if family in ("rod", "rod-brace") else ", original joints")
+                        + ": isometric STEP-derived render"
+                    ),
                     "description": item_description(item),
                     "dimensions": list(THUMBNAIL_SIZE),
                     "pixels_per_mm": scale,
@@ -632,7 +654,15 @@ def thumbnail_entries(
 
 
 def composite(
-    work: Path, items: list[Item], filename: str, title: str, columns: int, hero=False
+    work: Path,
+    items: list[Item],
+    filename: str,
+    title: str,
+    columns: int,
+    hero=False,
+    *,
+    subtitle: str | None = None,
+    family_scales: bool = False,
 ) -> dict:
     from PIL import Image, ImageDraw, ImageFont
 
@@ -654,18 +684,28 @@ def composite(
         draw.text((margin, 26), title, font=heading, fill=ink)
         draw.text(
             (margin, 98),
-            f"{len(items)} variants / 350 x 320 x 325 mm catalogue envelope / original joints",
+            subtitle
+            or f"{len(items)} variants / 350 x 320 x 325 mm catalogue envelope / original joints",
             font=detail,
             fill=muted,
         )
     facts = {
         item.key: json.loads((work / "facts" / f"{item.key}.json").read_text()) for item in items
     }
-    spans = [projected_spans(facts[item.key]["size_mm"]) for item in items]
-    scale = 0.94 * min(
-        (cell_width - 24) / max(s[0] for s in spans), (image_height - 20) / max(s[1] for s in spans)
-    )
+    groups = {item.spec.family for item in items} if family_scales else {None}
+    scales = {}
+    for group in groups:
+        spans = [
+            projected_spans(facts[item.key]["size_mm"])
+            for item in items
+            if group is None or item.spec.family == group
+        ]
+        scales[group] = 0.94 * min(
+            (cell_width - 24) / max(s[0] for s in spans),
+            (image_height - 20) / max(s[1] for s in spans),
+        )
     for index, item in enumerate(items):
+        scale = scales[item.spec.family if family_scales else None]
         x = margin + (index % columns) * cell_width
         y = header + (index // columns) * row_height
         with Image.open(work / "renders" / f"{item.key}.png") as raw:
@@ -688,7 +728,7 @@ def composite(
     return {
         "file": output.relative_to(ROOT).as_posix(),
         "items": [item.key for item in items],
-        "pixels_per_mm_at_source_resolution": scale,
+        "pixels_per_mm_at_source_resolution": scales if family_scales else scales[None],
         "dimensions": [width, height],
     }
 
@@ -727,6 +767,7 @@ def compose_all(work: Path, provenance: dict) -> None:
             3,
         )
     )
+    sheets.append(rod_overview(work))
     sheets.append(
         composite(
             work,
@@ -758,7 +799,9 @@ def compose_all(work: Path, provenance: dict) -> None:
     print(json.dumps(report["assets"], indent=2))
 
 
-def write_gallery(thumbnails: list[dict], provenance: dict, *, incremental: bool = False) -> None:
+def write_gallery(
+    thumbnails: list[dict], provenance: dict, *, incremental: str | None = None
+) -> None:
     items = inventory()
     lines = [
         "# Standard accessory gallery",
@@ -768,6 +811,10 @@ def write_gallery(thumbnails: list[dict], provenance: dict, *, incremental: bool
         "Click a thumbnail for the full-size image. The code name is the generator name. Parts in one family share a scale; different families use different scales so small details stay readable. Colour is only for the pictures.",
         "",
         "[Back to the beginner guide](../README.md) / [Thumbnail dimensions, hashes and source provenance](images/attachments/manifest.json)",
+        "",
+        "Round-hole rods stand 120 or 240 mm above the mat. Their Ø18 mm stop collar seats on the mat; the Ø10 mm shaft and selected peg diameter stay physical sizes. The two upper braces join rod centres 60 or 120 mm apart, independent of unit size. The [rod and brace overview](images/rods-and-braces.png) shows all four catalogue parts; optional 10.2 and 10.4 mm bores are available as individual parts, not additional catalogue rows.",
+        "",
+        "Keep bags resting on the mat. Braces are friction-fit links, not a positive height lock: they may slide or jam, and their physical fit is still pending. These parts have no hooks or load/crash rating. Bambu projects turn only rod objects Y=90 onto their side and enable normal Auto support; braces stay flat with their bores along Z and no object support. Remove rod support before fitting.",
         "",
         "Bracket names state both footprints. Deep tall is floor 1x2 -> wall 1x2, Wide low is floor 2x1 -> wall 2x1 and Deep square is floor 2x2 -> wall 2x2. Shallow tall is floor 1x1 -> wall 1x2, and Shallow wide is floor 2x1 -> wall 2x2. The two shallow IDs spell out `base..._wall...`; the original three keep their shorter IDs. Gallery examples use the standard 60 mm unit, 13 mm thickness and zero fit offset; custom matching parts use the same effective interface parameters.",
         "",
@@ -811,12 +858,14 @@ def write_gallery(thumbnails: list[dict], provenance: dict, *, incremental: bool
         "",
         "For a ramp-only update, add `--update-ramps --geometry-revision <committed-generator-revision> --workbench-revision <recorded-workbench-revision>`. This renders all ten ramps and recomposes only the ramp overview. Other pictures and their original provenance stay unchanged; no earlier render cache is needed.",
         "",
+        "For a rod-and-brace update, use `--update-rods` with those revision options. It renders only the two rods and two nominal 10 mm braces, then creates their four thumbnails and one overview. All other image bytes and provenance stay unchanged.",
+        "",
         (
-            "The manifest's top-level provenance belongs to the retained baseline images. Regenerated ramp thumbnails and the ramp overview each carry their own provenance; it does not describe a new full-gallery render. "
+            "The manifest's top-level provenance belongs to the retained baseline images. Incrementally rendered thumbnails and overviews each carry their own provenance; it does not describe a new full-gallery render. "
             if incremental
             else ""
         )
-        + f"{'Ramp update' if incremental else 'Generator'} source revision: {revision_tag(provenance['generator_commit'])}. Generator tree: {revision_tag(provenance['generator_tree'])}. Workbench revision: {revision_tag(provenance['workbench_commit'])}.",
+        + f"{incremental or 'Generator'} source revision: {revision_tag(provenance['generator_commit'])}. Generator tree: {revision_tag(provenance['generator_tree'])}. Workbench revision: {revision_tag(provenance['workbench_commit'])}.",
         "",
         "A clean render checks the picture and source inventory; it doesn't prove print quality or fit.",
         "",
@@ -824,37 +873,66 @@ def write_gallery(thumbnails: list[dict], provenance: dict, *, incremental: bool
     (ROOT / "docs/attachments.md").write_text("\n".join(lines))
 
 
+def rod_overview(work: Path) -> dict:
+    return composite(
+        work,
+        [item for item in inventory() if item.spec.family in ("rod", "rod-brace")],
+        "rods-and-braces.png",
+        "Round-hole rods and upper braces",
+        2,
+        subtitle="10 mm pegs and bores / scale shared within each family",
+        family_scales=True,
+    )
+
+
 def compose_ramps(work: Path, provenance: dict) -> None:
     """Replace only the complete ramp family, preserving all other rendered evidence."""
+    compose_families(work, provenance, {"ramp"}, "ramps.png", "Ramp update")
+
+
+def compose_rods(work: Path, provenance: dict) -> None:
+    """Add or replace only the four rod/brace thumbnails and their overview."""
+    compose_families(
+        work, provenance, {"rod", "rod-brace"}, "rods-and-braces.png", "Rod and brace update"
+    )
+
+
+def compose_families(
+    work: Path, provenance: dict, families: set[str], overview_name: str, scope: str
+) -> None:
     verify_geometry_source(provenance["generator_commit"])
     path = ROOT / "docs/images/attachments/manifest.json"
     manifest = json.loads(path.read_text())
-    retained = [entry for entry in manifest["items"] if entry["family"] != "ramp"]
-    expected = {item.key for item in inventory() if item.spec.family != "ramp"}
+    retained = [entry for entry in manifest["items"] if entry["family"] not in families]
+    expected = {item.key for item in inventory() if item.spec.family not in families}
     if len(retained) != len(expected) or {entry["key"] for entry in retained} != expected:
-        raise ValueError("Retained thumbnails do not match the non-ramp inventory")
+        raise ValueError("Retained thumbnails do not match the unchanged inventory")
     kept_overviews = [
-        entry for entry in manifest["overview_images"] if entry["file"] != "images/ramps.png"
+        entry for entry in manifest["overview_images"] if entry["file"] != f"images/{overview_name}"
     ]
     if len(kept_overviews) != len(IMAGE_NAMES) - 1 or {
         entry["file"] for entry in kept_overviews
-    } != {f"images/{name}" for name in IMAGE_NAMES if name != "ramps.png"}:
-        raise ValueError("Retained overviews do not match the non-ramp image set")
+    } != {f"images/{name}" for name in IMAGE_NAMES if name != overview_name}:
+        raise ValueError("Retained overviews do not match the unchanged image set")
     for entry in [*retained, *kept_overviews]:
         asset = ROOT / "docs" / entry["file"]
         if hashlib.sha256(asset.read_bytes()).hexdigest() != entry["sha256"]:
             raise ValueError(f"Retained image hash mismatch: {entry['file']}")
-    ramps = thumbnail_entries(work, provenance, families={"ramp"}, write_manifest=False)
-    sheet = composite(
-        work,
-        [item for item in inventory() if item.spec.family == "ramp"],
-        "ramps.png",
-        "Floor-to-mat ramps: female pockets and male tabs",
-        3,
+    replacements = thumbnail_entries(work, provenance, families=families, write_manifest=False)
+    sheet = (
+        rod_overview(work)
+        if families == {"rod", "rod-brace"}
+        else composite(
+            work,
+            [item for item in inventory() if item.spec.family == "ramp"],
+            overview_name,
+            "Floor-to-mat ramps: female pockets and male tabs",
+            3,
+        )
     )
-    overview = ROOT / "docs/images/ramps.png"
+    overview = ROOT / "docs/images" / overview_name
     replacement = {
-        "file": "images/ramps.png",
+        "file": f"images/{overview_name}",
         "dimensions": list(png_size(overview)),
         "bytes": overview.stat().st_size,
         "sha256": hashlib.sha256(overview.read_bytes()).hexdigest(),
@@ -862,24 +940,27 @@ def compose_ramps(work: Path, provenance: dict) -> None:
         "items": sheet["items"],
     }
     manifest["items"] = [
-        entry for family in FAMILIES for entry in [*retained, *ramps] if entry["family"] == family
+        entry
+        for family in FAMILIES
+        for entry in [*retained, *replacements]
+        if entry["family"] == family
     ]
     manifest["overview_images"] = [
-        replacement if entry["file"] == "images/ramps.png" else entry
-        for entry in manifest["overview_images"]
+        next(entry for entry in [*kept_overviews, replacement] if entry["file"] == f"images/{name}")
+        for name in IMAGE_NAMES
     ]
     manifest["provenance_scope"] = (
         "Top-level revisions describe retained baseline images; per-image provenance overrides "
         "them for regenerated assets. This is not a full-gallery rerender."
     )
     path.write_text(json.dumps(manifest, indent=2) + "\n")
-    write_gallery(manifest["items"], provenance, incremental=True)
+    write_gallery(manifest["items"], provenance, incremental=scope)
     report = {
         **provenance,
-        "scope": "ramp thumbnails and ramp overview only",
+        "scope": f"{scope}: selected thumbnails and overview only",
         "composition_recipe_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "sheets": [sheet],
-        "updated_keys": [entry["key"] for entry in ramps],
+        "updated_keys": [entry["key"] for entry in replacements],
         "assets": verify_assets(),
     }
     (work / "render-report.json").write_text(json.dumps(report, indent=2) + "\n")
@@ -896,10 +977,16 @@ def main() -> None:
         help="render only the named items without composing the complete gallery",
     )
     parser.add_argument("--compose-only", action="store_true")
-    parser.add_argument(
+    update = parser.add_mutually_exclusive_group()
+    update.add_argument(
         "--update-ramps",
         action="store_true",
         help="render and compose only the ten ramp thumbnails and ramp overview",
+    )
+    update.add_argument(
+        "--update-rods",
+        action="store_true",
+        help="render and compose only four rod/brace thumbnails and their overview",
     )
     parser.add_argument("--geometry-revision", default=GEOMETRY_REVISION)
     parser.add_argument("--workbench-revision", default=WORKBENCH_REVISION)
@@ -908,8 +995,8 @@ def main() -> None:
     if args.check:
         print(json.dumps(verify_assets(), indent=2))
         return
-    if args.update_ramps and args.only:
-        parser.error("--update-ramps already selects the complete ramp family; omit --only")
+    if (args.update_ramps or args.update_rods) and args.only:
+        parser.error("Incremental updates already select their complete families; omit --only")
     if args.workbench is None:
         parser.error("--workbench is required for rendering")
     work = (ROOT / args.work_dir).resolve()
@@ -925,6 +1012,8 @@ def main() -> None:
         only = (
             {item.key for item in inventory() if item.spec.family == "ramp"}
             if args.update_ramps
+            else {item.key for item in inventory() if item.spec.family in ("rod", "rod-brace")}
+            if args.update_rods
             else set(args.only)
             if args.only
             else None
@@ -939,6 +1028,8 @@ def main() -> None:
         (work / "provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
     if args.update_ramps:
         compose_ramps(work, provenance)
+    elif args.update_rods:
+        compose_rods(work, provenance)
     elif not args.only:
         compose_all(work, provenance)
 
