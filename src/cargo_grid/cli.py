@@ -21,6 +21,7 @@ from cargo_grid.parameters import (
     count,
     positive,
 )
+from cargo_grid.rods import ROD_FAMILIES, Rod, RodBrace
 from cargo_grid.roof_support import RoofSupportSettings
 from cargo_grid.stacking import StackSettings
 
@@ -87,7 +88,7 @@ def _part_dimensions(args) -> tuple[int, int]:
     family = args.family
     two_axis = {"tile", "plate", "vertical-tile-bracket", "vertical-stop", "lock-45"}
     linear = {"edge-x", "edge-y", "support"}
-    dimensionless = {"corner-in", "corner-out", "support-bit", "support-end"}
+    dimensionless = {"corner-in", "corner-out", "support-bit", "support-end", *ROD_FAMILIES}
     if family in two_axis:
         if length is not None:
             raise ValueError(f"{family} uses --width-cells and --depth-cells, not --length-cells")
@@ -488,7 +489,7 @@ def parser() -> argparse.ArgumentParser:
             p.add_argument(
                 "--family",
                 default="tile",
-                choices=["tile", *FAMILIES],
+                choices=["tile", *FAMILIES, *ROD_FAMILIES],
                 help="ramp joins a tile edge; vertical-tile-bracket carries a separate tile; vertical-stop is a filled cargo wedge",
             )
             p.add_argument(
@@ -544,6 +545,30 @@ def parser() -> argparse.ArgumentParser:
                 default=1,
                 metavar="COUNT",
                 help="copies of this one design; not width/depth cells",
+            )
+            p.add_argument(
+                "--rod-height-mm",
+                type=_positive_mm,
+                metavar="MM",
+                help="rod height above the flat stop, including its collar; defaults to 120 mm",
+            )
+            p.add_argument(
+                "--peg-diameter-mm",
+                type=_positive_mm,
+                metavar="MM",
+                help="rod mounting peg diameter, not shaft diameter; defaults to 10 mm",
+            )
+            p.add_argument(
+                "--brace-spacing-mm",
+                type=_positive_mm,
+                metavar="MM",
+                help="rod-brace hole centre spacing: 60 or 120 physical mm, never unit-scaled; defaults to 60",
+            )
+            p.add_argument(
+                "--bore-diameter-mm",
+                type=_positive_mm,
+                metavar="MM",
+                help="both rod-brace bores: 10.0 (default), 10.2 or 10.4 mm; allowance over 10 mm is diametral",
             )
         if command == "layout":
             p.add_argument(
@@ -655,10 +680,22 @@ def main(argv: list[str] | None = None) -> int:
                 None,
             )
             ramp_join = _part_option(args, "ramp_join", {"ramp"}, "female")
+            rod_height = _part_option(args, "rod_height_mm", {"rod"}, 120.0)
+            peg_diameter = _part_option(args, "peg_diameter_mm", {"rod"}, 10.0)
+            brace_spacing = _part_option(args, "brace_spacing_mm", {"rod-brace"}, 60.0)
+            bore_diameter = _part_option(args, "bore_diameter_mm", {"rod-brace"}, 10.0)
             if args.family == "tile":
                 design = tile_design(
                     Tile(*cells, interface, hole_diameter, hole_scope=args.hole_scope)
                 )
+            elif args.family == "rod":
+                if interface.fit_offset:
+                    raise ValueError("rod uses --peg-diameter-mm, not --fit-offset-mm")
+                design = accessory_design(Rod(rod_height, peg_diameter, interface.height))
+            elif args.family == "rod-brace":
+                if interface.fit_offset:
+                    raise ValueError("rod-brace uses --bore-diameter-mm, not --fit-offset-mm")
+                design = accessory_design(RodBrace(brace_spacing, bore_diameter))
             else:
                 design = accessory_design(
                     Accessory(

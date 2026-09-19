@@ -19,6 +19,7 @@ from cargo_grid.accessories import (
 from cargo_grid.jobs import Design, Job, tile_design
 from cargo_grid.packing import PrintPlacement, pack_sizes
 from cargo_grid.parameters import DEFAULT_HOLE_DIAMETER_MM, BuildVolume, Exclusion, Interface, Tile
+from cargo_grid.rods import BRACE_SPACINGS_MM, ROD_HEIGHTS_MM, Rod, RodBrace
 
 BRACKET_DISPLAY_NAMES = {
     (1, 2, 2): "Deep tall tile bracket — floor 1x2, wall 1x2",
@@ -47,7 +48,9 @@ def tile_sizes(build: BuildVolume, interface: Interface = Interface()) -> list[t
     ]
 
 
-def accessory_variants(build: BuildVolume, interface: Interface = Interface()) -> list[Accessory]:
+def accessory_variants(
+    build: BuildVolume, interface: Interface = Interface()
+) -> list[Accessory | Rod | RodBrace]:
     nmax = max(1, floor(max(build.usable[:2]) / interface.pitch))
     result = []
     for n in range(1, nmax + 1):
@@ -90,10 +93,31 @@ def accessory_variants(build: BuildVolume, interface: Interface = Interface()) -
     result.extend(
         Accessory("plate", nx=x, ny=y, interface=interface) for x, y in ((1, 1), (1, 2), (2, 2))
     )
+    result.extend(Rod(h, tile_thickness_mm=interface.height) for h in ROD_HEIGHTS_MM)
+    result.extend(RodBrace(spacing) for spacing in BRACE_SPACINGS_MM)
     return result
 
 
-def accessory_design(spec: Accessory) -> Design:
+def accessory_design(spec: Accessory | Rod | RodBrace) -> Design:
+    if isinstance(spec, (Rod, RodBrace)):
+        parameters = {"family": spec.family, **asdict(spec)}
+        token = sha256(json.dumps(parameters, sort_keys=True).encode()).hexdigest()[:10]
+        shape = make_accessory(spec)
+        shape.label = f"{shape.label}_{token}"
+        display = (
+            f"Rod - {spec.above_mat_height_mm:g} mm above mat - {spec.peg_diameter_mm:g} mm peg"
+            if isinstance(spec, Rod)
+            else f"Upper rod brace - {spec.center_spacing_mm:g} mm centres - {spec.bore_diameter_mm:.1f} mm bores"
+        )
+        return Design(
+            shape.label,
+            shape,
+            parameters,
+            display_name=display,
+            recommended_print_rotation_y=bambu_print_rotation_y(spec),
+            apply_orientation_to_bambu=isinstance(spec, Rod),
+            bambu_object_settings=dict(required_bambu_object_settings(parameters)),
+        )
     parameters = asdict(spec)
     if spec.family != "ramp" or spec.ramp_join == "female":
         del parameters["ramp_join"]
@@ -225,6 +249,7 @@ def h2d_dual_safe_catalogue_job(
         ("Attachment plates", {"plate"}, None),
         ("Edges and corners", {"edge-x", "edge-y", "corner-in", "corner-out"}, None),
         ("Rails and connectors", {"support", "support-bit", "support-end"}, None),
+        ("Rods and upper braces", {"rod", "rod-brace"}, None),
     )
     common_build = BuildVolume(
         350,
