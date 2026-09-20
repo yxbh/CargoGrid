@@ -6,16 +6,19 @@ from math import cos, pi, sin
 from xml.etree import ElementTree as ET
 from zipfile import ZipFile
 
+import numpy as np
 import pytest
-from build123d import GeomType, Location, Vector, import_step
+from build123d import Axis, GeomType, Location, Vector, import_step
 from OCP.BRepAdaptor import BRepAdaptor_Surface
+from test_prepared_export import archive_triangles, assert_serialized_closed, stl_triangles
 
-from cargo_grid import Rod, RodBrace, make_rod
+from cargo_grid import Rod, RodBrace, make_rod, prepared
 from cargo_grid.accessories import accessory_datums, make_accessory
 from cargo_grid.catalogue import accessory_design, accessory_variants, catalogue_job
 from cargo_grid.cli import main
 from cargo_grid.export import BambuSettings, Material, export_job, write_3mf
 from cargo_grid.jobs import Design, Job
+from cargo_grid.packing import PrintPlacement
 from cargo_grid.parameters import BuildVolume, Interface, Tile
 from cargo_grid.rods import BRACE_BORES_MM, BRACE_SPACINGS_MM, ROD_HEIGHTS_MM, fit_evidence
 from cargo_grid.tiles import hole_placements, make_tile
@@ -198,6 +201,71 @@ def test_brace_fit_evidence_scopes_user_report_to_nominal_ten_mm_bores(spacing, 
     assert evidence["measured_diameter_or_force"] is None
     assert evidence["strength_and_service_suitability"] == "not tested"
     assert "not a positive lock" in evidence["height_retention"]
+
+
+def test_streamed_round_families_share_source_meshes_and_keep_per_design_evidence(
+    tmp_path, monkeypatch
+):
+    designs = [accessory_design(spec) for spec in FOUR]
+    job = Job(
+        designs,
+        BuildVolume(350, 320, 320),
+        "part",
+        part_gap=10,
+        print_placements=[
+            PrintPlacement(0, 50, 30, 90),
+            PrintPlacement(0, 85, 30, 90),
+            PrintPlacement(0, 120, 30, 0),
+            PrintPlacement(0, 120, 65, 0),
+        ],
+    )
+    checked_shapes = []
+    original_mesh = prepared.checked_mesh
+
+    def checked(shape):
+        assert all(not shape.wrapped.IsPartner(d.shape.wrapped) for d in designs)
+        checked_shapes.append(shape)
+        return original_mesh(shape)
+
+    monkeypatch.setattr(prepared, "checked_mesh", checked)
+    report = json.loads(export_job(job, tmp_path / "mixed", bambu=BAMBU).read_text())
+    assert len(checked_shapes) == len(designs)
+    assert len(report["export"]["plates"]) == 1
+    meshes, model = archive_triangles(tmp_path / "mixed/job.3mf")
+    assert len(meshes) == len(model.findall("./{*}build/{*}item")) == len(designs)
+    items = report["export"]["plates"][0]["items"]
+    for spec, design, entry, item, mesh in zip(FOUR, designs, report["designs"], items, meshes):
+        assert entry["parameters"] == design.parameters
+        assert entry["fit_evidence"] == fit_evidence(spec)
+        assert entry["mating_datums"] == json.loads(json.dumps(accessory_datums(spec)))
+        assert entry["step_roundtrip"] == "passed"
+        expected = design.bambu_shape.rotate(Axis.Z, item["rotation"])
+        assert_serialized_closed(mesh, entry["mesh"]["mesh_volume_mm3"])
+        assert all(
+            expected.distance_to(Vector(*p)) < 1e-5 for p in np.unique(mesh.reshape(-1, 3), axis=0)
+        )
+        source_mesh = stl_triangles(tmp_path / "mixed" / f"{design.name}.stl")
+        assert_serialized_closed(source_mesh, entry["mesh"]["mesh_volume_mm3"])
+        assert all(
+            design.shape.distance_to(Vector(*p)) < 1e-5
+            for p in np.unique(source_mesh.reshape(-1, 3), axis=0)
+        )
+        if isinstance(spec, Rod):
+            assert item["source_to_project_transform"]["rotation_y_degrees"] == 90
+            assert item["source_to_project_transform"]["packing_rotation_z_degrees"] == 90
+            assert item["size_mm"] == pytest.approx((spec.overall_length_mm, 18, 18))
+            assert item["source_to_project_transform"]["packed_size_mm"] == pytest.approx(
+                (18, spec.overall_length_mm, 18)
+            )
+            assert item["object_settings"] == {
+                "enable_support": "1",
+                "support_type": "normal(auto)",
+            }
+        else:
+            assert "object_settings" not in item
+            assert "source_to_project_transform" not in item
+            assert not entry["fit_evidence"]["spacing_specific_fit_verified"]
+    assert report["physical_fit_verified"] is False
 
 
 def test_core_stays_upright_and_bambu_requires_the_tested_pose(tmp_path):
