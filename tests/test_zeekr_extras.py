@@ -10,12 +10,17 @@ from zipfile import ZipFile
 import pytest
 
 from cargo_grid import cli
-from cargo_grid.accessories import EDGE_OUTWARD_OPTIONS_MM, Accessory
-from cargo_grid.catalogue import accessory_design, accessory_variants
+from cargo_grid.accessories import EDGE_OUTWARD_OPTIONS_MM, Accessory, tile_matched_perimeter
+from cargo_grid.catalogue import (
+    H2D_DEFAULT_PART_CLEARANCE_MM,
+    accessory_design,
+    accessory_variants,
+)
 from cargo_grid.cli import main
 from cargo_grid.export import BambuSettings, Material, export_job
 from cargo_grid.packing import h2d_common_build, pack_sizes
 from cargo_grid.parameters import BuildVolume, Exclusion, Interface
+from cargo_grid.rods import Rod, RodBrace
 from cargo_grid.vehicles.zeekr_7x import extras_job, variants
 
 COLLECTION = "zeekr-7x"
@@ -27,11 +32,15 @@ def test_standard_catalogue_inventory_and_all_accessory_ids_stay_unchanged(
 ):
     specs = accessory_variants(H2D)
     assert EDGE_OUTWARD_OPTIONS_MM == (10, 20, 30)
-    assert len(specs) == 101
-    assert all(spec.edge_outward != 40 for spec in specs)
-    names = [accessory_design(spec).name for spec in specs]
+    assert len(specs) == 105
+    accessories = [spec for spec in specs if isinstance(spec, Accessory)]
+    assert len(accessories) == 101
+    assert all(spec.edge_outward != 40 for spec in accessories)
+    assert {spec for spec in specs if isinstance(spec, Rod)} == {Rod(120), Rod(240)}
+    assert {spec for spec in specs if isinstance(spec, RodBrace)} == {RodBrace(60), RodBrace(120)}
+    names = [accessory_design(spec).name for spec in accessories]
     assert sha256(json.dumps(names).encode()).hexdigest() == (
-        "4e65f3a00e645a2228ab50a1e9205518edebad169fd2f0fbb22eceab2b49911c"
+        "b6ca62c04cd1b530a56a8abf9a1dd5195967841d42f5fb17de9a9f9c521ae89b"
     )
 
 
@@ -62,6 +71,27 @@ def test_extras_select_one_matching_hole_mode_and_only_ten_straight_parts(
     assert all(spec.edge_outward == 40 for spec in specs)
     assert all(spec.complete_edge_holes is complete for spec in specs)
     assert all(spec.edge_hole_diameter == (diameter if complete else None) for spec in specs)
+
+
+@pytest.mark.parametrize(
+    "diameter,scope,complete",
+    [(10, "full", True), (8, "full", True), (None, "full", False), (10, "interior", False)],
+)
+def test_shared_factory_keeps_ten_mm_completion_and_extras_policy_aligned(
+    diameter,
+    scope,
+    complete,
+):
+    for family in ("edge-x", "edge-y", "corner-in", "corner-out"):
+        for width in (10, 20, 30):
+            spec = tile_matched_perimeter(
+                family,
+                outward=width,
+                hole_diameter=diameter,
+                hole_scope=scope,
+            )
+            assert spec.complete_edge_holes is complete
+            assert spec.edge_hole_diameter == (diameter if complete else None)
 
 
 @pytest.mark.parametrize("family", ["corner-in", "corner-out"])
@@ -95,7 +125,9 @@ def test_extras_use_actual_bounds_for_fitting_lengths_and_omissions():
 
 
 def test_h2d_extras_two_plates_have_all_lengths_and_common_reach(tmp_path):
-    job = extras_job(H2D, placement_build=h2d_common_build(), part_gap=10)
+    assert H2D_DEFAULT_PART_CLEARANCE_MM == 4
+    gap = H2D_DEFAULT_PART_CLEARANCE_MM
+    job = extras_job(H2D, placement_build=h2d_common_build(), part_gap=gap)
     assert job.plate_names == {
         0: "Zeekr 7X - Male 40mm edges",
         1: "Zeekr 7X - Female 40mm edges",
@@ -104,7 +136,7 @@ def test_h2d_extras_two_plates_have_all_lengths_and_common_reach(tmp_path):
     assert job.plate_settings == {}
     assert job.projected_footprints is None
     assert job.projected_footprint_clearances == {}
-    assert job.part_gap == 10
+    assert job.part_gap == gap
     assert job.placement_policy["collection"] == COLLECTION
     assert "exception" not in job.placement_policy
     rectangles = defaultdict(list)
@@ -130,7 +162,7 @@ def test_h2d_extras_two_plates_have_all_lengths_and_common_reach(tmp_path):
             for second in bounds[i + 1 :]:
                 dx = max(0, first[0] - second[1], second[0] - first[1])
                 dy = max(0, first[2] - second[3], second[2] - first[3])
-                assert hypot(dx, dy) >= 10 - 1e-5
+                assert hypot(dx, dy) >= gap - 1e-5
     common = BuildVolume(
         350,
         320,
@@ -138,9 +170,7 @@ def test_h2d_extras_two_plates_have_all_lengths_and_common_reach(tmp_path):
         margin=5,
         exclusions=(Exclusion(0, 0, 30, 320), Exclusion(320, 0, 30, 320)),
     )
-    assert max(p.plate for p in pack_sizes(sizes, common, gap=10)) == 1
-    # Half-gap padding proves one plate impossible even before choosing an arrangement.
-    assert sum((w + 10) * (d + 10) for w, d, _ in sizes) > (290 + 10) * (310 + 10)
+    assert max(p.plate for p in pack_sizes(sizes, common, gap=gap)) == 1
     manifest_path = export_job(
         job,
         tmp_path / "extras",
@@ -266,7 +296,14 @@ def test_grouping_never_adds_a_plate_when_the_combined_recipe_fits_one():
     assert job.placement_policy["grouped_by_connector_sex"] is False
 
 
-def test_cli_h2d_extras_routes_shared_printer_settings(tmp_path, monkeypatch):
+@pytest.mark.parametrize("requested_gap,expected_gap", [(None, 4), (6, 6), (10, 10)])
+def test_cli_h2d_extras_routes_shared_printer_settings(
+    tmp_path,
+    monkeypatch,
+    accessory_metadata_shape,
+    requested_gap,
+    expected_gap,
+):
     captured = []
 
     def capture(job, output, **settings):
@@ -297,6 +334,7 @@ def test_cli_h2d_extras_routes_shared_printer_settings(tmp_path, monkeypatch):
                 "0.32",
                 "--output",
                 str(tmp_path / "extras"),
+                *([] if requested_gap is None else ["--packing-gap-mm", str(requested_gap)]),
             ]
         )
         == 0
@@ -304,7 +342,11 @@ def test_cli_h2d_extras_routes_shared_printer_settings(tmp_path, monkeypatch):
     job, settings = captured[0]
     assert len(job.designs) == 10
     assert job.build == H2D
-    assert job.part_gap == 10
+    assert job.part_gap == expected_gap
+    assert job.placement_policy["minimum_actual_part_xy_clearance_mm"] == expected_gap
+    assert job.placement_policy["minimum_model_gap_mm"] == expected_gap
+    assert job.projected_footprints is None
+    assert job.projected_footprint_clearances == {}
     assert job.placement_policy["common_reach_mm"] == {
         "min_x": 25,
         "max_x": 325,
@@ -362,7 +404,8 @@ def test_cli_only_accepts_the_named_extras_route(command, tmp_path):
             ],
             "not mixed catalogue samples",
         ),
-        (["--h2d-dual-safe", "--packing-gap-mm", "5"], "fixed --packing-gap-mm 10"),
+        (["--h2d-dual-safe", "--packing-gap-mm", "0"], "H2D packing gap"),
+        (["--h2d-dual-safe", "--packing-gap-mm", "-1"], "H2D packing gap"),
     ],
 )
 def test_extras_reject_unsupported_shared_workflows(options, message, tmp_path, capsys):
