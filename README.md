@@ -74,6 +74,8 @@ The same options apply to `edge-x`, `corner-in` and `corner-out`. All three outw
 
 For Bambu output, attachment plates are flipped X=180 degrees so the broad plate body starts on the bed and the X plugs grow upward. STEP, STL and core 3MF keep the source orientation.
 
+Every generated Bambu project keeps Slice gap closing radius at 0.01 mm and Resolution at 0.003 mm as process overrides. These settings affect slicing only; they do not change the CAD geometry, STEP, STL, core 3MF, nozzle size or layer height. Check the sliced result with the printer and material profiles you plan to use.
+
 Generate every supported tile and accessory that fits your build envelope with `catalogue`:
 
 ```sh
