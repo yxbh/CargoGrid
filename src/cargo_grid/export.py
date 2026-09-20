@@ -43,6 +43,10 @@ CORE = "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"
 REL = "http://schemas.openxmlformats.org/package/2006/relationships"
 CONTENT = "http://schemas.openxmlformats.org/package/2006/content-types"
 MANIFEST_SCHEMA_VERSION = 1
+BAMBU_PROCESS_DEFAULTS = {
+    "resolution": "0.003",
+    "slice_closing_radius": "0.01",
+}
 UNSUPPORTED_COMBINATIONS = {
     "roof_support_with_stacking": "Roof supports and stacked separator jobs cannot be combined.",
     "roof_support_with_catalogues_or_accessories": "Roof supports require a tile-only part or layout job.",
@@ -790,6 +794,7 @@ def _write_3mf(
                 "filament_is_support": ["0"] * len(bambu.materials),
                 "filament_map_mode": _filament_mode(bambu),
             }
+            settings.update(BAMBU_PROCESS_DEFAULTS)
             if bambu.printer_model is not None:
                 settings["printer_model"] = bambu.printer_model
             if nozzle_count > 1:
@@ -798,13 +803,14 @@ def _write_3mf(
                 settings["nozzle_volume_type"] = ["Standard"] * nozzle_count
             if bambu.bed_type is not None:
                 settings["curr_bed_type"] = bambu.bed_type
+            overrides = set(BAMBU_PROCESS_DEFAULTS)
             if bambu.roof_support:
                 settings.update(bambu.roof_support.native_settings())
-                overrides = bambu.roof_support.process_override_keys
-                settings["different_settings_to_system"] = [
-                    ";".join(sorted(overrides)),
-                    *[""] * (len(bambu.materials) + 1),
-                ]
+                overrides.update(bambu.roof_support.process_override_keys)
+            settings["different_settings_to_system"] = [
+                ";".join(sorted(overrides)),
+                *[""] * (len(bambu.materials) + 1),
+            ]
             archive.writestr("Metadata/project_settings.config", json.dumps(settings, indent=2))
     return {
         "format": "bambu-project" if bambu else "core-geometry",

@@ -7,7 +7,7 @@ import subprocess
 import xml.etree.ElementTree as ET
 from collections import Counter
 from pathlib import Path
-from zipfile import ZipFile
+from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
 from build123d import Box, import_step
@@ -22,6 +22,43 @@ from cargo_grid.stacking import StackSettings
 
 CORE = "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"
 PRODUCTION = "http://schemas.microsoft.com/3dmanufacturing/production/2015/06"
+PROCESS_PRECISION = {
+    "slice_closing_radius": "0.01",
+    "resolution": "0.003",
+}
+PROFILE_CACHES = {
+    "filament_map",
+    "filament_map_2",
+    "filament_nozzle_map",
+    "filament_volume_map",
+}
+
+
+def _resolve_bambu_profile(root, kind, name, ancestors=()):
+    path = root / kind / f"{name}.json"
+    if path in ancestors:
+        raise ValueError("Bambu profile inheritance cycle")
+    source = json.loads(path.read_text())
+    result = (
+        _resolve_bambu_profile(root, kind, source["inherits"], ancestors + (path,))
+        if source.get("inherits")
+        else {}
+    )
+    for include in source.get("include", []):
+        result.update(_resolve_bambu_profile(root, kind, include, ancestors + (path,)))
+    result.update(source)
+    result.pop("inherits", None)
+    result.pop("include", None)
+    return result
+
+
+def _replace_project_settings(source, destination, settings):
+    with ZipFile(source) as original, ZipFile(destination, "x", ZIP_DEFLATED) as enriched:
+        for entry in original.infolist():
+            data = original.read(entry)
+            if entry.filename == "Metadata/project_settings.config":
+                data = json.dumps(settings, indent=2).encode()
+            enriched.writestr(entry, data)
 
 
 @pytest.fixture
@@ -206,6 +243,20 @@ def test_bambu_explicit_materials_and_plate_membership(box_job, materials, tmp_p
             assert "filament_maps" not in values and "filament_volume_maps" not in values
 
 
+@pytest.mark.parametrize("kind", ["part", "layout", "catalogue"])
+def test_bambu_process_precision_defaults_use_shared_project_path(
+    kind, box_job, materials, tmp_path
+):
+    path = tmp_path / f"{kind}.3mf"
+    write_3mf(Job(box_job.designs, box_job.build, kind), path, bambu=materials)
+    with ZipFile(path) as archive:
+        settings = json.loads(archive.read("Metadata/project_settings.config"))
+    assert {key: settings[key] for key in PROCESS_PRECISION} == PROCESS_PRECISION
+    tracked = settings["different_settings_to_system"]
+    assert set(tracked[0].split(";")) == set(PROCESS_PRECISION)
+    assert tracked[1:] == [""] * (len(materials.materials) + 1)
+
+
 def test_multi_nozzle_project_has_gui_restore_config(box_job, tmp_path):
     settings = BambuSettings(
         (Material("Bambu PETG Basic @BBL H2D 0.8 nozzle", "PETG", "#637b70"),),
@@ -226,6 +277,115 @@ def test_multi_nozzle_project_has_gui_restore_config(box_job, tmp_path):
     assert project["extruder_type"] == ["Direct Drive", "Direct Drive"]
     assert project["default_nozzle_volume_type"] == ["Standard", "Standard"]
     assert project["nozzle_volume_type"] == ["Standard", "Standard"]
+
+
+@pytest.mark.native
+def test_native_bambu_restore_keeps_precision_in_complete_effective_profile(tmp_path):
+    executable = os.environ.get("CARGO_GRID_BAMBU")
+    if not executable:
+        pytest.skip("Set CARGO_GRID_BAMBU to explicitly enable local Bambu Studio CLI checks")
+    binary = Path(executable).resolve(strict=True)
+    profiles = binary.parents[1] / "Resources" / "profiles" / "BBL"
+    profile_names = {
+        "machine": "Bambu Lab H2D 0.8 nozzle",
+        "process": "0.32mm Balanced Strength @BBL H2D 0.8 nozzle",
+        "filament": "Bambu PETG Basic @BBL H2D 0.8 nozzle",
+    }
+    resolved_directory = tmp_path / "resolved-profiles"
+    resolved_directory.mkdir()
+    resolved_paths = {}
+    for kind, name in profile_names.items():
+        resolved = _resolve_bambu_profile(profiles, kind, name)
+        resolved_paths[kind] = resolved_directory / f"{kind}.json"
+        resolved_paths[kind].write_text(json.dumps(resolved))
+    effective_path = tmp_path / "effective.json"
+    resolution = subprocess.run(
+        [
+            str(binary),
+            "--datadir",
+            str(tmp_path / "profile-settings"),
+            "--debug",
+            "2",
+            "--arrange",
+            "0",
+            "--orient",
+            "0",
+            "--load-settings",
+            f"{resolved_paths['machine']};{resolved_paths['process']}",
+            "--load-filaments",
+            str(resolved_paths["filament"]),
+            "--export-settings",
+            str(effective_path),
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=180,
+        check=False,
+    )
+    assert resolution.returncode == 0, resolution.stdout + resolution.stderr
+    effective = json.loads(effective_path.read_text())
+    for key in PROFILE_CACHES:
+        effective.pop(key, None)
+    source = tmp_path / "input.3mf"
+    complete_source = tmp_path / "complete-input.3mf"
+    destination = tmp_path / "roundtrip.3mf"
+    settings = BambuSettings(
+        (Material("Bambu PETG Basic @BBL H2D 0.8 nozzle", "PETG", "#637b70"),),
+        0.8,
+        0.32,
+        printer_settings_id="Bambu Lab H2D 0.8 nozzle",
+        print_settings_id="0.32mm Balanced Strength @BBL H2D 0.8 nozzle",
+        bed_type="Textured PEI Plate",
+        machine_nozzle_count=2,
+        printer_model="Bambu Lab H2D",
+    )
+    write_3mf(
+        Job([Design("diagnostic_block", Box(8, 8, 1), {})], BuildVolume(350, 320, 325), "part"),
+        source,
+        bambu=settings,
+    )
+    with ZipFile(source) as archive:
+        generated = json.loads(archive.read("Metadata/project_settings.config"))
+    effective.update(generated)
+    _replace_project_settings(source, complete_source, effective)
+    result = subprocess.run(
+        [
+            str(binary),
+            "--datadir",
+            str(tmp_path / "restore-settings"),
+            "--debug",
+            "2",
+            "--arrange",
+            "0",
+            "--orient",
+            "0",
+            "--info",
+            "--export-3mf",
+            str(destination),
+            str(complete_source),
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=180,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    with ZipFile(destination) as archive:
+        restored = json.loads(archive.read("Metadata/project_settings.config"))
+    assert len(restored) >= 500
+    assert {key: restored[key] for key in PROCESS_PRECISION} == PROCESS_PRECISION
+    assert set(PROCESS_PRECISION) <= set(restored["different_settings_to_system"][0].split(";"))
+    assert restored["printer_settings_id"] == settings.printer_settings_id
+    assert restored["print_settings_id"] == settings.print_settings_id
+    assert restored["filament_settings_id"] == [settings.materials[0].name]
+    assert restored["nozzle_temperature"] == effective["nozzle_temperature"] == ["250", "255"]
+    assert (
+        restored["nozzle_temperature_initial_layer"]
+        == effective["nozzle_temperature_initial_layer"]
+        == ["245", "255"]
+    )
 
 
 @pytest.mark.parametrize(
