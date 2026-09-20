@@ -568,7 +568,7 @@ def parser() -> argparse.ArgumentParser:
                 "--bore-diameter-mm",
                 type=_positive_mm,
                 metavar="MM",
-                help="both rod-brace bores: 10.0 (default), 10.2 or 10.4 mm; allowance over 10 mm is diametral",
+                help="diameter of both rod-brace bores, in mm; standard/default 10 mm; custom allowance over the 10 mm shaft is diametral",
             )
         if command == "layout":
             p.add_argument(

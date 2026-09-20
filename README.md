@@ -99,7 +99,7 @@ uv run cargo-grid part --family rod --rod-height-mm 120 --peg-diameter-mm 10 --b
 uv run cargo-grid part --family rod-brace --brace-spacing-mm 60 --bore-diameter-mm 10 --build-width-mm 150 --build-depth-mm 150 --build-height-mm 50 --output outputs/upper-brace
 ```
 
-Bambu projects lay rods horizontally at Y=90 degrees with normal Auto support for rod objects only. Braces print flat, bores upright, without object support. Their default bores are 10 mm; individual brace exports also offer 10.2 and 10.4 mm bores. Remove rod support before fitting.
+Bambu projects lay rods horizontally at Y=90 degrees with normal Auto support for rod objects only. Braces print flat, bores upright, without object support. The official braces use 10 mm bores for the 10 mm shafts. Remove rod support before fitting.
 
 Keep bags resting on the mat, not hanging from the rods. A brace may slide or jam on its rods; it is not a positive height lock. These parts have no hooks or load/crash rating.
 

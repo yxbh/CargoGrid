@@ -52,6 +52,44 @@ def test_documented_assets_are_bounded_and_inventory_is_complete(gallery):
     assert sum(asset["bytes"] for asset in assets.values()) <= 2_000_000
 
 
+@pytest.mark.parametrize(
+    "document,start,end",
+    [
+        ("README.md", "## Round-hole rods and upper braces", "## Vertical tile brackets"),
+        ("docs/geometry.md", "### Round-hole rods and upper braces", "### Vertical tile brackets"),
+    ],
+)
+def test_public_round_part_docs_describe_standard_ten_mm_bores(document, start, end):
+    section = (ROOT / document).read_text().split(start, 1)[1].split(end, 1)[0]
+    assert "10 mm" in section
+    assert "10.2" not in section and "10.4" not in section
+
+
+def test_gallery_text_composition_keeps_standard_bores_without_rendering(
+    gallery, tmp_path, monkeypatch
+):
+    manifest = json.loads((ROOT / "docs/images/attachments/manifest.json").read_text())
+    provenance = next(
+        entry["provenance"]
+        for entry in manifest["overview_images"]
+        if entry["file"] == "images/rods-and-braces.png"
+    )
+    expected = (ROOT / "docs/attachments.md").read_text()
+    (tmp_path / "docs").mkdir()
+    monkeypatch.setattr(gallery, "ROOT", tmp_path)
+
+    def no_geometry_or_images(*args, **kwargs):
+        pytest.fail("A text-only gallery update must not build geometry or render images")
+
+    for name in ("documentation_shape", "render_items", "thumbnail_entries", "composite"):
+        monkeypatch.setattr(gallery, name, no_geometry_or_images)
+    gallery.write_gallery(manifest["items"], provenance, incremental="Rod and brace update")
+    actual = (tmp_path / "docs/attachments.md").read_text()
+    assert actual == expected
+    assert "10 mm bores" in actual
+    assert "10.2" not in actual and "10.4" not in actual
+
+
 def test_thumbnail_manifest_has_unique_rows_and_family_scale(gallery):
     manifest = json.loads((ROOT / "docs/images/attachments/manifest.json").read_text())
     assert manifest["geometry_commit"] == gallery.GEOMETRY_REVISION

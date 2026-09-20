@@ -812,7 +812,7 @@ def write_gallery(
         "",
         "[Back to the beginner guide](../README.md) / [Thumbnail dimensions, hashes and source provenance](images/attachments/manifest.json)",
         "",
-        "Round-hole rods stand 120 or 240 mm above the mat. Their Ø18 mm stop collar seats on the mat; the Ø10 mm shaft and selected peg diameter stay physical sizes. The two upper braces join rod centres 60 or 120 mm apart, independent of unit size. The [rod and brace overview](images/rods-and-braces.png) shows all four catalogue parts; optional 10.2 and 10.4 mm bores are available as individual parts, not additional catalogue rows.",
+        "Round-hole rods stand 120 or 240 mm above the mat. Their Ø18 mm stop collar seats on the mat; the Ø10 mm shaft and selected peg diameter stay physical sizes. The two official upper braces use 10 mm bores to join the 10 mm shafts at 60 or 120 mm centres, independent of unit size. The [rod and brace overview](images/rods-and-braces.png) shows all four catalogue parts.",
         "",
         "Keep bags resting on the mat. Braces are friction-fit links, not a positive height lock; they may slide or jam. These parts have no hooks or load/crash rating. Bambu projects turn only rod objects Y=90 onto their side and enable normal Auto support; braces stay flat with their bores along Z and no object support. Remove rod support before fitting.",
         "",

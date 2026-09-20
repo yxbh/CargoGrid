@@ -87,6 +87,22 @@ def test_help_explains_dimensions_and_multivalue_order(command, capsys):
     assert not re.search(r"--build(?:[ =,]|$)", text)
 
 
+def test_brace_bore_help_describes_standard_not_trial_variants(capsys):
+    with pytest.raises(SystemExit) as error:
+        parser().parse_args(["part", "--help"])
+    assert error.value.code == 0
+    match = re.search(
+        r"^\s+--bore-diameter-mm MM\s+(.*?)(?=\n\s+--|\Z)",
+        capsys.readouterr().out,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert match is not None
+    description = " ".join(match.group(1).split())
+    assert "standard/default 10 mm" in description
+    assert "diametral" in description
+    assert "10.2" not in description and "10.4" not in description
+
+
 def test_named_dimensions_generate_the_same_two_by_one_contract(tmp_path):
     output = tmp_path / "job"
     assert (
