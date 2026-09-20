@@ -7,19 +7,34 @@ from math import floor
 from typing import Literal
 
 from cargo_grid.accessories import (
+    EDGE_OUTWARD_OPTIONS_MM,
     VERTICAL_BRACKET_CONFIGS,
     VERTICAL_STOP_CELLS,
     VERTICAL_STOP_HEIGHTS_MM,
     Accessory,
+    accessory_datums,
     bambu_print_rotation,
     bambu_print_rotation_y,
+    edge_hole_completion_supported,
     make_accessory,
     required_bambu_object_settings,
 )
+from cargo_grid.footprints import pack_projected_footprints, projected_mesh_footprint
 from cargo_grid.jobs import Design, Job, tile_design
+from cargo_grid.meshes import checked_mesh
 from cargo_grid.packing import PrintPlacement, pack_sizes
-from cargo_grid.parameters import DEFAULT_HOLE_DIAMETER_MM, BuildVolume, Exclusion, Interface, Tile
+from cargo_grid.parameters import (
+    DEFAULT_HOLE_DIAMETER_MM,
+    BuildVolume,
+    Exclusion,
+    Interface,
+    Tile,
+    positive,
+)
 from cargo_grid.rods import BRACE_SPACINGS_MM, ROD_HEIGHTS_MM, Rod, RodBrace
+
+H2D_DEFAULT_PART_CLEARANCE_MM = 4.0
+H2D_FOOTPRINT_SEARCH_ALLOWANCE_MM = 0.75
 
 BRACKET_DISPLAY_NAMES = {
     (1, 2, 2): "Deep tall tile bracket — floor 1x2, wall 1x2",
@@ -49,17 +64,64 @@ def tile_sizes(build: BuildVolume, interface: Interface = Interface()) -> list[t
 
 
 def accessory_variants(
-    build: BuildVolume, interface: Interface = Interface()
+    build: BuildVolume,
+    interface: Interface = Interface(),
+    *,
+    hole_diameter: float | None = DEFAULT_HOLE_DIAMETER_MM,
+    hole_scope: Literal["interior", "full"] = "full",
 ) -> list[Accessory | Rod | RodBrace]:
     nmax = max(1, floor(max(build.usable[:2]) / interface.pitch))
     result = []
+
+    def perimeter_spec(
+        family: str,
+        *,
+        nx: int = 1,
+        variant: int = 1,
+        outward: float,
+    ) -> Accessory:
+        complete = (
+            hole_diameter is not None
+            and hole_scope == "full"
+            and edge_hole_completion_supported(
+                family,
+                nx,
+                variant,
+                interface,
+                hole_diameter,
+            )
+        )
+        return Accessory(
+            family,
+            nx=nx,
+            variant=variant,
+            interface=interface,
+            edge_outward=outward,
+            complete_edge_holes=complete,
+            edge_hole_diameter=hole_diameter if complete else None,
+        )
+
     for n in range(1, nmax + 1):
         result.extend(
-            Accessory(family, nx=n, interface=interface)
-            for family in ("edge-x", "edge-y", "support")
+            perimeter_spec(
+                family,
+                nx=n,
+                outward=outward,
+            )
+            for family in ("edge-x", "edge-y")
+            for outward in EDGE_OUTWARD_OPTIONS_MM
         )
-    result.extend(Accessory("corner-in", variant=v, interface=interface) for v in range(1, 5))
-    result.extend(Accessory("corner-out", variant=v, interface=interface) for v in range(1, 7))
+        result.append(Accessory("support", nx=n, interface=interface))
+    result.extend(
+        perimeter_spec(
+            family,
+            variant=variant,
+            outward=outward,
+        )
+        for family, variants in (("corner-in", range(1, 5)), ("corner-out", range(1, 7)))
+        for variant in variants
+        for outward in EDGE_OUTWARD_OPTIONS_MM
+    )
     result.extend(Accessory("support-end", variant=v, interface=interface) for v in range(1, 5))
     result.extend(
         Accessory("support-bit", length=length, interface=interface) for length in (20, 30, 40, 50)
@@ -123,6 +185,12 @@ def accessory_design(spec: Accessory | Rod | RodBrace) -> Design:
         del parameters["ramp_join"]
     if parameters["panel_height_cells"] is None:
         del parameters["panel_height_cells"]
+    if parameters["edge_outward"] == 10.0:
+        del parameters["edge_outward"]
+    if not parameters["complete_edge_holes"]:
+        del parameters["complete_edge_holes"]
+    if parameters["edge_hole_diameter"] in (None, DEFAULT_HOLE_DIAMETER_MM):
+        del parameters["edge_hole_diameter"]
     token = sha256(json.dumps(parameters, sort_keys=True).encode()).hexdigest()[:10]
     dimensions = (
         f"{spec.nx}x{spec.ny}_h{spec.height:g}"
@@ -131,12 +199,23 @@ def accessory_design(spec: Accessory | Rod | RodBrace) -> Design:
         if spec.family == "vertical-tile-bracket" and spec.panel_height_cells is not None
         else f"{spec.nx}x{spec.ny}"
     )
+    edge_suffix = f"_out{spec.edge_outward:g}mm" if spec.edge_outward != 10 else ""
+    if spec.complete_edge_holes:
+        edge_suffix += (
+            "_complete-holes"
+            if spec.edge_hole_diameter == DEFAULT_HOLE_DIAMETER_MM
+            else f"_complete-{spec.edge_hole_diameter:g}mm-holes"
+        )
     join_suffix = "_male" if spec.family == "ramp" and spec.ramp_join == "male" else ""
-    name = f"{spec.family}_{dimensions}{join_suffix}_v{spec.variant}_{spec.interface.joint_style}_{token}"
+    name = (
+        f"{spec.family}_{dimensions}{join_suffix}_v{spec.variant}{edge_suffix}_"
+        f"{spec.interface.joint_style}_{token}"
+    )
     shape = make_accessory(spec)
     shape.label = name
     rotation = bambu_print_rotation(spec)
     rotation_y = bambu_print_rotation_y(spec)
+    datums = accessory_datums(spec)
     return Design(
         name,
         shape,
@@ -150,6 +229,15 @@ def accessory_design(spec: Accessory | Rod | RodBrace) -> Design:
         recommended_print_rotation_y=rotation_y,
         apply_orientation_to_bambu=rotation is not None or rotation_y is not None,
         bambu_object_settings=dict(required_bambu_object_settings(parameters)),
+        holes=[
+            {
+                "x": x,
+                "y": y,
+                "accepted": True,
+                "reason": "matching accepted full-pattern tile boundary site",
+            }
+            for x, y in datums.get("edge_hole_centers", [])
+        ],
     )
 
 
@@ -188,7 +276,12 @@ def _catalogue_job_with_sizes(
         id(design): design.bambu_size if orient_for_bambu else design.size for design in designs
     }
     omitted = []
-    for spec in accessory_variants(build, interface):
+    for spec in accessory_variants(
+        build,
+        interface,
+        hole_diameter=hole_diameter,
+        hole_scope=hole_scope,
+    ):
         design = accessory_design(spec)
         size = design.bambu_size if orient_for_bambu else design.size
         if build.placement(size) is None:
@@ -215,7 +308,9 @@ def h2d_dual_safe_catalogue_job(
     *,
     hole_diameter: float | None = DEFAULT_HOLE_DIAMETER_MM,
     hole_scope: Literal["interior", "full"] = "full",
+    packing_gap: float = H2D_DEFAULT_PART_CLEARANCE_MM,
 ) -> Job:
+    positive("H2D packing gap", packing_gap)
     interface = Interface()
     physical_build = BuildVolume(350, 320, 325)
     source, sizes = _catalogue_job_with_sizes(
@@ -235,22 +330,48 @@ def h2d_dual_safe_catalogue_job(
         and design.parameters["ny"] == 5
     )
     common_designs = [design for design in source.designs if design is not exception]
-    groups = (
-        ("Tiles", {"tile"}, None),
-        ("Female ramps", {"ramp"}, "female"),
-        ("Male ramps", {"ramp"}, "male"),
-        ("Normal stops", {"vertical-stop"}, None),
+
+    def family_members(families: set[str], ramp_join: str | None = None) -> list[Design]:
+        return [
+            design
+            for design in common_designs
+            if design.parameters.get("family", "tile") in families
+            and (ramp_join is None or design.parameters.get("ramp_join", "female") == ramp_join)
+        ]
+
+    def perimeter_traits(design: Design) -> tuple[float, bool]:
+        parameters = design.parameters
+        outward = parameters.get("edge_outward", 10.0)
+        complete = parameters.get("complete_edge_holes", False)
+        return outward, complete
+
+    groups = [
+        ("Tiles", family_members({"tile"})),
+        ("Female ramps", family_members({"ramp"}, "female")),
+        ("Male ramps", family_members({"ramp"}, "male")),
+        ("Normal stops", family_members({"vertical-stop"})),
         (
             "Tile brackets - deep and shallow",
-            {"vertical-tile-bracket"},
-            None,
+            family_members({"vertical-tile-bracket"}),
         ),
-        ("Angled stops", {"lock-45"}, None),
-        ("Attachment plates", {"plate"}, None),
-        ("Edges and corners", {"edge-x", "edge-y", "corner-in", "corner-out"}, None),
-        ("Rails and connectors", {"support", "support-bit", "support-end"}, None),
-        ("Rods and upper braces", {"rod", "rod-brace"}, None),
+        ("Angled stops", family_members({"lock-45"})),
+        ("Attachment plates", family_members({"plate"})),
+    ]
+    perimeter_designs = family_members({"edge-x", "edge-y", "corner-in", "corner-out"})
+    for outward in EDGE_OUTWARD_OPTIONS_MM:
+        for complete in (False, True):
+            mode = "complete holes" if complete else "plain"
+            traits = (outward, complete)
+            members = [design for design in perimeter_designs if perimeter_traits(design) == traits]
+            if members:
+                groups.append((f"{outward:g}mm edges and corners - {mode}", members))
+    groups.append(
+        (
+            "Rails and connectors",
+            family_members({"support", "support-bit", "support-end"}),
+        )
     )
+    groups.append(("Rods and upper braces", family_members({"rod", "rod-brace"})))
     common_build = BuildVolume(
         350,
         320,
@@ -263,27 +384,75 @@ def h2d_dual_safe_catalogue_job(
     )
     designs = []
     placements = []
+    footprints = []
+    projected_clearances = {}
+    projected_packing = {}
     plate_names = {}
     plate_offset = 0
-    for title, families, ramp_join in groups:
-        members = [
-            design
-            for design in common_designs
-            if design.parameters.get("family", "tile") in families
-            and (ramp_join is None or design.parameters.get("ramp_join", "female") == ramp_join)
-        ]
-        packed = pack_sizes(
+    for title, members in groups:
+        perimeter_group = bool(members) and all(
+            design.parameters.get("family") in {"edge-x", "edge-y", "corner-in", "corner-out"}
+            for design in members
+        )
+        rectangular = pack_sizes(
             [sizes[id(design)] for design in members],
             common_build,
-            gap=10,
+            gap=packing_gap,
             pack=True,
         )
+        shape_nested = False
+        rectangle_plate_count = max(placement.plate for placement in rectangular) + 1
+        if perimeter_group and rectangle_plate_count > 1:
+            group_footprints = []
+            for design in members:
+                vertices, faces, _ = checked_mesh(design.bambu_shape)
+                group_footprints.append(projected_mesh_footprint(vertices, faces))
+            search_gap = max(
+                packing_gap - H2D_FOOTPRINT_SEARCH_ALLOWANCE_MM,
+                packing_gap / 2,
+            )
+            try:
+                candidate = pack_projected_footprints(
+                    group_footprints,
+                    (30, 5, 320, 315),
+                    gap=packing_gap,
+                    search_gap=search_gap,
+                )
+            except ValueError as error:
+                packed = rectangular
+                group_footprints = [None] * len(members)
+                projected_packing[title] = {
+                    "status": "rectangle fallback",
+                    "reason": str(error),
+                }
+            else:
+                packed = candidate
+                shape_nested = True
+                projected_packing[title] = {
+                    "status": "applied",
+                    "minimum_projected_gap_mm": packing_gap,
+                    "search_gap_mm": search_gap,
+                    "grid_mm": 1,
+                    "maximum_candidate_positions": 4_000_000,
+                    "maximum_order_attempts": 8,
+                }
+        else:
+            group_footprints = [None] * len(members)
+            packed = rectangular
+            if perimeter_group:
+                projected_packing[title] = {
+                    "status": "rectangle retained",
+                    "reason": "the group already fits one plate at the requested bounds gap",
+                }
         group_plate_count = max(placement.plate for placement in packed) + 1
         for local_plate in range(group_plate_count):
             plate_names[plate_offset + local_plate] = (
                 title if group_plate_count == 1 else f"{title} {local_plate + 1}"
             )
         designs.extend(members)
+        footprints.extend(group_footprints)
+        if shape_nested:
+            projected_clearances[plate_offset] = packing_gap
         placements.extend(
             PrintPlacement(
                 placement.plate + plate_offset,
@@ -301,10 +470,11 @@ def h2d_dual_safe_catalogue_job(
     exception_placement = pack_sizes(
         [sizes[id(exception)]],
         BuildVolume(325, 320, 320, margin=5),
-        gap=10,
+        gap=packing_gap,
         pack=True,
     )[0]
     designs.append(exception)
+    footprints.append(None)
     placements.append(
         PrintPlacement(
             plate_offset,
@@ -332,8 +502,18 @@ def h2d_dual_safe_catalogue_job(
             "name": "H2D dual-nozzle safe",
             "common_reach_mm": {"min_x": 25, "max_x": 325, "min_y": 0, "max_y": 320, "max_z": 320},
             "common_model_inset_mm": 5,
-            "minimum_model_gap_mm": 10,
+            "minimum_model_gap_mm": packing_gap,
+            "minimum_actual_part_xy_clearance_mm": packing_gap,
+            "clearance_measurement": (
+                "model bounds on rectangle-packed plates; all-height projected model "
+                "footprints on marked shape-packed plates"
+            ),
+            "projected_footprint_gap_overrides_mm": {
+                plate_names[plate]: clearance for plate, clearance in projected_clearances.items()
+            },
+            "projected_footprint_packing": projected_packing,
             "grouped_by_family": True,
+            "perimeter_grouping": "outward width and boundary-hole mode",
             "exception": {
                 "design": exception.name,
                 "plate": plate_offset + 1,
@@ -341,8 +521,10 @@ def h2d_dual_safe_catalogue_job(
                 "filament_slot": 1,
             },
         },
+        projected_footprints=footprints,
+        projected_footprint_clearances=projected_clearances,
     )
-    job.part_gap = 10
+    job.part_gap = packing_gap
     if plate_offset + 1 > 36:
         raise ValueError("H2D dual-safe grouped catalogue exceeds the 36-plate limit")
     return job

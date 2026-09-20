@@ -52,7 +52,7 @@ uv run cargo-grid layout --build-width-mm 150 --build-depth-mm 150 --build-heigh
 
 ## Browse and generate accessories
 
-At the standard 60/13 settings, the documented 350x320x325 mm build envelope fits 65 accessories: female and male ramps, attachment plates, five vertical tile brackets, eight normal stops, two angled stops, round-hole rods and upper braces, edge/corner pieces and separate support rails/connectors. A different unit size or build envelope can change what fits.
+At the standard 60/13 settings, the documented 350x320x325 mm build envelope fits 105 accessories: female and male ramps, attachment plates, five vertical tile brackets, eight normal stops, two angled stops, round-hole rods and upper braces, edge/corner pieces and separate support rails/connectors. The catalogue selects one perimeter form for each outward width to match its tiles: 10, 20 and 30 mm edges complete accepted boundary holes when the tile pattern has them. Holeless or interior-only tiles select plain perimeter parts at every width. A different unit size or build envelope can change what fits.
 
 ![Three plates, five tile brackets, eight normal stops and two angled stops that use the X attachment interface.](docs/images/x-attachments.png)
 
@@ -63,6 +63,14 @@ Generate one accessory with `part`:
 ```sh
 uv run cargo-grid part --family plate --width-cells 1 --depth-cells 1 --build-width-mm 150 --build-depth-mm 150 --build-height-mm 80 --output outputs/x-plate
 ```
+
+For a wider finishing strip, select its total outward projection. A 20 or 30 mm standalone part follows the normal full 10 mm-hole tile pattern unless `--plain-edge` is given. `--complete-edge-holes` makes that choice explicit, and `--hole-diameter-mm` changes the matching tile and perimeter opening together:
+
+```sh
+uv run cargo-grid part --family edge-y --length-cells 2 --edge-outward-mm 30 --complete-edge-holes --build-width-mm 150 --build-depth-mm 150 --build-height-mm 50 --output outputs/wide-edge
+```
+
+The same options apply to `edge-x`, `corner-in` and `corner-out`. All three outward widths can complete accepted boundary sites or remain plain with `--plain-edge`. If a requested diameter has no accepted boundary site, automatic matching keeps the perimeter plain; an explicit completion request reports the unsupported combination.
 
 For Bambu output, attachment plates are flipped X=180 degrees so the broad plate body starts on the bed and the X plugs grow upward. STEP, STL and core 3MF keep the source orientation.
 
@@ -76,13 +84,13 @@ The manifest lists anything omitted because it did not fit.
 
 ## Make the full H2D catalogue
 
-This standard-only command creates the documented H2D project: 25 tile sizes with the full 10 mm hole pattern and all 65 accessories. It packs actual part bounds onto named, family-grouped plates, including `Rods and upper braces`; the manifest records the plate count. It requires 60 mm units, 13 mm thickness and zero fit offset.
+This standard-only command creates the documented H2D project: 25 tile sizes with the full 10 mm hole pattern and all 105 accessories. It packs them onto named, family-grouped plates, including `Rods and upper braces`; the manifest records the plate count. It requires 60 mm units, 13 mm thickness and zero fit offset. Perimeter parts are grouped by outward projection and their selected hole mode, while individual object names retain their edge direction, corner variant and connector sex.
 
 ```sh
 uv run cargo-grid catalogue --h2d-dual-safe --build-width-mm 350 --build-depth-mm 320 --build-height-mm 325 --bambu --material "Bambu PETG Basic @BBL H2D 0.8 nozzle" PETG "#637b70" --nozzle-diameter-mm 0.8 --layer-height-mm 0.32 --no-stl --output outputs/full-catalogue
 ```
 
-Open `outputs/full-catalogue/job.3mf` as a project. Common plates keep model bounds inside the H2D shared reach (X=25..325, Y=0..320, Z<=320), add another 5 mm model inset and leave at least 10 mm between model bounds. The 306x306 mm 5x5 tile needs the wider left-nozzle area, so it gets its own `5x5 TILE - SINGLE NOZZLE ONLY - LEFT` plate and maps slot 1 to the left nozzle. Other plates use automatic `Auto For Match`. These are model bounds; check support, brim and tower paths after slicing.
+Open `outputs/full-catalogue/job.3mf` as a project. Common plates keep model bounds inside the H2D shared reach (X=25..325, Y=0..320, Z<=320) and add another 5 mm model inset. The default layout leaves at least 4 mm of XY clearance between actual parts. Fast rectangle-packed plates enforce this conservatively between model bounds; eligible perimeter groups use all-height projected model footprints only when their concave shapes reduce the plate count. The 306x306 mm 5x5 tile needs the wider left-nozzle area, so it gets its own `5x5 TILE - SINGLE NOZZLE ONLY - LEFT` plate and maps slot 1 to the left nozzle. Other plates use automatic `Auto For Match`. This clearance does not account for every possible brim, support or tower path and is not print approval; inspect the sliced project.
 
 The project names the H2D 0.8 nozzle, 0.32 mm Balanced Strength process, Textured PEI plate and Bambu PETG Basic profile. Confirm those profiles and your loaded filament before slicing. The catalogue does not add PLA roof interfaces to tiles; the PETG/PLA roof-support job below remains a separate tile-only workflow.
 
@@ -214,6 +222,9 @@ Common options:
 - `--width-cells`, `--depth-cells`: one tile or two-axis accessory;
 - `--panel-height-cells`: bracket wall rows, separate from floor depth;
 - `--length-cells`: edge strips and support rails;
+- `--edge-outward-mm`: 10, 20 or 30 mm horizontal projection for edge/corner parts;
+- `--complete-edge-holes`: explicitly continue matching accepted tile-boundary sites through a 10, 20 or 30 mm edge/corner;
+- `--plain-edge`: keep a 10, 20 or 30 mm standalone edge/corner plain instead of using automatic tile-pattern matching;
 - `--rod-height-mm`, `--peg-diameter-mm`: rod height above the mat and round insertion peg;
 - `--brace-spacing-mm`, `--bore-diameter-mm`: physical brace centre spacing and bore diameter;
 - `--copy-count`: repeated copies of one design;

@@ -33,12 +33,26 @@ DOCUMENTATION_IMAGES = {
     *(f"docs/images/attachments/rod-{height}.png" for height in (120, 240)),
     *(f"docs/images/attachments/rod-brace-{spacing}-d10.png" for spacing in (60, 120)),
     *(
-        f"docs/images/attachments/{family}-{number}.png"
-        for family in ("edge-x", "edge-y", "support")
+        f"docs/images/attachments/{family}-{number}{suffix}.png"
+        for family in ("edge-x", "edge-y")
         for number in range(1, 6)
+        for suffix in (
+            "-complete-holes",
+            "-out20-complete-holes",
+            "-out30-complete-holes",
+        )
     ),
-    *(f"docs/images/attachments/corner-in-v{n}.png" for n in range(1, 5)),
-    *(f"docs/images/attachments/corner-out-v{n}.png" for n in range(1, 7)),
+    *(f"docs/images/attachments/support-{number}.png" for number in range(1, 6)),
+    *(
+        f"docs/images/attachments/{family}-v{number}{suffix}.png"
+        for family, count in (("corner-in", 4), ("corner-out", 6))
+        for number in range(1, count + 1)
+        for suffix in (
+            "-complete-holes",
+            "-out20-complete-holes",
+            "-out30-complete-holes",
+        )
+    ),
     *(f"docs/images/attachments/support-end-v{n}.png" for n in range(1, 5)),
     *(f"docs/images/attachments/support-bit-{n}mm.png" for n in (20, 30, 40, 50)),
     *(f"docs/images/attachments/plate-{grid}.png" for grid in ("1x1", "1x2", "2x2")),

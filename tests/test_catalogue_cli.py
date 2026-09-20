@@ -185,3 +185,30 @@ def test_accessory_part_ignores_default_tile_holes_but_rejects_explicit_holes(tm
     with pytest.raises(SystemExit) as caught:
         main([*common, "--holes", "--output", str(tmp_path / "invalid")])
     assert caught.value.code == 2
+
+
+def test_perimeter_cli_resolves_matching_diameter_and_plain_override(tmp_path):
+    common = [
+        "part",
+        "--family",
+        "edge-y",
+        "--edge-outward-mm",
+        "20",
+        "--build-width-mm",
+        "150",
+        "--build-depth-mm",
+        "150",
+        "--build-height-mm",
+        "50",
+        "--output",
+        str(tmp_path / "unused"),
+    ]
+    custom = parser().parse_args([*common, "--hole-diameter-mm", "8"])
+    assert _resolved_hole_diameter(custom) == 8
+    assert custom.complete_edge_holes is None
+    plain = parser().parse_args([*common, "--plain-edge"])
+    assert _resolved_hole_diameter(plain) is None
+    assert plain.complete_edge_holes is False
+    incompatible = parser().parse_args([*common, "--plain-edge", "--hole-diameter-mm", "8"])
+    with pytest.raises(ValueError, match="cannot be combined with --plain-edge"):
+        _resolved_hole_diameter(incompatible)

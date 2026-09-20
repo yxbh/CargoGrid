@@ -14,7 +14,7 @@ from test_export import _project_facts
 
 from cargo_grid.export import BambuSettings, Material, write_3mf
 from cargo_grid.jobs import Design, Job
-from cargo_grid.packing import pack_sizes
+from cargo_grid.packing import PrintPlacement, pack_sizes
 from cargo_grid.parameters import BuildVolume, Exclusion
 
 
@@ -134,6 +134,48 @@ def test_exclusions_and_upper_reservations_are_not_used_for_packing():
     sizes = [(35, 30, 25)] * 6
     placements = pack_sizes(sizes, build, gap=3)
     _assert_placements(sizes, placements, build, 3)
+
+
+def test_compact_fallback_fits_all_10mm_perimeter_bounds_on_one_h2d_plate():
+    sizes = [
+        (60, 66, 13),
+        (66, 66, 13),
+        (66, 60, 13),
+        (60, 60, 13),
+        (16, 60 + 5 * sqrt(2), 13),
+        (60 + 5 * sqrt(2), 10, 13),
+        (70, 70, 13),
+        (10, 60 + 5 * sqrt(2), 13),
+        (60 + 5 * sqrt(2), 16, 13),
+        (70, 70, 13),
+        *((60 * length, 16, 13) for length in range(1, 6)),
+        *((60 * length, 10, 13) for length in range(1, 6)),
+    ]
+    build = BuildVolume(
+        350,
+        320,
+        320,
+        margin=5,
+        exclusions=(Exclusion(0, 0, 30, 320), Exclusion(320, 0, 30, 320)),
+    )
+    placements = pack_sizes(sizes, build, gap=10)
+    assert {placement.plate for placement in placements} == {0}
+    _assert_placements(sizes, placements, build, 10)
+    assert placements == pack_sizes(sizes, build, gap=10)
+
+    blocked = pack_sizes([*sizes, (290, 310, 13)], build, gap=10)
+    assert max(placement.plate for placement in blocked) >= 1
+    _assert_placements([*sizes, (290, 310, 13)], blocked, build, 10)
+
+
+def test_compact_fallback_keeps_existing_layout_when_plate_count_is_equal():
+    sizes = [(60, 30, 13), (20, 20, 13), (40, 70, 13)]
+    build = BuildVolume(100, 100, 30, margin=4)
+    assert pack_sizes(sizes, build, gap=2) == [
+        PrintPlacement(0, 46, 4, 90),
+        PrintPlacement(0, 46, 66, 0),
+        PrintPlacement(0, 4, 4, 0),
+    ]
 
 
 def test_input_identity_order_and_unpacked_mode():

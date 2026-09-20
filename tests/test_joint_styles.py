@@ -104,7 +104,12 @@ def test_full_height_mating_has_no_intersection_in_both_directions(axis):
 def test_every_tile_facing_family_opens_and_reaches_top(family, variants):
     for v in variants:
         for style in ("full-height", "original"):
-            spec = Accessory(family, variant=v, interface=Interface(joint_style=style))
+            spec = Accessory(
+                family,
+                variant=v,
+                interface=Interface(joint_style=style),
+                complete_edge_holes=False,
+            )
             shape = make_accessory(spec)
             for join in accessory_datums(spec)["joins"]:
                 x, y, z = join["position"]

@@ -47,10 +47,10 @@ def unrounded_edge(spec):
 @pytest.mark.parametrize(
     "spec",
     [
-        Accessory("edge-x", nx=2),
-        Accessory("edge-y", nx=2),
-        *(Accessory("corner-in", variant=v) for v in range(1, 5)),
-        *(Accessory("corner-out", variant=v) for v in range(1, 7)),
+        Accessory("edge-x", nx=2, complete_edge_holes=False),
+        Accessory("edge-y", nx=2, complete_edge_holes=False),
+        *(Accessory("corner-in", variant=v, complete_edge_holes=False) for v in range(1, 5)),
+        *(Accessory("corner-out", variant=v, complete_edge_holes=False) for v in range(1, 7)),
     ],
 )
 def test_perimeter_rounds_exist_in_step_and_join_tools_are_preserved(spec, style, tmp_path):

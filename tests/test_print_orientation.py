@@ -343,10 +343,10 @@ def test_catalogue_fit_uses_project_pose_only_when_requested(monkeypatch):
     enumerate_accessories = catalogue_module.accessory_variants
     requests = []
 
-    def brackets(build, interface):
+    def brackets(build, interface, **hole_pattern):
         specs = [
             spec
-            for spec in enumerate_accessories(build, interface)
+            for spec in enumerate_accessories(build, interface, **hole_pattern)
             if spec.family == "vertical-tile-bracket"
         ]
         requests.append(specs)

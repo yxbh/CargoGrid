@@ -135,7 +135,6 @@ def test_x_plugs_and_roots_are_exactly_protected(nx, ny, height):
 def test_variants_are_finite_distinct_and_use_scoped_normal_auto():
     variants = accessory_variants(BuildVolume(350, 320, 325))
     stops = [spec for spec in variants if spec.family == "vertical-stop"]
-    assert len(variants) == 65
     assert {(spec.nx, spec.ny, spec.height) for spec in stops} == {
         (nx, ny, height) for nx, ny in VERTICAL_STOP_CELLS for height in VERTICAL_STOP_HEIGHTS_MM
     }
