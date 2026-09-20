@@ -7,6 +7,9 @@ from math import cos, pi, sin, sqrt
 import pytest
 from build123d import Axis, Box, GeomType, Location, Part, Vector
 from OCP.BRepAdaptor import BRepAdaptor_Surface
+from OCP.BRepClass3d import BRepClass3d_SolidClassifier
+from OCP.gp import gp_Pnt
+from OCP.TopAbs import TopAbs_IN
 
 from cargo_grid import BuildVolume, Interface, Tile, make_tile
 from cargo_grid.accessories import Accessory, accessory_datums, make_accessory
@@ -51,6 +54,32 @@ def _assembly_contains(shapes_and_bounds, point):
         and shape.is_inside(point, _POINT_CLASSIFIER_TOLERANCE)
         for shape, bounds in shapes_and_bounds
     )
+
+
+def _prepared_assembly_contains(shapes):
+    """Keep query state local to one case, after its shapes stop changing."""
+    queries = []
+    for shape in shapes:
+        bounds = shape.bounding_box()
+        queries.append(
+            (tuple(bounds.min), tuple(bounds.max), BRepClass3d_SolidClassifier(shape.wrapped))
+        )
+
+    def contains(point):
+        coordinates = tuple(Vector(point))
+        for lower, upper, classifier in queries:
+            if all(
+                minimum - _POINT_CLASSIFIER_TOLERANCE
+                <= value
+                <= maximum + _POINT_CLASSIFIER_TOLERANCE
+                for minimum, maximum, value in zip(lower, upper, coordinates)
+            ):
+                classifier.Perform(gp_Pnt(*coordinates), _POINT_CLASSIFIER_TOLERANCE)
+                if classifier.State() == TopAbs_IN or classifier.IsOnAFace():
+                    return True
+        return False
+
+    return contains
 
 
 def _solid_intersection_volume(first, second):
@@ -139,8 +168,13 @@ def _corner_half_pairs(outward, complete, interface=Interface()):
     )
 
 
-def _assert_completed_circle(shapes, center, height, minimum_ring_samples=62):
-    shapes_and_bounds = tuple((shape, shape.bounding_box()) for shape in shapes)
+def _assert_completed_circle(shapes, center, height, minimum_ring_samples=62, *, contains=None):
+    if contains is None:
+        shapes_and_bounds = tuple((shape, shape.bounding_box()) for shape in shapes)
+
+        def contains(point):
+            return _assembly_contains(shapes_and_bounds, point)
+
     for z in (1, height / 2, height - 1):
         for index in range(64):
             angle = 2 * pi * index / 64
@@ -149,11 +183,10 @@ def _assert_completed_circle(shapes, center, height, minimum_ring_samples=62):
                 center[1] + 4.99 * sin(angle),
                 z,
             )
-            assert not _assembly_contains(shapes_and_bounds, inside)
+            assert not contains(inside)
         assert (
             sum(
-                _assembly_contains(
-                    shapes_and_bounds,
+                contains(
                     Vector(
                         center[0] + 5.01 * cos(2 * pi * index / 64),
                         center[1] + 5.01 * sin(2 * pi * index / 64),
@@ -774,10 +807,11 @@ def test_forty_mm_straights_keep_tile_interfaces_and_complete_middle_holes(famil
     if family == "edge-y":
         tile = tile.moved(Location((0, -60, 0)))
     shapes = (shape, tile)
+    contains = _prepared_assembly_contains(shapes)
     datums = accessory_datums(spec)
     assert datums["edge_hole_centers"] == [(x, 0) for x in range(0, cells * 60 + 1, 30)]
     for x in range(30, cells * 60, 30):
-        _assert_completed_circle(shapes, (x, 0), 13, minimum_ring_samples=59)
+        _assert_completed_circle(shapes, (x, 0), 13, minimum_ring_samples=59, contains=contains)
     # End holes still need the neighboring perimeter's quarter; no 40 mm corners are supplied.
     outside_y = -3.6 if family == "edge-x" else 3.6
     assert not any(part.is_inside(Vector(-3.6, outside_y, 6.5)) for part in shapes)
@@ -821,3 +855,108 @@ def test_forty_mm_custom_interface_keeps_physical_width_and_hole_diameter(
     assert delta <= budget and bounds_delta <= 1e-5
     _, _, report = checked_mesh(shape)
     assert report["closed_oriented_manifold"]
+
+
+@pytest.mark.parametrize("family", ["edge-x", "edge-y"])
+@pytest.mark.parametrize("transformed", [False, True])
+def test_prepared_queries_match_legacy_inside_outside_and_boundary(family, transformed):
+    edge = _accessory_shape(Accessory(family, edge_outward=40))
+    tile = _tile_shape(Tile())
+    if family == "edge-y":
+        tile = tile.moved(Location((0, -60, 0)))
+    shapes = (edge, tile)
+    direction = -1 if family == "edge-x" else 1
+    known = [
+        (Vector(30, direction * 20, 6.5), True),
+        (Vector(30, direction * 40, 6.5), True),
+        (Vector(30, direction * 45, 6.5), False),
+        (Vector(30, 0, 12), False),
+    ]
+    points = [
+        *(point for point, _ in known),
+        *(Vector(x, direction * 20, 6.5) for x in (-2e-6, -0.5e-6, 0, 0.5e-6)),
+        *(Vector(30, direction * 20, z) for z in (-2e-6, -0.5e-6, 0, 13, 13 + 2e-6)),
+        *(
+            Vector(30 + radius * cos(angle), radius * sin(angle), 12)
+            for radius in (4.99, 5, 5.01)
+            for angle in (index * pi / 4 for index in range(8))
+        ),
+    ]
+    if transformed:
+        shapes = tuple(shape.rotate(Axis.Z, 90).moved(Location((17, -23, 4))) for shape in shapes)
+        points = [Vector(17 - point.Y, -23 + point.X, 4 + point.Z) for point in points]
+    expected = [
+        any(shape.is_inside(point, _POINT_CLASSIFIER_TOLERANCE) for shape in shapes)
+        for point in points
+    ]
+    assert expected[: len(known)] == [result for _, result in known]
+    contains = _prepared_assembly_contains(shapes)
+    assert [contains(point) for point in points] == expected
+    assert [contains(point) for point in reversed(points)] == list(reversed(expected))
+
+
+@pytest.mark.parametrize("diameter", [None, 8, 12])
+def test_prepared_circle_check_still_rejects_filled_or_wrong_radius_holes(diameter):
+    spec = Accessory(
+        "edge-x",
+        edge_outward=40,
+        complete_edge_holes=diameter is not None,
+        edge_hole_diameter=diameter,
+    )
+    shapes = (_accessory_shape(spec), _tile_shape(Tile()))
+    with pytest.raises(AssertionError):
+        _assert_completed_circle(shapes, (30, 0), 13, minimum_ring_samples=59)
+    with pytest.raises(AssertionError):
+        _assert_completed_circle(
+            shapes,
+            (30, 0),
+            13,
+            minimum_ring_samples=59,
+            contains=_prepared_assembly_contains(shapes),
+        )
+
+
+def test_prepared_queries_are_case_local_and_preserve_pristine_templates(monkeypatch):
+    spec = Accessory("edge-y", nx=5, edge_outward=40)
+    template = _accessory_template(spec)
+    before = (
+        template.volume,
+        tuple(template.bounding_box().min),
+        tuple(template.bounding_box().max),
+    )
+    first = _accessory_shape(spec)
+    second = _accessory_shape(spec).moved(Location((1000, 1000, 0)))
+    assert not first.wrapped.IsSame(template.wrapped)
+    assert not second.wrapped.IsSame(template.wrapped)
+    loaded = []
+    bounds_calls = []
+    classifier_type = BRepClass3d_SolidClassifier
+    shape_type = type(first)
+    original_bounds = shape_type.bounding_box
+
+    def classifier(shape):
+        result = classifier_type(shape)
+        loaded.append(result)
+        return result
+
+    def bounds(shape, *args, **kwargs):
+        bounds_calls.append(shape)
+        return original_bounds(shape, *args, **kwargs)
+
+    with monkeypatch.context() as context:
+        context.setattr(f"{__name__}.BRepClass3d_SolidClassifier", classifier)
+        context.setattr(shape_type, "bounding_box", bounds)
+        query_first = _prepared_assembly_contains((first,))
+        query_second = _prepared_assembly_contains((second,))
+        for _ in range(3):
+            assert query_first(Vector(30, 20, 6.5))
+            assert not query_first(Vector(1030, 1020, 6.5))
+            assert query_second(Vector(1030, 1020, 6.5))
+            assert not query_second(Vector(30, 20, 6.5))
+        assert len(loaded) == len(bounds_calls) == 2
+        assert loaded[0] is not loaded[1]
+    assert (
+        template.volume,
+        tuple(template.bounding_box().min),
+        tuple(template.bounding_box().max),
+    ) == before
