@@ -7,7 +7,7 @@ from math import floor
 from pathlib import Path
 
 from cargo_grid._version import __version__
-from cargo_grid.accessories import FAMILIES, Accessory
+from cargo_grid.accessories import EDGE_FAMILIES, EDGE_OUTWARD_OPTIONS_MM, FAMILIES, Accessory
 from cargo_grid.catalogue import accessory_design, catalogue_job, h2d_dual_safe_catalogue_job
 from cargo_grid.export import BambuSettings, Material, export_job
 from cargo_grid.jobs import Job, layout_job, tile_design
@@ -319,7 +319,7 @@ def parser() -> argparse.ArgumentParser:
             type=float,
             default=argparse.SUPPRESS,
             metavar="MM",
-            help="minimum packed-part separation in mm; default 2, or fixed 10 with --h2d-dual-safe",
+            help="minimum packed-part separation in mm; default 2, or 4 with --h2d-dual-safe",
         )
         for axis, meaning in (
             ("width", "positive X edge"),
@@ -540,6 +540,26 @@ def parser() -> argparse.ArgumentParser:
                 help="lock-45 or vertical-stop Z height above its attachment shoulder, in mm; defaults: 50 or 60 respectively",
             )
             p.add_argument(
+                "--edge-outward-mm",
+                type=float,
+                choices=EDGE_OUTWARD_OPTIONS_MM,
+                metavar="MM",
+                help="edge/corner horizontal outward projection: 10 (default), 20 or 30 mm",
+            )
+            edge_holes = p.add_mutually_exclusive_group()
+            edge_holes.add_argument(
+                "--complete-edge-holes",
+                action="store_true",
+                default=None,
+                help="continue matching accepted full-pattern tile boundary sites through a 10, 20 or 30 mm edge/corner; diameter defaults to 10 mm",
+            )
+            edge_holes.add_argument(
+                "--plain-edge",
+                dest="complete_edge_holes",
+                action="store_false",
+                help="keep a 10, 20 or 30 mm edge/corner plain instead of matching the normal tile-hole pattern",
+            )
+            p.add_argument(
                 "--copy-count",
                 type=int,
                 default=1,
@@ -616,8 +636,20 @@ def parser() -> argparse.ArgumentParser:
 
 def _resolved_hole_diameter(args) -> float | None:
     tile_workflow = args.command != "part" or args.family == "tile"
+    perimeter_workflow = args.command == "part" and args.family in EDGE_FAMILIES
     holes = getattr(args, "holes", None)
     requested_diameter = getattr(args, "hole_diameter_mm", None)
+    if perimeter_workflow:
+        if holes is not None:
+            raise ValueError(
+                "use --complete-edge-holes or --plain-edge for perimeter parts, "
+                "not --holes/--no-holes"
+            )
+        if requested_diameter is not None and args.complete_edge_holes is False:
+            raise ValueError("--hole-diameter-mm cannot be combined with --plain-edge")
+        if requested_diameter is not None:
+            return requested_diameter
+        return DEFAULT_HOLE_DIAMETER_MM if args.complete_edge_holes is True else None
     if not tile_workflow:
         if holes is True or requested_diameter is not None:
             raise ValueError("round-hole options apply to tiles, not accessory bodies")
@@ -679,6 +711,18 @@ def main(argv: list[str] | None = None) -> int:
                 {"vertical-tile-bracket"},
                 None,
             )
+            edge_outward = _part_option(
+                args,
+                "edge_outward_mm",
+                set(EDGE_FAMILIES),
+                10.0,
+            )
+            complete_edge_holes = _part_option(
+                args,
+                "complete_edge_holes",
+                set(EDGE_FAMILIES),
+                None,
+            )
             ramp_join = _part_option(args, "ramp_join", {"ramp"}, "female")
             rod_height = _part_option(args, "rod_height_mm", {"rod"}, 120.0)
             peg_diameter = _part_option(args, "peg_diameter_mm", {"rod"}, 10.0)
@@ -707,6 +751,11 @@ def main(argv: list[str] | None = None) -> int:
                         interface,
                         panel_height_cells=panel_height,
                         ramp_join=ramp_join,
+                        edge_outward=edge_outward,
+                        complete_edge_holes=complete_edge_holes,
+                        edge_hole_diameter=(
+                            hole_diameter if args.family in EDGE_FAMILIES else None
+                        ),
                     )
                 )
             design.quantity = args.copy_count
@@ -747,11 +796,10 @@ def main(argv: list[str] | None = None) -> int:
                         "--tile-thickness-mm 13 and zero fit offset"
                     )
                 requested_gap = getattr(args, "packing_gap_mm", None)
-                if requested_gap not in (None, 10):
-                    raise ValueError("--h2d-dual-safe uses a fixed --packing-gap-mm 10")
                 job = h2d_dual_safe_catalogue_job(
                     hole_diameter=hole_diameter,
                     hole_scope=args.hole_scope,
+                    packing_gap=4 if requested_gap is None else requested_gap,
                 )
             else:
                 job = catalogue_job(

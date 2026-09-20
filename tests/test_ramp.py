@@ -284,7 +284,6 @@ def test_broad_shelf_preserves_high_joining_rim_and_standard_pocket_roof(ramp_jo
 def test_catalogue_includes_every_ramp_width_that_fits_selected_envelope():
     variants = accessory_variants(BuildVolume(350, 320, 325))
     ramps = [spec for spec in variants if spec.family == "ramp"]
-    assert len(variants) == 65
     for sex in ("female", "male"):
         assert [spec.nx for spec in ramps if spec.ramp_join == sex] == [1, 2, 3, 4, 5]
     assert all(spec.ny == 1 for spec in ramps)

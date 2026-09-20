@@ -87,4 +87,109 @@ def pack_sizes(
                 f"could not pack part {index}; exclusions or reservations block placement"
             )
         results[index] = chosen
+    first_fit = [results[i] for i in range(len(sizes))]
+    if not pack or not sizes:
+        return first_fit
+    compact = _compact_sizes(sizes, build, gap)
+    if max(placement.plate for placement in compact) < max(
+        placement.plate for placement in first_fit
+    ):
+        return compact
+    return first_fit
+
+
+def _compact_sizes(
+    sizes: list[tuple[float, float, float]],
+    build: BuildVolume,
+    gap: float,
+) -> list[PrintPlacement]:
+    occupied: list[list[tuple[float, float, float, float]]] = []
+    results: dict[int, PrintPlacement] = {}
+    order = sorted(range(len(sizes)), key=lambda i: (-sizes[i][0] * sizes[i][1], i))
+    for index in order:
+        size = sizes[index]
+        options = []
+        for plate in range(len(occupied) + 1):
+            rectangles = occupied[plate] if plate < len(occupied) else []
+            xs = {
+                build.margin,
+                *(x + width + gap for x, y, width, depth in rectangles),
+                *(area.x + area.width for area in build.exclusions),
+            }
+            ys = {
+                build.margin,
+                *(y + depth + gap for x, y, width, depth in rectangles),
+                *(area.y + area.depth for area in build.exclusions),
+            }
+            for angle in (0, 90):
+                width, depth = size[:2] if angle == 0 else size[1::-1]
+                for y in sorted(ys):
+                    for x in sorted(xs):
+                        if x < build.margin or y < build.margin:
+                            continue
+                        if (
+                            x + width > build.x - build.margin - build.reserve_x + 1e-6
+                            or y + depth > build.y - build.margin - build.reserve_y + 1e-6
+                        ):
+                            continue
+                        if any(
+                            x < area.x + area.width
+                            and x + width > area.x
+                            and y < area.y + area.depth
+                            and y + depth > area.y
+                            for area in build.exclusions
+                        ):
+                            continue
+                        if any(
+                            x < other_x + other_width + gap - 1e-6
+                            and x + width + gap > other_x + 1e-6
+                            and y < other_y + other_depth + gap - 1e-6
+                            and y + depth + gap > other_y + 1e-6
+                            for other_x, other_y, other_width, other_depth in rectangles
+                        ):
+                            continue
+                        extent_x = (
+                            max(
+                                (
+                                    x + width,
+                                    *(
+                                        other_x + other_width
+                                        for other_x, _, other_width, _ in rectangles
+                                    ),
+                                )
+                            )
+                            - build.margin
+                        )
+                        extent_y = (
+                            max(
+                                (
+                                    y + depth,
+                                    *(
+                                        other_y + other_depth
+                                        for _, other_y, _, other_depth in rectangles
+                                    ),
+                                )
+                            )
+                            - build.margin
+                        )
+                        score = (
+                            plate,
+                            max(extent_x, extent_y),
+                            extent_x * extent_y,
+                            extent_y,
+                            extent_x,
+                            y,
+                            x,
+                            angle,
+                        )
+                        options.append((score, plate, x, y, width, depth, angle))
+        if not options:
+            raise ValueError(
+                f"could not pack part {index}; exclusions or reservations block placement"
+            )
+        _, plate, x, y, width, depth, angle = min(options)
+        if plate == len(occupied):
+            occupied.append([])
+        occupied[plate].append((x, y, width, depth))
+        results[index] = PrintPlacement(plate, x, y, angle)
     return [results[i] for i in range(len(sizes))]

@@ -35,7 +35,10 @@ def small_catalogue(monkeypatch):
     monkeypatch.setattr(
         catalogue,
         "accessory_variants",
-        lambda build, interface: [Accessory("plate", nx=1), Accessory("plate", nx=2, ny=2)],
+        lambda build, interface, **hole_pattern: [
+            Accessory("plate", nx=1),
+            Accessory("plate", nx=2, ny=2),
+        ],
     )
     monkeypatch.setattr(
         catalogue, "accessory_design", lambda spec: designs["source" if spec.nx == 1 else "project"]

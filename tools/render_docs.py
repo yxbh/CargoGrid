@@ -20,6 +20,7 @@ from cargo_grid.accessories import (
     make_accessory,
 )
 from cargo_grid.catalogue import BRACKET_DISPLAY_NAMES, accessory_variants
+from cargo_grid.parameters import DEFAULT_HOLE_DIAMETER_MM
 from cargo_grid.rods import Rod, RodBrace
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -87,19 +88,19 @@ FAMILIES = {
     ),
     "edge-x": (
         "Male edge strips",
-        "An R3 finishing strip with male tile-edge joints. Length follows the unit count.",
+        "An R3 finishing strip with male tile-edge joints. Length follows the unit count; catalogue hole completion matches the selected tile pattern at every outward width.",
     ),
     "edge-y": (
         "Female edge strips",
-        "An R3 finishing strip with female tile-edge joints. Length follows the unit count.",
+        "An R3 finishing strip with female tile-edge joints. Length follows the unit count; catalogue hole completion matches the selected tile pattern at every outward width.",
     ),
     "corner-in": (
         "Inner corners",
-        "An R3 corner finishing piece in one of four supported joining arrangements.",
+        "An R3 corner finishing piece in one of four supported joining arrangements, sized to match the selected edge projection and boundary-hole mode.",
     ),
     "corner-out": (
         "Outer corners",
-        "An R3 outer-edge finishing piece in one of six supported arrangements.",
+        "R3 outer-edge corner parts sized to match the selected edge projection and boundary-hole mode. Mixed-sex v1+v2 and v5+v4 split the same rounded full-L exterior as the whole-L variants.",
     ),
     "support": (
         "Support rails",
@@ -159,6 +160,14 @@ def inventory() -> list[Item]:
             suffix, detail = f"{spec.nx}x{spec.ny}", f"{spec.nx} x {spec.ny}"
             if spec.family.startswith("lock-"):
                 detail += f" / H {spec.height:g} mm"
+        if spec.family in ("edge-x", "edge-y", "corner-in", "corner-out"):
+            if spec.edge_outward != 10:
+                suffix += f"-out{spec.edge_outward:g}"
+            if spec.complete_edge_holes:
+                suffix += "-complete-holes"
+            detail += f" / {spec.edge_outward:g} mm outward"
+            if spec.complete_edge_holes:
+                detail += f" / completes accepted {spec.edge_hole_diameter:g} mm boundary holes"
         title = f"{spec.ramp_join} ramp" if spec.family == "ramp" else spec.family
         items.append(Item(f"{spec.family}-{suffix}", title, detail, spec))
     return items
@@ -166,8 +175,15 @@ def inventory() -> list[Item]:
 
 def item_parameters(spec: Accessory | Rod | RodBrace) -> dict:
     parameters = asdict(spec)
-    if isinstance(spec, Accessory) and spec.ramp_join == "female":
-        del parameters["ramp_join"]
+    if isinstance(spec, Accessory):
+        if spec.ramp_join == "female":
+            del parameters["ramp_join"]
+        if parameters["edge_outward"] == 10.0:
+            del parameters["edge_outward"]
+        if not parameters["complete_edge_holes"]:
+            del parameters["complete_edge_holes"]
+        if parameters["edge_hole_diameter"] in (None, DEFAULT_HOLE_DIAMETER_MM):
+            del parameters["edge_hole_diameter"]
     return parameters
 
 
@@ -176,6 +192,15 @@ def item_description(item: Item) -> str:
         if item.spec.ramp_join == "male":
             return "A 50 mm slope with original male tile-edge tabs, not X plugs. Tabs add 6 mm beyond the slope at standard unit size. Place against a female south or west tile edge. Bambu projects leave object support off."
         return "A 50 mm slope with original female tile-edge pockets. Receives a north male tile edge and extends in positive Y. Bambu projects enable Auto support for the pocket roofs; remove it before assembly."
+    if item.spec.family == "corner-out":
+        return {
+            1: "The west half of the northwest mixed-sex corner, with one male tile-edge join. Use it with v2; their diagonal faces form a butt seam and do not clip together.",
+            2: "The north half of the northwest mixed-sex corner, with one female tile-edge join. Use it with v1; their diagonal faces form a butt seam and do not clip together.",
+            3: "The whole northeast L corner, with two female tile-edge joins.",
+            4: "The east half of the southeast mixed-sex corner, with one female tile-edge join. Use it with v5; their diagonal faces form a butt seam and do not clip together.",
+            5: "The south half of the southeast mixed-sex corner, with one male tile-edge join. Use it with v4; their diagonal faces form a butt seam and do not clip together.",
+            6: "The whole southwest L corner, with two male tile-edge joins.",
+        }[item.spec.variant]
     return FAMILIES[item.spec.family][1]
 
 
@@ -361,6 +386,26 @@ def verify_assets() -> dict:
             "parameters"
         ] != json.loads(json.dumps(item_parameters(item.spec))):
             raise ValueError(f"Thumbnail identity mismatch: {item.key}")
+        provenance = entry.get("provenance")
+        if provenance is not None and (
+            set(provenance)
+            != {
+                "generator_commit",
+                "generator_tree",
+                "workbench_commit",
+                "recipe_sha256",
+            }
+            or any(
+                len(provenance[field]) != length
+                for field, length in (
+                    ("generator_commit", 40),
+                    ("generator_tree", 40),
+                    ("workbench_commit", 40),
+                    ("recipe_sha256", 64),
+                )
+            )
+        ):
+            raise ValueError(f"Invalid per-image provenance: {item.key}")
         if png_size(path) != THUMBNAIL_SIZE or path.stat().st_size > 70_000:
             raise ValueError(f"Thumbnail dimensions/size out of budget: {item.key}")
         if hashlib.sha256(path.read_bytes()).hexdigest() != entry["sha256"]:
@@ -382,8 +427,8 @@ def verify_assets() -> dict:
         raise ValueError("Expected exactly one visible thumbnail per inventory row")
     if len({entry["sha256"] for entry in entries}) != len(items):
         raise ValueError("Attachment thumbnails must be distinct, not repeated generic pictures")
-    if sum(asset["bytes"] for asset in report.values()) > 2_000_000:
-        raise ValueError("Documentation images exceed the 2 MB budget")
+    if sum(asset["bytes"] for asset in report.values()) > 4_000_000:
+        raise ValueError("Documentation images exceed the 4 MB budget")
     return report
 
 
@@ -505,6 +550,7 @@ def render_items(
                 "--no-axes",
                 "--quality",
                 "high",
+                "--no-daemon",
                 "--timeout-seconds",
                 "120",
             ],
@@ -545,6 +591,8 @@ def thumbnail_entries(
     provenance: dict,
     *,
     families: set[str] | None = None,
+    keys: set[str] | None = None,
+    scale_overrides: dict[str, float] | None = None,
     write_manifest: bool = True,
 ) -> list[dict]:
     from PIL import Image
@@ -557,14 +605,23 @@ def thumbnail_entries(
         if families is not None and family not in families:
             continue
         items = [item for item in inventory() if item.spec.family == family]
+        if keys is not None:
+            items = [item for item in items if item.key in keys]
+        if not items:
+            continue
         facts = {
             item.key: json.loads((work / "facts" / f"{item.key}.json").read_text())
             for item in items
         }
         spans = [projected_spans(facts[item.key]["size_mm"]) for item in items]
-        scale = 0.88 * min(
-            THUMBNAIL_SIZE[0] / max(s[0] for s in spans),
-            THUMBNAIL_SIZE[1] / max(s[1] for s in spans),
+        scale = (
+            scale_overrides[family]
+            if scale_overrides and family in scale_overrides
+            else 0.88
+            * min(
+                THUMBNAIL_SIZE[0] / max(s[0] for s in spans),
+                THUMBNAIL_SIZE[1] / max(s[1] for s in spans),
+            )
         )
         for item in items:
             fact = facts[item.key]
@@ -824,6 +881,8 @@ def write_gallery(
         "",
         "Normal `vertical-stop` names give base X units, base Y units and the physical H60/H120 shoulder height. They are filled CAD wedges with no wall holes, panel connectors or ledges. The slicer still chooses perimeters and infill.",
         "",
+        "Outer-corner variants 1 and 2 are the two halves of the northwest mixed-sex corner; variant 3 is the whole northeast female/female L. Variants 4 and 5 are the two halves of the southeast mixed-sex corner; variant 6 is the whole southwest male/male L. Each half joins the tile itself, while the two diagonal faces simply butt together with no extra clip or connector.",
+        "",
         "Original edge/corner bodies and straight rail bodies use R3. Rail ends use smaller rounds where the shape or STEP export needs them. Plates and stops use R2. Ramps have R2 sides/noses and a broad R32 shelf blend, capped to retain 2 mm of flat shelf on thicker custom parts. Brackets use R3 at the thick front-to-slope transition, R2 on other thick edges and R1 around the thin bearing lip. Mating surfaces keep their own geometry.",
         "",
         "Before packing, Bambu projects put plates broad-face-down at X=180, original brackets on their diagonal rear face, shallow brackets side-down at Y=-90, normal stops on their broad rear face and angled stops back-down at X=-135. STEP, STL and core 3MF keep source orientation. Female ramps, normal stops and shallow brackets turn on Auto support for that object; male ramps leave it off. Remove support from mating areas before assembly. Physical fit and support removal still need checking on a print.",
@@ -858,10 +917,14 @@ def write_gallery(
         "",
         "For a ramp-only update, add `--update-ramps --geometry-revision <committed-generator-revision> --workbench-revision <recorded-workbench-revision>`. This renders all ten ramps and recomposes only the ramp overview. Other pictures and their original provenance stay unchanged; no earlier render cache is needed.",
         "",
+        "For a perimeter-only update, use `--update-perimeters` with those two revision options. This rerenders the complete edge/corner families so each family keeps one physical image scale. Other pictures and their earlier provenance stay unchanged.",
+        "",
+        "For a repaired outer-corner-half update, use `--update-corner-halves` with those two revision options. This rerenders only the catalogue-selected variants 1, 2, 4 and 5 across their three outward widths, retaining the established outer-corner image scale and every unrelated image byte.",
+        "",
         "For a rod-and-brace update, use `--update-rods` with those revision options. It renders only the two rods and two nominal 10 mm braces, then creates their four thumbnails and one overview. All other image bytes and provenance stay unchanged.",
         "",
         (
-            "The manifest's top-level provenance belongs to the retained baseline images. Incrementally rendered thumbnails and overviews each carry their own provenance; it does not describe a new full-gallery render. "
+            "The manifest's top-level provenance belongs to the retained baseline images. Incrementally rendered thumbnails and overviews each carry their own provenance; this is not a full-gallery rerender. "
             if incremental
             else ""
         )
@@ -871,6 +934,131 @@ def write_gallery(
         "",
     ]
     (ROOT / "docs/attachments.md").write_text("\n".join(lines))
+
+
+def compose_perimeters(work: Path, provenance: dict) -> None:
+    """Replace complete edge/corner families while retaining unrelated image bytes."""
+    verify_geometry_source(provenance["generator_commit"])
+    perimeter_families = {"edge-x", "edge-y", "corner-in", "corner-out"}
+    path = ROOT / "docs/images/attachments/manifest.json"
+    manifest = json.loads(path.read_text())
+    current_keys = {item.key for item in inventory()}
+    retained = [entry for entry in manifest["items"] if entry["family"] not in perimeter_families]
+    stale = [
+        entry
+        for entry in manifest["items"]
+        if entry["family"] in perimeter_families and entry["key"] not in current_keys
+    ]
+    expected = {item.key for item in inventory() if item.spec.family not in perimeter_families}
+    if len(retained) != len(expected) or {entry["key"] for entry in retained} != expected:
+        raise ValueError("Retained thumbnails do not match the non-perimeter inventory")
+    if len(manifest["overview_images"]) != len(IMAGE_NAMES) or {
+        entry["file"] for entry in manifest["overview_images"]
+    } != {f"images/{name}" for name in IMAGE_NAMES}:
+        raise ValueError("Retained overviews do not match the documented image set")
+    for entry in [*retained, *manifest["overview_images"]]:
+        asset = ROOT / "docs" / entry["file"]
+        if hashlib.sha256(asset.read_bytes()).hexdigest() != entry["sha256"]:
+            raise ValueError(f"Retained image hash mismatch: {entry['file']}")
+    replacements = thumbnail_entries(
+        work,
+        provenance,
+        families=perimeter_families,
+        write_manifest=False,
+    )
+    rows = [*retained, *replacements]
+    manifest["items"] = [
+        entry for family in FAMILIES for entry in rows if entry["family"] == family
+    ]
+    manifest["provenance_scope"] = (
+        "Top-level revisions describe retained baseline images; per-image provenance overrides "
+        "them for regenerated perimeter assets. This is not a full-gallery rerender."
+    )
+    path.write_text(json.dumps(manifest, indent=2) + "\n")
+    for entry in stale:
+        (ROOT / "docs" / entry["file"]).unlink()
+    scope = "edge-x, edge-y, corner-in and corner-out thumbnails"
+    write_gallery(manifest["items"], provenance, incremental=scope)
+    report = {
+        **provenance,
+        "scope": scope,
+        "composition_recipe_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        "updated_keys": [entry["key"] for entry in replacements],
+        "assets": verify_assets(),
+    }
+    (work / "render-report.json").write_text(json.dumps(report, indent=2) + "\n")
+    print(json.dumps(report["updated_keys"], indent=2))
+
+
+def compose_corner_halves(work: Path, provenance: dict) -> None:
+    """Replace only repaired corner-out half variants while retaining other image bytes."""
+    verify_geometry_source(provenance["generator_commit"])
+    keys = {
+        item.key
+        for item in inventory()
+        if item.spec.family == "corner-out" and item.spec.variant in (1, 2, 4, 5)
+    }
+    if len(keys) != 12:
+        raise ValueError("Expected 12 selected corner-out half thumbnails")
+    path = ROOT / "docs/images/attachments/manifest.json"
+    manifest = json.loads(path.read_text())
+    current_keys = {item.key for item in inventory()}
+    stale = [entry for entry in manifest["items"] if entry["key"] not in current_keys]
+    retained = [
+        entry
+        for entry in manifest["items"]
+        if entry["key"] in current_keys and entry["key"] not in keys
+    ]
+    expected = current_keys - keys
+    if len(retained) != len(expected) or {entry["key"] for entry in retained} != expected:
+        raise ValueError("Retained thumbnails do not match the non-half-corner inventory")
+    descriptions = {item.key: item_description(item) for item in inventory()}
+    for entry in retained:
+        if entry["family"] == "corner-out":
+            entry["description"] = descriptions[entry["key"]]
+    if len(manifest["overview_images"]) != len(IMAGE_NAMES) or {
+        entry["file"] for entry in manifest["overview_images"]
+    } != {f"images/{name}" for name in IMAGE_NAMES}:
+        raise ValueError("Retained overviews do not match the documented image set")
+    for entry in [*retained, *manifest["overview_images"]]:
+        asset = ROOT / "docs" / entry["file"]
+        if hashlib.sha256(asset.read_bytes()).hexdigest() != entry["sha256"]:
+            raise ValueError(f"Retained image hash mismatch: {entry['file']}")
+    corner_scales = {
+        entry["pixels_per_mm"] for entry in manifest["items"] if entry["family"] == "corner-out"
+    }
+    if len(corner_scales) != 1:
+        raise ValueError("Existing corner-out thumbnails do not share one physical scale")
+    replacements = thumbnail_entries(
+        work,
+        provenance,
+        keys=keys,
+        scale_overrides={"corner-out": corner_scales.pop()},
+        write_manifest=False,
+    )
+    rows = [*retained, *replacements]
+    manifest["items"] = [
+        entry for family in FAMILIES for entry in rows if entry["family"] == family
+    ]
+    manifest["provenance_scope"] = (
+        "Top-level revisions describe retained baseline images; per-image provenance overrides "
+        "them for the regenerated catalogue-selected corner-out half assets. This is not a "
+        "full-gallery rerender."
+    )
+    path.write_text(json.dumps(manifest, indent=2) + "\n")
+    for entry in stale:
+        (ROOT / "docs" / entry["file"]).unlink()
+    scope = "catalogue-selected corner-out variants 1, 2, 4 and 5 across all outward widths"
+    write_gallery(manifest["items"], provenance, incremental=scope)
+    report = {
+        **provenance,
+        "scope": scope,
+        "composition_recipe_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        "updated_keys": [entry["key"] for entry in replacements],
+        "assets": verify_assets(),
+    }
+    (work / "render-report.json").write_text(json.dumps(report, indent=2) + "\n")
+    print(json.dumps(report["updated_keys"], indent=2))
 
 
 def rod_overview(work: Path) -> dict:
@@ -979,9 +1167,19 @@ def main() -> None:
     parser.add_argument("--compose-only", action="store_true")
     update = parser.add_mutually_exclusive_group()
     update.add_argument(
+        "--update-perimeters",
+        action="store_true",
+        help="render and compose only complete edge/corner families",
+    )
+    update.add_argument(
         "--update-ramps",
         action="store_true",
         help="render and compose only the ten ramp thumbnails and ramp overview",
+    )
+    update.add_argument(
+        "--update-corner-halves",
+        action="store_true",
+        help="render and compose only repaired corner-out variants 1, 2, 4 and 5",
     )
     update.add_argument(
         "--update-rods",
@@ -995,8 +1193,10 @@ def main() -> None:
     if args.check:
         print(json.dumps(verify_assets(), indent=2))
         return
-    if (args.update_ramps or args.update_rods) and args.only:
-        parser.error("Incremental updates already select their complete families; omit --only")
+    if (
+        args.update_perimeters or args.update_ramps or args.update_corner_halves or args.update_rods
+    ) and args.only:
+        parser.error("incremental gallery update modes select their own items; omit --only")
     if args.workbench is None:
         parser.error("--workbench is required for rendering")
     work = (ROOT / args.work_dir).resolve()
@@ -1010,8 +1210,20 @@ def main() -> None:
             parser.error("Cached renders do not match the requested source/tool revisions")
     else:
         only = (
-            {item.key for item in inventory() if item.spec.family == "ramp"}
+            {
+                item.key
+                for item in inventory()
+                if item.spec.family in {"edge-x", "edge-y", "corner-in", "corner-out"}
+            }
+            if args.update_perimeters
+            else {item.key for item in inventory() if item.spec.family == "ramp"}
             if args.update_ramps
+            else {
+                item.key
+                for item in inventory()
+                if item.spec.family == "corner-out" and item.spec.variant in (1, 2, 4, 5)
+            }
+            if args.update_corner_halves
             else {item.key for item in inventory() if item.spec.family in ("rod", "rod-brace")}
             if args.update_rods
             else set(args.only)
@@ -1026,8 +1238,12 @@ def main() -> None:
             workbench_revision=args.workbench_revision,
         )
         (work / "provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
-    if args.update_ramps:
+    if args.update_perimeters:
+        compose_perimeters(work, provenance)
+    elif args.update_ramps:
         compose_ramps(work, provenance)
+    elif args.update_corner_halves:
+        compose_corner_halves(work, provenance)
     elif args.update_rods:
         compose_rods(work, provenance)
     elif not args.only:

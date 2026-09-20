@@ -25,10 +25,15 @@ from cargo_grid.accessories import (
     required_bambu_print_rotation,
     required_bambu_print_rotation_y,
 )
+from cargo_grid.footprints import (
+    ProjectedFootprint,
+    placed_footprint,
+    projected_meshes_footprint,
+)
 from cargo_grid.jobs import Design, Job
 from cargo_grid.meshes import write_stl
 from cargo_grid.packing import PrintPlacement, pack_sizes
-from cargo_grid.parameters import Interface, count, positive
+from cargo_grid.parameters import DEFAULT_HOLE_DIAMETER_MM, Interface, count, positive
 from cargo_grid.prepared import Bounds, PreparedShape, rotated_points
 from cargo_grid.rods import ROD_FAMILIES, Rod, RodBrace, fit_evidence
 from cargo_grid.roof_support import RoofSupportSettings, roof_enforcers, validate_roof_job
@@ -292,10 +297,14 @@ def _explicit_placements(
     sizes: list[tuple[float, float, float]],
     build,
     gap: float,
+    projected_footprints: list[ProjectedFootprint | None] | None = None,
+    projected_clearances: dict[int, float] | None = None,
 ) -> list[PrintPlacement]:
     if len(placements) != len(sizes):
         raise ValueError("explicit print placements must match packed batches")
+    projected_clearances = projected_clearances or {}
     occupied = {}
+    projected = {}
     for index, (placement, size) in enumerate(zip(placements, sizes)):
         if placement.rotation not in (0, 90) or placement.plate < 0:
             raise ValueError("explicit placements require nonnegative plates and 0/90 rotations")
@@ -309,7 +318,28 @@ def _explicit_placements(
         ):
             raise ValueError(f"explicit placement {index} exceeds the build envelope")
         rectangles = occupied.setdefault(placement.plate, [])
-        if any(
+        if placement.plate in projected_clearances:
+            if projected_footprints is None or projected_footprints[index] is None:
+                raise ValueError(f"explicit placement {index} lacks its projected footprint")
+            geometry = placed_footprint(projected_footprints[index], placement)
+            minimum_x, minimum_y, maximum_x, maximum_y = geometry.bounds
+            if (
+                minimum_x < -1e-6
+                or minimum_y < -1e-6
+                or maximum_x > build.x + 1e-6
+                or maximum_y > build.y + 1e-6
+            ):
+                raise ValueError(
+                    f"explicit placement {index} projected footprint exceeds the build envelope"
+                )
+            clearance = projected_clearances[placement.plate]
+            plate_footprints = projected.setdefault(placement.plate, [])
+            if any(geometry.distance(other) < clearance - 1e-6 for other in plate_footprints):
+                raise ValueError(
+                    f"explicit placement {index} violates projected-footprint clearance"
+                )
+            plate_footprints.append(geometry)
+        elif any(
             placement.x < x + w + gap - 1e-6
             and placement.x + width + gap > x + 1e-6
             and placement.y < y + d + gap - 1e-6
@@ -379,18 +409,27 @@ class _PreparedProject:
             for _, volumes, _ in self.batches
         ]
         self.sizes = [bounds.size for bounds in self.bounds]
-        self.placements = (
-            _explicit_placements(
-                self.job.print_placements, self.sizes, self.job.build, self.job.part_gap
+        if self.job.print_placements is not None:
+            projected_footprints = (
+                self.actual_projected_footprints(self.job.print_placements)
+                if self.job.projected_footprint_clearances
+                else None
             )
-            if self.job.print_placements is not None
-            else pack_sizes(
+            self.placements = _explicit_placements(
+                self.job.print_placements,
+                self.sizes,
+                self.job.build,
+                self.job.part_gap,
+                projected_footprints,
+                self.job.projected_footprint_clearances,
+            )
+        else:
+            self.placements = pack_sizes(
                 self.sizes,
                 self.job.build,
                 gap=self.job.part_gap,
                 pack=self.job.kind == "catalogue",
             )
-        )
         self.plate_count = max(p.plate for p in self.placements) + 1
         if bambu and self.plate_count > 36:
             raise ValueError(
@@ -402,6 +441,21 @@ class _PreparedProject:
         if id(shape) not in self.geometries:
             self.geometries[id(shape)] = PreparedShape(shape)
         return self.geometries[id(shape)]
+
+    def actual_projected_footprints(
+        self,
+        placements: list[PrintPlacement],
+    ) -> list[ProjectedFootprint | None]:
+        result = []
+        nested_plates = set(self.job.projected_footprint_clearances)
+        for (_, volumes, _), placement in zip(self.batches, placements):
+            if placement.plate not in nested_plates:
+                result.append(None)
+                continue
+            result.append(
+                projected_meshes_footprint([self.mesh(volume.shape, 0) for volume in volumes])
+            )
+        return result
 
     def mesh(self, shape, packing_rotation: int):
         geometry, rx, ry = self.mesh_source(shape)
@@ -893,6 +947,19 @@ def export_job(
             )
             if family != "tile":
                 compatibility["geometry_warning"] = None
+            if family in ("edge-x", "edge-y", "corner-in", "corner-out"):
+                compatibility["edge_outward_mm"] = design.parameters.get("edge_outward", 10.0)
+                compatibility["complete_edge_holes"] = design.parameters.get(
+                    "complete_edge_holes", False
+                )
+                compatibility["edge_hole_diameter_mm"] = (
+                    design.parameters.get(
+                        "edge_hole_diameter",
+                        DEFAULT_HOLE_DIAMETER_MM,
+                    )
+                    if compatibility["complete_edge_holes"]
+                    else None
+                )
             if not compatibility["x_attachment_interface_present"]:
                 compatibility["original_x_attachment_dimensions"] = None
                 compatibility["attachment_seating_note"] = (

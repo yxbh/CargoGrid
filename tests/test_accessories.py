@@ -103,11 +103,11 @@ def test_inner_corner_directional_joins(variant, size, sexes):
 @pytest.mark.parametrize(
     "variant,size",
     [
-        (1, (16, 60 + 5 * 2**0.5)),
-        (2, (60 + 5 * 2**0.5, 10)),
+        (1, (16, 69.12132034355965)),
+        (2, (69.12132034355965, 10)),
         (3, (70, 70)),
-        (4, (10, 60 + 5 * 2**0.5)),
-        (5, (60 + 5 * 2**0.5, 16)),
+        (4, (10, 69.12132034355965)),
+        (5, (69.12132034355965, 16)),
         (6, (70, 70)),
     ],
 )
@@ -119,12 +119,12 @@ def test_outer_corner_miter_and_envelopes(variant, size):
 @pytest.mark.parametrize(
     "spec",
     [
-        Accessory("edge-x"),
-        Accessory("edge-y"),
-        *(Accessory("corner-in", variant=v) for v in range(1, 5)),
-        *(Accessory("corner-out", variant=v) for v in range(1, 7)),
-        Accessory("edge-x", interface=Interface(height=14)),
-        Accessory("edge-y", interface=Interface(height=14)),
+        Accessory("edge-x", complete_edge_holes=False),
+        Accessory("edge-y", complete_edge_holes=False),
+        *(Accessory("corner-in", variant=v, complete_edge_holes=False) for v in range(1, 5)),
+        *(Accessory("corner-out", variant=v, complete_edge_holes=False) for v in range(1, 7)),
+        Accessory("edge-x", interface=Interface(height=14), complete_edge_holes=False),
+        Accessory("edge-y", interface=Interface(height=14), complete_edge_holes=False),
     ],
     ids=lambda s: f"{s.family}-v{s.variant}-h{s.interface.height}",
 )
@@ -235,6 +235,10 @@ def test_custom_pitch_and_extended_rails():
         {"family": "support-end", "nx": 2},
         {"family": "edge-y", "ny": 2},
         {"family": "edge-x", "variant": 2},
+        {"family": "edge-x", "edge_outward": 15},
+        {"family": "edge-x", "complete_edge_holes": 1},
+        {"family": "plate", "edge_outward": 20},
+        {"family": "support", "complete_edge_holes": True},
         {"family": "support-bit", "length": 19},
         {"family": "support-bit", "length": float("nan")},
         {"family": "support-bit", "length": float("inf")},

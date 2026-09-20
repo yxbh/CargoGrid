@@ -7,6 +7,7 @@ from math import isfinite
 
 from build123d import Axis, Part
 
+from cargo_grid.footprints import ProjectedFootprint
 from cargo_grid.layout import Layout
 from cargo_grid.packing import PrintPlacement
 from cargo_grid.parameters import BuildVolume, Tile, count, positive
@@ -86,6 +87,8 @@ class Job:
     plate_names: dict[int, str] = field(default_factory=dict)
     plate_settings: dict[int, dict[str, str]] = field(default_factory=dict)
     placement_policy: dict = field(default_factory=dict)
+    projected_footprints: list[ProjectedFootprint | None] | None = None
+    projected_footprint_clearances: dict[int, float] = field(default_factory=dict)
 
     def __post_init__(self):
         if not self.designs:
@@ -93,6 +96,37 @@ class Job:
         positive("part gap", self.part_gap, zero=True)
         if self.print_placements is not None and len(self.print_placements) != len(self.designs):
             raise ValueError("explicit print placements must match the design count")
+        if self.projected_footprints is not None:
+            if self.print_placements is None:
+                raise ValueError("projected footprints require explicit print placements")
+            if len(self.projected_footprints) != len(self.designs):
+                raise ValueError("projected footprints must match the design count")
+            if any(
+                footprint is not None and not isinstance(footprint, ProjectedFootprint)
+                for footprint in self.projected_footprints
+            ):
+                raise ValueError("projected footprints must be ProjectedFootprint instances")
+        if self.projected_footprint_clearances and self.projected_footprints is None:
+            raise ValueError("projected footprint clearances require projected footprints")
+        placement_plates = (
+            {placement.plate for placement in self.print_placements}
+            if self.print_placements is not None
+            else set()
+        )
+        for plate, clearance in self.projected_footprint_clearances.items():
+            if not isinstance(plate, int) or plate < 0:
+                raise ValueError(
+                    "projected footprint clearance plates must be nonnegative integers"
+                )
+            if plate not in placement_plates:
+                raise ValueError("projected footprint clearance plate has no placed designs")
+            positive("projected footprint clearance", clearance)
+        if self.projected_footprints is not None:
+            for footprint, placement in zip(self.projected_footprints, self.print_placements):
+                if placement.plate in self.projected_footprint_clearances and footprint is None:
+                    raise ValueError(
+                        "projected footprint clearance plates require every design footprint"
+                    )
 
 
 def tile_design(tile: Tile) -> Design:

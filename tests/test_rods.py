@@ -445,7 +445,7 @@ def test_catalogue_uses_pose_for_fit_and_reports_omissions(monkeypatch):
     import cargo_grid.catalogue as catalogue
 
     monkeypatch.setattr(catalogue, "tile_sizes", lambda *args: [])
-    monkeypatch.setattr(catalogue, "accessory_variants", lambda *args: FOUR)
+    monkeypatch.setattr(catalogue, "accessory_variants", lambda *args, **kwargs: FOUR)
     build = BuildVolume(260, 45, 20)
     upright = catalogue_job(build)
     assert {d.parameters["family"] for d in upright.designs} == {"rod-brace"}

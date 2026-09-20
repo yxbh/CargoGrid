@@ -17,7 +17,12 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering",
 ]
-dependencies = ["build123d>=0.11,<0.12", "numpy>=2,<3", "scipy>=1.14,<2"]
+dependencies = [
+    "build123d>=0.11,<0.12",
+    "numpy>=2,<3",
+    "scipy>=1.14,<2",
+    "shapely>=2.1,<3",
+]
 
 [project.urls]
 Repository = "https://github.com/yxbh/CargoGrid"
