@@ -1,17 +1,18 @@
 """STEP primary exports and independently authored core/Bambu 3MF packaging."""
 
 import json
+from copy import deepcopy
 from dataclasses import asdict, dataclass
 from math import ceil, cos, radians, sin, sqrt
 from pathlib import Path
 from shutil import copyfileobj
 from tempfile import TemporaryFile
-from typing import BinaryIO
+from typing import BinaryIO, Callable
 from xml.etree import ElementTree as ET
 from xml.sax.saxutils import quoteattr
 from zipfile import ZIP_DEFLATED, ZipFile
 
-from build123d import Axis, Compound, PrecisionMode, export_step, import_step
+from build123d import PrecisionMode, export_step, import_step
 from OCP.BRepGProp import BRepGProp
 from OCP.GProp import GProp_GProps
 from OCP.Precision import Precision
@@ -24,10 +25,11 @@ from cargo_grid.accessories import (
     required_bambu_print_rotation,
     required_bambu_print_rotation_y,
 )
-from cargo_grid.jobs import Job
-from cargo_grid.meshes import checked_mesh, write_stl
+from cargo_grid.jobs import Design, Job
+from cargo_grid.meshes import write_stl
 from cargo_grid.packing import PrintPlacement, pack_sizes
 from cargo_grid.parameters import Interface, count, positive
+from cargo_grid.prepared import Bounds, PreparedShape, rotated_points
 from cargo_grid.roof_support import RoofSupportSettings, roof_enforcers, validate_roof_job
 from cargo_grid.stacking import StackSettings, Volume, stack_volumes
 
@@ -132,32 +134,45 @@ def _adaptive_volume(shape) -> float:
     return properties.Mass()
 
 
-def _checked_step_roundtrip(
-    shape,
-    path: Path,
-) -> tuple:
+@dataclass(frozen=True)
+class _StepSource:
+    bounds: Bounds
+    volume: float
+    adaptive_volume: float
+    volume_budget: float
+
+    @classmethod
+    def measure(cls, shape, bounds: Bounds | None = None) -> "_StepSource":
+        return cls(
+            bounds if bounds is not None else Bounds.measure(shape),
+            shape.volume,
+            _adaptive_volume(shape),
+            max(1e-6, shape.area * Precision.Confusion_s()),
+        )
+
+
+def _checked_step_roundtrip(shape, path: Path, *, _source: _StepSource | None = None) -> tuple:
     attempts = (
         ("average", PrecisionMode.AVERAGE),
         ("least", PrecisionMode.LEAST),
         ("greatest", PrecisionMode.GREATEST),
         ("session", PrecisionMode.SESSION),
     )
-    volume_budget = max(1e-6, shape.area * Precision.Confusion_s())
-    source_adaptive_volume = _adaptive_volume(shape)
-    source_bounds = shape.bounding_box()
+    source = _source if _source is not None else _StepSource.measure(shape)
+    volume_budget = source.volume_budget
     last = None
     failures = []
     for precision_mode, mode in attempts:
         if not export_step(shape, path, precision_mode=mode):
             raise ValueError(f"STEP export failed: {path}")
         restored = import_step(path)
-        default_volume_delta = abs(restored.volume - shape.volume)
-        adaptive_delta = abs(_adaptive_volume(restored) - source_adaptive_volume)
+        default_volume_delta = abs(restored.volume - source.volume)
+        adaptive_delta = abs(_adaptive_volume(restored) - source.adaptive_volume)
         restored_bounds = restored.bounding_box()
         bounds_delta = max(
             abs(a - b)
             for a, b in zip(
-                (*source_bounds.min, *source_bounds.max),
+                (*source.bounds.minimum, *source.bounds.maximum),
                 (*restored_bounds.min, *restored_bounds.max),
             )
         )
@@ -305,6 +320,110 @@ def _explicit_placements(
     return placements
 
 
+class _PreparedProject:
+    """Snapshot inputs once; plan actual CAD bounds before checking any mesh."""
+
+    def __init__(
+        self,
+        job: Job,
+        bambu: BambuSettings | None,
+        stack: StackSettings | None,
+        catalogue: bool = False,
+    ):
+        self.job = deepcopy(job)
+        self.geometries: dict[int, PreparedShape] = {}
+        self.mesh_sources: dict[int, tuple[PreparedShape, float, float]] = {}
+        self.project_geometry: dict[int, PreparedShape] = {}
+        self.batches: list[tuple[Design, list[Volume], int]] = []
+        for design in self.job.designs:
+            source = self.geometry(design.shape)
+            posed = design.bambu_shape if bambu else design.shape
+            oriented = bool(bambu and design.apply_orientation_to_bambu)
+            self.mesh_sources[id(posed)] = (
+                source,
+                (design.recommended_print_rotation_x or 0) if oriented else 0,
+                (design.recommended_print_rotation_y or 0) if oriented else 0,
+            )
+            # Keep the posed object alive even when a stack uses separate volumes.
+            self.project_geometry[id(design)] = self.geometry(posed)
+            remaining = 1 if catalogue else design.quantity
+            while remaining:
+                n = min(stack.count, remaining) if stack else 1
+                if stack:
+                    settings = StackSettings(
+                        n,
+                        stack.gap,
+                        stack.interface_thickness,
+                        stack.model_slot,
+                        stack.support_slot,
+                        stack.interface_slot,
+                    )
+                    volumes = stack_volumes(design, settings, self.job.build)
+                else:
+                    volumes = [Volume(design.display_name or design.name, posed, "model", 1)]
+                    if bambu and bambu.roof_support:
+                        volumes.extend(
+                            roof_enforcers(design, bambu.layer_height, bambu.roof_support.coverage)
+                        )
+                self.batches.append((design, volumes, n))
+                remaining -= n
+        self.last_mesh_use: dict[int, int] = {}
+        for index, (design, volumes, _) in enumerate(self.batches):
+            for geometry in self.batch_geometries(design, volumes):
+                self.last_mesh_use[id(geometry)] = index
+        self.bounds = [
+            Bounds.union(
+                [self.geometry(v.shape).bounds for v in volumes if v.subtype == "normal_part"]
+            )
+            for _, volumes, _ in self.batches
+        ]
+        self.sizes = [bounds.size for bounds in self.bounds]
+        self.placements = (
+            _explicit_placements(
+                self.job.print_placements, self.sizes, self.job.build, self.job.part_gap
+            )
+            if self.job.print_placements is not None
+            else pack_sizes(
+                self.sizes,
+                self.job.build,
+                gap=self.job.part_gap,
+                pack=self.job.kind == "catalogue",
+            )
+        )
+        self.plate_count = max(p.plate for p in self.placements) + 1
+        if bambu and self.plate_count > 36:
+            raise ValueError(
+                f"Bambu Studio supports at most 36 plates; packed job needs {self.plate_count}. "
+                "Use a larger envelope or export smaller separate jobs."
+            )
+
+    def geometry(self, shape) -> PreparedShape:
+        if id(shape) not in self.geometries:
+            self.geometries[id(shape)] = PreparedShape(shape)
+        return self.geometries[id(shape)]
+
+    def mesh(self, shape, packing_rotation: int):
+        geometry, rx, ry = self.mesh_source(shape)
+        points, faces, _ = geometry.mesh
+        return rotated_points(points, rx, ry, packing_rotation), faces
+
+    def mesh_source(self, shape) -> tuple[PreparedShape, float, float]:
+        if id(shape) in self.mesh_sources:
+            return self.mesh_sources[id(shape)]
+        return self.geometry(shape), 0, 0
+
+    def batch_geometries(self, design: Design, volumes: list[Volume]) -> list[PreparedShape]:
+        return [
+            self.geometry(design.shape),
+            *(self.mesh_source(volume.shape)[0] for volume in volumes),
+        ]
+
+    def release_batch_meshes(self, index: int, design: Design, volumes: list[Volume]) -> None:
+        for geometry in self.batch_geometries(design, volumes):
+            if self.last_mesh_use[id(geometry)] == index:
+                geometry.release_mesh()
+
+
 def write_3mf(
     job: Job,
     path: Path,
@@ -316,19 +435,20 @@ def write_3mf(
     _validate_request(job, bambu, stack)
     if path.exists():
         raise ValueError(f"output file already exists: {path}; choose a new path")
+    prepared = _PreparedProject(job, bambu, stack, catalogue)
     with TemporaryFile() as mesh_buffer:
-        return _write_3mf(job, path, mesh_buffer, bambu=bambu, stack=stack, catalogue=catalogue)
+        return _write_3mf(prepared, path, mesh_buffer, bambu=bambu)
 
 
 def _write_3mf(
-    job: Job,
+    prepared: _PreparedProject,
     path: Path,
     mesh_buffer: BinaryIO,
     *,
     bambu: BambuSettings | None,
-    stack: StackSettings | None,
-    catalogue: bool,
+    export_design: Callable[[Design], None] | None = None,
 ) -> dict:
+    job = prepared.job
     ET.register_namespace("", CORE)
     model = ET.Element(f"{{{CORE}}}model", unit="millimeter")
     # Bambu's importer selects its dialect using this marker. Attribution stays
@@ -354,80 +474,33 @@ def _write_3mf(
     config = ET.Element("config")
     plates = []
     next_id = 1
-    batches = []
-    project_shapes = {
-        id(design): design.bambu_shape if bambu else design.shape for design in job.designs
-    }
-    for design in job.designs:
-        remaining = 1 if catalogue else design.quantity
-        while remaining:
-            n = min(stack.count, remaining) if stack else 1
-            if stack:
-                settings = StackSettings(
-                    n,
-                    stack.gap,
-                    stack.interface_thickness,
-                    stack.model_slot,
-                    stack.support_slot,
-                    stack.interface_slot,
-                )
-                volumes = stack_volumes(design, settings, job.build)
-            else:
-                volumes = [
-                    Volume(
-                        design.display_name or design.name,
-                        project_shapes[id(design)],
-                        "model",
-                        1,
-                    )
-                ]
-                if bambu and bambu.roof_support:
-                    volumes.extend(
-                        roof_enforcers(design, bambu.layer_height, bambu.roof_support.coverage)
-                    )
-            batches.append((design, volumes, n))
-            remaining -= n
-    sizes = [
-        tuple(
-            Compound([v.shape for v in volumes if v.subtype == "normal_part"]).bounding_box().size
-        )
-        for _, volumes, _ in batches
-    ]
-    placements = (
-        _explicit_placements(job.print_placements, sizes, job.build, job.part_gap)
-        if job.print_placements is not None
-        else pack_sizes(sizes, job.build, gap=job.part_gap, pack=job.kind == "catalogue")
-    )
-    plate_count = max(p.plate for p in placements) + 1
-    if bambu and plate_count > 36:
-        raise ValueError(
-            f"Bambu Studio supports at most 36 plates; packed job needs {plate_count}. "
-            "Use a larger envelope or export smaller separate jobs."
-        )
+    batches, sizes, placements = prepared.batches, prepared.sizes, prepared.placements
+    plate_count = prepared.plate_count
     cols = ceil(sqrt(plate_count))
     mesh_cache = {}
     configured_plates = {}
     plate_records = {}
+    exported_designs = set()
     for batch_index, ((design, volumes, quantity), placement, size) in enumerate(
         zip(batches, placements, sizes)
     ):
+        if export_design is not None and id(design) not in exported_designs:
+            export_design(design)
+            exported_designs.add(id(design))
         plate_index = placement.plate
         px, py, rotation = placement.x, placement.y, placement.rotation
         origin = (
             plate_index % cols * job.build.x * 1.2,
             -(plate_index // cols) * job.build.y * 1.2,
         )
-        transformed = [v.shape.rotate(Axis.Z, rotation) for v in volumes]
-        rotated_bounds = Compound(
-            [s for v, s in zip(volumes, transformed) if v.subtype == "normal_part"]
-        ).bounding_box()
+        rotated_bounds = prepared.bounds[batch_index].rotated_z(rotation)
         translation = (
-            origin[0] + px - rotated_bounds.min.X,
-            origin[1] + py - rotated_bounds.min.Y,
-            -rotated_bounds.min.Z,
+            origin[0] + px - rotated_bounds.minimum[0],
+            origin[1] + py - rotated_bounds.minimum[1],
+            -rotated_bounds.minimum[2],
         )
         children = []
-        for volume, shape in zip(volumes, transformed):
+        for volume in volumes:
             # Reuse identical BREP objects within this export, while each build
             # item retains its own object identity and quantity.
             cache_key = (id(volume.shape), rotation)
@@ -436,7 +509,7 @@ def _write_3mf(
             else:
                 ident = next_id
                 next_id += 1
-                points, faces, mesh_report = checked_mesh(shape)
+                points, faces = prepared.mesh(volume.shape, rotation)
                 mesh_buffer.write(
                     f'<object id="{ident}" type="model" name={quoteattr(volume.name)}>'
                     "<mesh><vertices>".encode()
@@ -458,7 +531,9 @@ def _write_3mf(
                     )
                 mesh_buffer.write(b"</triangles></mesh></object>")
                 mesh_cache[cache_key] = ident
+                del points, faces
             children.append((ident, volume))
+        prepared.release_batch_meshes(batch_index, design, volumes)
         object_id = next_id
         next_id += 1
         label = f"{design.display_name or design.name}_batch_{batch_index + 1}"
@@ -761,39 +836,33 @@ def export_job(
     for design in job.designs:
         if not design.shape.is_valid or len(design.shape.solids()) != 1 or design.shape.volume <= 0:
             raise ValueError(f"{design.name} must be one valid positive-volume solid before export")
-    if bambu:
-        sizes = []
-        for design in job.designs:
-            count("design quantity", design.quantity)
-            remaining = design.quantity
-            while remaining:
-                n = min(remaining, stack.count) if stack else 1
-                width, depth, height = design.bambu_size
-                sizes.append((width, depth, n * height + (n - 1) * stack.gap if stack else height))
-                remaining -= n
-        preflight = (
-            _explicit_placements(job.print_placements, sizes, job.build, job.part_gap)
-            if job.print_placements is not None
-            else pack_sizes(sizes, job.build, gap=job.part_gap, pack=job.kind == "catalogue")
+    prepared = _PreparedProject(job, bambu, stack)
+    job = prepared.job
+    recommendations = {
+        id(design): (
+            prepared.project_geometry[id(design)].bounds
+            if bambu
+            else Bounds.measure(design.bambu_shape)
         )
-        plate_count = max(p.plate for p in preflight) + 1
-        if plate_count > 36:
-            raise ValueError(
-                f"Bambu Studio supports at most 36 plates; packed job needs {plate_count}. "
-                "Use a larger envelope or export smaller separate jobs."
-            )
+        for design in job.designs
+        if design.recommended_print_rotation_x is not None
+        or design.recommended_print_rotation_y is not None
+    }
     output.mkdir(parents=True, exist_ok=True)
     entries = []
-    for design in job.designs:
+
+    def export_design(design: Design) -> None:
         step = output / f"{design.name}.step"
+        geometry = prepared.geometry(design.shape)
+        source = _StepSource.measure(design.shape, geometry.bounds)
         (
             restored,
             step_precision_mode,
             volume_delta,
             volume_budget,
             bounds_delta,
-        ) = _checked_step_roundtrip(design.shape, step)
-        points, faces, mesh_report = checked_mesh(design.shape)
+        ) = _checked_step_roundtrip(design.shape, step, _source=source)
+        points, faces, mesh_report = geometry.mesh
         if stl:
             write_stl(output / f"{design.name}.stl", points, faces)
         interface_data = design.parameters.get("interface")
@@ -834,10 +903,10 @@ def export_job(
                 "display_name": design.display_name or design.name,
                 "parameters": design.parameters,
                 "quantity": design.quantity,
-                "size_mm": design.size,
+                "size_mm": geometry.bounds.size,
                 "assembly_frames": design.assembly_frames,
                 "hole_placements": design.holes,
-                "volume_mm3": _adaptive_volume(design.shape),
+                "volume_mm3": source.adaptive_volume,
                 "step_roundtrip": "passed",
                 "step_precision_mode": step_precision_mode,
                 "step_volume_method": "adaptive BRepGProp at 1e-12",
@@ -862,8 +931,7 @@ def export_job(
             design.recommended_print_rotation_x is not None
             or design.recommended_print_rotation_y is not None
         ):
-            oriented = design.bambu_shape
-            bounds = oriented.bounding_box()
+            bounds = recommendations[id(design)]
             rotations = []
             if design.recommended_print_rotation_x is not None:
                 rotations.append({"axis": "X", "degrees": design.recommended_print_rotation_x})
@@ -871,8 +939,8 @@ def export_job(
                 rotations.append({"axis": "Y", "degrees": design.recommended_print_rotation_y})
             recommendation = {
                 "rotations": rotations,
-                "translation_mm": tuple(-bounds.min),
-                "size_mm": tuple(bounds.size),
+                "translation_mm": tuple(-value for value in bounds.minimum),
+                "size_mm": bounds.size,
                 "applied_to_exports": {
                     "step": False,
                     "stl": False,
@@ -892,7 +960,15 @@ def export_job(
                 "applied_to_bambu_3mf": bool(bambu),
                 "note": "Normal Auto is scoped to this accessory object. It is separate from tile-roof support and still requires sliced-path and removal review.",
             }
-    project = write_3mf(job, output / "job.3mf", bambu=bambu, stack=stack)
+
+    with TemporaryFile() as mesh_buffer:
+        project = _write_3mf(
+            prepared,
+            output / "job.3mf",
+            mesh_buffer,
+            bambu=bambu,
+            export_design=export_design,
+        )
     manifest = {
         "schema_version": MANIFEST_SCHEMA_VERSION,
         "generator": {"name": "cargo-grid", "version": __version__},
