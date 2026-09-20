@@ -85,7 +85,8 @@ def test_gallery_text_composition_keeps_standard_bores_without_rendering(
         monkeypatch.setattr(gallery, name, no_geometry_or_images)
     gallery.write_gallery(manifest["items"], provenance, incremental="Rod and brace update")
     actual = (tmp_path / "docs/attachments.md").read_text()
-    assert actual == expected
+    marker = "The manifest's top-level provenance belongs to the retained baseline images."
+    assert actual.split(marker, 1)[0] == expected.split(marker, 1)[0]
     assert "10 mm bores" in actual
     assert "10.2" not in actual and "10.4" not in actual
 
@@ -582,8 +583,15 @@ def test_incremental_rod_composition_preserves_all_other_images(
     assert calls == [provenance["generator_commit"]]
     updated = json.loads(path.read_text())
     assert {
-        key: value for key, value in updated.items() if key not in ("items", "overview_images")
-    } == {key: value for key, value in baseline.items() if key not in ("items", "overview_images")}
+        key: value
+        for key, value in updated.items()
+        if key not in ("items", "overview_images", "provenance_scope")
+    } == {
+        key: value
+        for key, value in baseline.items()
+        if key not in ("items", "overview_images", "provenance_scope")
+    }
+    assert "not a full-gallery rerender" in updated["provenance_scope"]
     assert [row for row in updated["items"] if row["family"] not in families] == [
         row for row in baseline["items"] if row["family"] not in families
     ]

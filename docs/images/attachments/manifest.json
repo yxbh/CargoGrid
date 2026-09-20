@@ -1337,9 +1337,9 @@
       "source_step_sha256": "089888780a676c1da3419df03b290c05deacacd71c91bf5e53f6f839f4d7ba70"
     },
     {
-      "key": "edge-x-1",
+      "key": "edge-x-1-complete-holes",
       "family": "edge-x",
-      "public_name": "edge-x_1_original",
+      "public_name": "edge-x_1_complete-holes_original",
       "parameters": {
         "family": "edge-x",
         "nx": 1,
@@ -1353,30 +1353,127 @@
           "fit_offset": 0.0,
           "joint_style": "original"
         },
-        "panel_height_cells": null
+        "panel_height_cells": null,
+        "complete_edge_holes": true
       },
       "size_mm": [
-        60.0,
+        60.0000002,
         16.0,
         13.000000200005319
       ],
-      "file": "images/attachments/edge-x-1.png",
-      "alt": "edge-x, 1 cell, original joints: isometric STEP-derived render",
-      "description": "An R3 finishing strip with male tile-edge joints. Length follows the unit count.",
+      "file": "images/attachments/edge-x-1-complete-holes.png",
+      "alt": "edge-x, 1 cell / 10 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "An R3 finishing strip with male tile-edge joints. Length follows the unit count; catalogue hole completion matches the selected tile pattern at every outward width.",
       "dimensions": [
         480,
         300
       ],
-      "pixels_per_mm": 1.8903917998303652,
-      "bytes": 4988,
-      "sha256": "37618a27e4581ce22fc5ea034cb15d2249e44fd1b214e659711495087892506a",
-      "source_render_sha256": "0d21858950c94ac66c1e5704fc08ac38d5545e8b614862699b52dba517039d00",
-      "source_step_sha256": "162cd0a5a0c928df19e8c15f316035397cd1626631d2acc9637b9217d97b8b80"
+      "pixels_per_mm": 1.7778684773536357,
+      "bytes": 4777,
+      "sha256": "16963ae8a690d24103cbdbcb4c1e7c49de0a1282a81d8340a71b3e4cc234efc7",
+      "source_render_sha256": "2f150d20a3a1b37796d73df7f87de50591977347936a8bff00f9d14bb4354696",
+      "source_step_sha256": "d36af575511a46c63232e0badf18e9e67faa39619bcf8af7ffa1097532d1b81a",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
     },
     {
-      "key": "edge-x-2",
+      "key": "edge-x-1-out20-complete-holes",
       "family": "edge-x",
-      "public_name": "edge-x_2_original",
+      "public_name": "edge-x_1_out20mm_complete-holes_original",
+      "parameters": {
+        "family": "edge-x",
+        "nx": 1,
+        "ny": 1,
+        "variant": 1,
+        "length": 60,
+        "height": 50,
+        "interface": {
+          "pitch": 60.0,
+          "height": 13.0,
+          "fit_offset": 0.0,
+          "joint_style": "original"
+        },
+        "panel_height_cells": null,
+        "edge_outward": 20.0,
+        "complete_edge_holes": true
+      },
+      "size_mm": [
+        60.0000002,
+        26.0,
+        13.000000200005319
+      ],
+      "file": "images/attachments/edge-x-1-out20-complete-holes.png",
+      "alt": "edge-x, 1 cell / 20 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "An R3 finishing strip with male tile-edge joints. Length follows the unit count; catalogue hole completion matches the selected tile pattern at every outward width.",
+      "dimensions": [
+        480,
+        300
+      ],
+      "pixels_per_mm": 1.7778684773536357,
+      "bytes": 5500,
+      "sha256": "5a3be2d2e5ff8b804dc74c7b350543bf02de08b00f5d7c470b43aa074279d2fd",
+      "source_render_sha256": "e2b009028de26247813ef72cb3aecf3b20d7e59a5074acb96c465cf54c7c5c91",
+      "source_step_sha256": "29765ef4423944f4664a1cb0795078d84156595a7db6e342382c501c73f627b7",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
+    },
+    {
+      "key": "edge-x-1-out30-complete-holes",
+      "family": "edge-x",
+      "public_name": "edge-x_1_out30mm_complete-holes_original",
+      "parameters": {
+        "family": "edge-x",
+        "nx": 1,
+        "ny": 1,
+        "variant": 1,
+        "length": 60,
+        "height": 50,
+        "interface": {
+          "pitch": 60.0,
+          "height": 13.0,
+          "fit_offset": 0.0,
+          "joint_style": "original"
+        },
+        "panel_height_cells": null,
+        "edge_outward": 30.0,
+        "complete_edge_holes": true
+      },
+      "size_mm": [
+        60.0000002,
+        36.0,
+        13.000000200005319
+      ],
+      "file": "images/attachments/edge-x-1-out30-complete-holes.png",
+      "alt": "edge-x, 1 cell / 30 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "An R3 finishing strip with male tile-edge joints. Length follows the unit count; catalogue hole completion matches the selected tile pattern at every outward width.",
+      "dimensions": [
+        480,
+        300
+      ],
+      "pixels_per_mm": 1.7778684773536357,
+      "bytes": 6116,
+      "sha256": "10d4850b0750c3328e2c73085cd632a921f975200558f356cf60f1f22ad01b54",
+      "source_render_sha256": "537528a85bbbc8c0a04183860615e3ab6e0c220c02b9c94b50832e0b6ab74fc4",
+      "source_step_sha256": "f9106bb85e00ca89ea545b65860d611c665b80acc55e28dc94943ce4c5d601b7",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
+    },
+    {
+      "key": "edge-x-2-complete-holes",
+      "family": "edge-x",
+      "public_name": "edge-x_2_complete-holes_original",
       "parameters": {
         "family": "edge-x",
         "nx": 2,
@@ -1390,30 +1487,127 @@
           "fit_offset": 0.0,
           "joint_style": "original"
         },
-        "panel_height_cells": null
+        "panel_height_cells": null,
+        "complete_edge_holes": true
       },
       "size_mm": [
-        120.0,
+        120.0000002,
         16.0,
         13.000000200005319
       ],
-      "file": "images/attachments/edge-x-2.png",
-      "alt": "edge-x, 2 cells, original joints: isometric STEP-derived render",
-      "description": "An R3 finishing strip with male tile-edge joints. Length follows the unit count.",
+      "file": "images/attachments/edge-x-2-complete-holes.png",
+      "alt": "edge-x, 2 cells / 10 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "An R3 finishing strip with male tile-edge joints. Length follows the unit count; catalogue hole completion matches the selected tile pattern at every outward width.",
       "dimensions": [
         480,
         300
       ],
-      "pixels_per_mm": 1.8903917998303652,
-      "bytes": 8492,
-      "sha256": "783fbe8ce58c01b272961612d3616568c1137977c50bb3c952d4e85a700e555e",
-      "source_render_sha256": "535a196c5b3f95b5cd97382745ed1f38fcad70a5e8538924d46b957199e9aaf2",
-      "source_step_sha256": "43d3d697feeaba59ca4e7c7ea8e5d753a51d4ecc215571aa9155d5b1873363b3"
+      "pixels_per_mm": 1.7778684773536357,
+      "bytes": 8421,
+      "sha256": "f257b58d75f448a7a891a7a5fcb7c691aea6b2d8f52c59d8ebccdbccf647d0d5",
+      "source_render_sha256": "96edfa74dafbe9479367990562f48c41eac9f3449eadb61d91b2739684163c55",
+      "source_step_sha256": "c381c53702cd8896ee362cc92a29e1440e3c6a7daec454d5251979572ec94b77",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
     },
     {
-      "key": "edge-x-3",
+      "key": "edge-x-2-out20-complete-holes",
       "family": "edge-x",
-      "public_name": "edge-x_3_original",
+      "public_name": "edge-x_2_out20mm_complete-holes_original",
+      "parameters": {
+        "family": "edge-x",
+        "nx": 2,
+        "ny": 1,
+        "variant": 1,
+        "length": 60,
+        "height": 50,
+        "interface": {
+          "pitch": 60.0,
+          "height": 13.0,
+          "fit_offset": 0.0,
+          "joint_style": "original"
+        },
+        "panel_height_cells": null,
+        "edge_outward": 20.0,
+        "complete_edge_holes": true
+      },
+      "size_mm": [
+        120.00000019999999,
+        26.0,
+        13.000000200005319
+      ],
+      "file": "images/attachments/edge-x-2-out20-complete-holes.png",
+      "alt": "edge-x, 2 cells / 20 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "An R3 finishing strip with male tile-edge joints. Length follows the unit count; catalogue hole completion matches the selected tile pattern at every outward width.",
+      "dimensions": [
+        480,
+        300
+      ],
+      "pixels_per_mm": 1.7778684773536357,
+      "bytes": 9010,
+      "sha256": "e6177727f251fa753dd5c6a265af25f2661739e8c59dd70174a2783aaf7d0d65",
+      "source_render_sha256": "141b19613930b336ad10e0520344a9176770d96c7ae23faa0ceda893c8126345",
+      "source_step_sha256": "dd9731871c2eef0a879fb9c25f921d8cecba104fd1fad8649a1268e453547932",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
+    },
+    {
+      "key": "edge-x-2-out30-complete-holes",
+      "family": "edge-x",
+      "public_name": "edge-x_2_out30mm_complete-holes_original",
+      "parameters": {
+        "family": "edge-x",
+        "nx": 2,
+        "ny": 1,
+        "variant": 1,
+        "length": 60,
+        "height": 50,
+        "interface": {
+          "pitch": 60.0,
+          "height": 13.0,
+          "fit_offset": 0.0,
+          "joint_style": "original"
+        },
+        "panel_height_cells": null,
+        "edge_outward": 30.0,
+        "complete_edge_holes": true
+      },
+      "size_mm": [
+        120.00000019999999,
+        36.0,
+        13.000000200005319
+      ],
+      "file": "images/attachments/edge-x-2-out30-complete-holes.png",
+      "alt": "edge-x, 2 cells / 30 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "An R3 finishing strip with male tile-edge joints. Length follows the unit count; catalogue hole completion matches the selected tile pattern at every outward width.",
+      "dimensions": [
+        480,
+        300
+      ],
+      "pixels_per_mm": 1.7778684773536357,
+      "bytes": 9691,
+      "sha256": "8438fc65a822ce72a6a6c3ea3df459bf4e1c563fc874d81460e203b689af82f0",
+      "source_render_sha256": "b7cc05b01663e4d37f9910b7b45688a9431f6e51e94b2935abc9c61eb771dfe1",
+      "source_step_sha256": "7ac8814ab34cbce2136f5eef81318cb6c60b85e1eca5a390545fa09e3b98028b",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
+    },
+    {
+      "key": "edge-x-3-complete-holes",
+      "family": "edge-x",
+      "public_name": "edge-x_3_complete-holes_original",
       "parameters": {
         "family": "edge-x",
         "nx": 3,
@@ -1427,30 +1621,127 @@
           "fit_offset": 0.0,
           "joint_style": "original"
         },
-        "panel_height_cells": null
+        "panel_height_cells": null,
+        "complete_edge_holes": true
       },
       "size_mm": [
-        180.0,
+        180.0000002,
         16.0,
         13.000000200005319
       ],
-      "file": "images/attachments/edge-x-3.png",
-      "alt": "edge-x, 3 cells, original joints: isometric STEP-derived render",
-      "description": "An R3 finishing strip with male tile-edge joints. Length follows the unit count.",
+      "file": "images/attachments/edge-x-3-complete-holes.png",
+      "alt": "edge-x, 3 cells / 10 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "An R3 finishing strip with male tile-edge joints. Length follows the unit count; catalogue hole completion matches the selected tile pattern at every outward width.",
       "dimensions": [
         480,
         300
       ],
-      "pixels_per_mm": 1.8903917998303652,
-      "bytes": 11908,
-      "sha256": "419e68b712b32644c032dbd240563ed7ffcd446530660dfd911446650866d702",
-      "source_render_sha256": "7ebc8d1fb2d098722d90013935458813208fb6e69f0678956f47529f99365dbb",
-      "source_step_sha256": "403e9985d0497ad0082f742fb706a93c84589e7e95b2ccbc7935015331cf75af"
+      "pixels_per_mm": 1.7778684773536357,
+      "bytes": 11899,
+      "sha256": "0895669d6fa9741a143815e39a6e18e14accec6c788f0fdfc16a213e547a5143",
+      "source_render_sha256": "938d0b32c0f231214f025f8477be83ca95e0efcfefed53363dee3a54e8cd86b4",
+      "source_step_sha256": "db2ce00bef06014ddea36ab8781eb734acc922571a511aadd374f927e6548f7b",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
     },
     {
-      "key": "edge-x-4",
+      "key": "edge-x-3-out20-complete-holes",
       "family": "edge-x",
-      "public_name": "edge-x_4_original",
+      "public_name": "edge-x_3_out20mm_complete-holes_original",
+      "parameters": {
+        "family": "edge-x",
+        "nx": 3,
+        "ny": 1,
+        "variant": 1,
+        "length": 60,
+        "height": 50,
+        "interface": {
+          "pitch": 60.0,
+          "height": 13.0,
+          "fit_offset": 0.0,
+          "joint_style": "original"
+        },
+        "panel_height_cells": null,
+        "edge_outward": 20.0,
+        "complete_edge_holes": true
+      },
+      "size_mm": [
+        180.0000002,
+        26.0,
+        13.000000200005319
+      ],
+      "file": "images/attachments/edge-x-3-out20-complete-holes.png",
+      "alt": "edge-x, 3 cells / 20 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "An R3 finishing strip with male tile-edge joints. Length follows the unit count; catalogue hole completion matches the selected tile pattern at every outward width.",
+      "dimensions": [
+        480,
+        300
+      ],
+      "pixels_per_mm": 1.7778684773536357,
+      "bytes": 12653,
+      "sha256": "0748812c48fcc9205a541750a22f279edd7bda4ffcdfe1547776626bb3ac391d",
+      "source_render_sha256": "25e696538542f494e74d04bf4d2607cbb393f0be3f50ce459e1d6f7b502907c2",
+      "source_step_sha256": "ffd6768035b75bfeb59b5abe0c6004d35fbcbf9025b4be3ca604aedb838b6fc3",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
+    },
+    {
+      "key": "edge-x-3-out30-complete-holes",
+      "family": "edge-x",
+      "public_name": "edge-x_3_out30mm_complete-holes_original",
+      "parameters": {
+        "family": "edge-x",
+        "nx": 3,
+        "ny": 1,
+        "variant": 1,
+        "length": 60,
+        "height": 50,
+        "interface": {
+          "pitch": 60.0,
+          "height": 13.0,
+          "fit_offset": 0.0,
+          "joint_style": "original"
+        },
+        "panel_height_cells": null,
+        "edge_outward": 30.0,
+        "complete_edge_holes": true
+      },
+      "size_mm": [
+        180.0000002,
+        36.0,
+        13.000000200005319
+      ],
+      "file": "images/attachments/edge-x-3-out30-complete-holes.png",
+      "alt": "edge-x, 3 cells / 30 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "An R3 finishing strip with male tile-edge joints. Length follows the unit count; catalogue hole completion matches the selected tile pattern at every outward width.",
+      "dimensions": [
+        480,
+        300
+      ],
+      "pixels_per_mm": 1.7778684773536357,
+      "bytes": 13080,
+      "sha256": "cd8c4ef39f044e5ad478533ffab6e11df033063185b19eff1696a05fa05627b9",
+      "source_render_sha256": "25ac4a473ace796ed865e9bd193b55f388b9c2924fc29949ac46385196f557ef",
+      "source_step_sha256": "4cc1f869b83397cb887e03ea0de30649b0671dbc8969d5dce75c296e4c5ae083",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
+    },
+    {
+      "key": "edge-x-4-complete-holes",
+      "family": "edge-x",
+      "public_name": "edge-x_4_complete-holes_original",
       "parameters": {
         "family": "edge-x",
         "nx": 4,
@@ -1464,30 +1755,127 @@
           "fit_offset": 0.0,
           "joint_style": "original"
         },
-        "panel_height_cells": null
+        "panel_height_cells": null,
+        "complete_edge_holes": true
       },
       "size_mm": [
-        240.0,
+        240.0000002,
         16.0,
         13.000000200005319
       ],
-      "file": "images/attachments/edge-x-4.png",
-      "alt": "edge-x, 4 cells, original joints: isometric STEP-derived render",
-      "description": "An R3 finishing strip with male tile-edge joints. Length follows the unit count.",
+      "file": "images/attachments/edge-x-4-complete-holes.png",
+      "alt": "edge-x, 4 cells / 10 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "An R3 finishing strip with male tile-edge joints. Length follows the unit count; catalogue hole completion matches the selected tile pattern at every outward width.",
       "dimensions": [
         480,
         300
       ],
-      "pixels_per_mm": 1.8903917998303652,
-      "bytes": 15449,
-      "sha256": "39cebd5ae5126b05bb725983827b04ed5b1c98147f9a95775afd676a093395c2",
-      "source_render_sha256": "1913719ea05917ae39719b0423e9940e293dc68bcae0bcb27d2c6f7d86c95493",
-      "source_step_sha256": "57714ebadfc698abb346b887d5f40eb5ac19474c8f3da83d27f6bb0f85eff1a9"
+      "pixels_per_mm": 1.7778684773536357,
+      "bytes": 15405,
+      "sha256": "9d194c566e0569c98166979c15d16135d903ae0fa2ebbc4d87330ce2683813e9",
+      "source_render_sha256": "e4eaaa1125bf41f2e959c27b905b210876bdfda10a490c3459bc33c33152d21e",
+      "source_step_sha256": "4d7d7ef899eb0659f15f8f6ee269d3a7c1a40d328f730235ac06f552ff167e28",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
     },
     {
-      "key": "edge-x-5",
+      "key": "edge-x-4-out20-complete-holes",
       "family": "edge-x",
-      "public_name": "edge-x_5_original",
+      "public_name": "edge-x_4_out20mm_complete-holes_original",
+      "parameters": {
+        "family": "edge-x",
+        "nx": 4,
+        "ny": 1,
+        "variant": 1,
+        "length": 60,
+        "height": 50,
+        "interface": {
+          "pitch": 60.0,
+          "height": 13.0,
+          "fit_offset": 0.0,
+          "joint_style": "original"
+        },
+        "panel_height_cells": null,
+        "edge_outward": 20.0,
+        "complete_edge_holes": true
+      },
+      "size_mm": [
+        240.0000002,
+        26.0,
+        13.000000200005319
+      ],
+      "file": "images/attachments/edge-x-4-out20-complete-holes.png",
+      "alt": "edge-x, 4 cells / 20 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "An R3 finishing strip with male tile-edge joints. Length follows the unit count; catalogue hole completion matches the selected tile pattern at every outward width.",
+      "dimensions": [
+        480,
+        300
+      ],
+      "pixels_per_mm": 1.7778684773536357,
+      "bytes": 16326,
+      "sha256": "e2b127bbba1dc3674f471078f94d0589bc791dc628eeff4efd9728e25cfe175a",
+      "source_render_sha256": "1a761f46ae328d43c885bdb5ff0012f38cfbe8308fe17a1685f37a09e323ffb2",
+      "source_step_sha256": "db44292972b5eaf26f8937a6f67b474dabe6b11986592e6e87579fdaa46bf441",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
+    },
+    {
+      "key": "edge-x-4-out30-complete-holes",
+      "family": "edge-x",
+      "public_name": "edge-x_4_out30mm_complete-holes_original",
+      "parameters": {
+        "family": "edge-x",
+        "nx": 4,
+        "ny": 1,
+        "variant": 1,
+        "length": 60,
+        "height": 50,
+        "interface": {
+          "pitch": 60.0,
+          "height": 13.0,
+          "fit_offset": 0.0,
+          "joint_style": "original"
+        },
+        "panel_height_cells": null,
+        "edge_outward": 30.0,
+        "complete_edge_holes": true
+      },
+      "size_mm": [
+        240.0000002,
+        36.0,
+        13.000000200005319
+      ],
+      "file": "images/attachments/edge-x-4-out30-complete-holes.png",
+      "alt": "edge-x, 4 cells / 30 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "An R3 finishing strip with male tile-edge joints. Length follows the unit count; catalogue hole completion matches the selected tile pattern at every outward width.",
+      "dimensions": [
+        480,
+        300
+      ],
+      "pixels_per_mm": 1.7778684773536357,
+      "bytes": 16875,
+      "sha256": "fd073e8c40898a7ed5633e60f09476f338c92b6dd82802dc3cc65be0eb55519b",
+      "source_render_sha256": "cc6c4b6676cb0aabad4b388827018611097ea4b16ecfa8fe37a03e17aaf08880",
+      "source_step_sha256": "f02dafe5f996b532804645b93d8347568d65662897091c406e162c7cc052ba5b",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
+    },
+    {
+      "key": "edge-x-5-complete-holes",
+      "family": "edge-x",
+      "public_name": "edge-x_5_complete-holes_original",
       "parameters": {
         "family": "edge-x",
         "nx": 5,
@@ -1501,30 +1889,127 @@
           "fit_offset": 0.0,
           "joint_style": "original"
         },
-        "panel_height_cells": null
+        "panel_height_cells": null,
+        "complete_edge_holes": true
       },
       "size_mm": [
-        300.0,
+        300.00000020000004,
         16.0,
         13.000000200005319
       ],
-      "file": "images/attachments/edge-x-5.png",
-      "alt": "edge-x, 5 cells, original joints: isometric STEP-derived render",
-      "description": "An R3 finishing strip with male tile-edge joints. Length follows the unit count.",
+      "file": "images/attachments/edge-x-5-complete-holes.png",
+      "alt": "edge-x, 5 cells / 10 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "An R3 finishing strip with male tile-edge joints. Length follows the unit count; catalogue hole completion matches the selected tile pattern at every outward width.",
       "dimensions": [
         480,
         300
       ],
-      "pixels_per_mm": 1.8903917998303652,
-      "bytes": 19948,
-      "sha256": "67aeb685853a379061b1d0185faf29fb3eb5867a8b1319440d4e32f9ca3d6f64",
-      "source_render_sha256": "3336df129f4550b991ed2cada230f7c54e9a1fce2dc071725cb1a9c39330dc74",
-      "source_step_sha256": "d0f59b839cd2ee21b2bab6a284a5ff5c3dc8749a08451ec95d55709148149dae"
+      "pixels_per_mm": 1.7778684773536357,
+      "bytes": 19643,
+      "sha256": "ed2a499d108a83fcce9f46968fdc59b9e1ec4afde0b4b35d024293a9482a3ea2",
+      "source_render_sha256": "a130905d812f1abe903e60d7470828f5c89cb8c8d4e4e97c9fcc9366c282b4c1",
+      "source_step_sha256": "1f5146cc2e8eb6f35907f9801f377df7a7a49269702649c857d98cecb4085a37",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
     },
     {
-      "key": "edge-y-1",
+      "key": "edge-x-5-out20-complete-holes",
+      "family": "edge-x",
+      "public_name": "edge-x_5_out20mm_complete-holes_original",
+      "parameters": {
+        "family": "edge-x",
+        "nx": 5,
+        "ny": 1,
+        "variant": 1,
+        "length": 60,
+        "height": 50,
+        "interface": {
+          "pitch": 60.0,
+          "height": 13.0,
+          "fit_offset": 0.0,
+          "joint_style": "original"
+        },
+        "panel_height_cells": null,
+        "edge_outward": 20.0,
+        "complete_edge_holes": true
+      },
+      "size_mm": [
+        300.00000020000004,
+        26.0,
+        13.000000200005319
+      ],
+      "file": "images/attachments/edge-x-5-out20-complete-holes.png",
+      "alt": "edge-x, 5 cells / 20 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "An R3 finishing strip with male tile-edge joints. Length follows the unit count; catalogue hole completion matches the selected tile pattern at every outward width.",
+      "dimensions": [
+        480,
+        300
+      ],
+      "pixels_per_mm": 1.7778684773536357,
+      "bytes": 20434,
+      "sha256": "86f5f51cc30ebaf970db4f5857794928891e384f8df69323d174431074615be0",
+      "source_render_sha256": "1817f8b19e1cacee5901e8efc32e7990dbca06a40cd17be965fa0b456cf6f0d3",
+      "source_step_sha256": "ef03d6331b7d1b88d242998afa53147ecab7182c707bdc29231ae38435c092dc",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
+    },
+    {
+      "key": "edge-x-5-out30-complete-holes",
+      "family": "edge-x",
+      "public_name": "edge-x_5_out30mm_complete-holes_original",
+      "parameters": {
+        "family": "edge-x",
+        "nx": 5,
+        "ny": 1,
+        "variant": 1,
+        "length": 60,
+        "height": 50,
+        "interface": {
+          "pitch": 60.0,
+          "height": 13.0,
+          "fit_offset": 0.0,
+          "joint_style": "original"
+        },
+        "panel_height_cells": null,
+        "edge_outward": 30.0,
+        "complete_edge_holes": true
+      },
+      "size_mm": [
+        300.00000020000004,
+        36.0,
+        13.000000200005319
+      ],
+      "file": "images/attachments/edge-x-5-out30-complete-holes.png",
+      "alt": "edge-x, 5 cells / 30 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "An R3 finishing strip with male tile-edge joints. Length follows the unit count; catalogue hole completion matches the selected tile pattern at every outward width.",
+      "dimensions": [
+        480,
+        300
+      ],
+      "pixels_per_mm": 1.7778684773536357,
+      "bytes": 21391,
+      "sha256": "c9d505cf3a1ae04b9998c0f2148fa79f98892f85dceb28de7699781b41dbb791",
+      "source_render_sha256": "2988a9901bd45b212583c4059de5ee35dcce8c0c77e134f961f7e7239b929b28",
+      "source_step_sha256": "93b2c4f77728c0f7cf4b7d379a2d6ea6fd47eed53de557c36c10e036479318c0",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
+    },
+    {
+      "key": "edge-y-1-complete-holes",
       "family": "edge-y",
-      "public_name": "edge-y_1_original",
+      "public_name": "edge-y_1_complete-holes_original",
       "parameters": {
         "family": "edge-y",
         "nx": 1,
@@ -1538,30 +2023,127 @@
           "fit_offset": 0.0,
           "joint_style": "original"
         },
-        "panel_height_cells": null
+        "panel_height_cells": null,
+        "complete_edge_holes": true
       },
       "size_mm": [
-        60.0,
+        60.0000002,
         10.000000100000001,
         13.0000002
       ],
-      "file": "images/attachments/edge-y-1.png",
-      "alt": "edge-y, 1 cell, original joints: isometric STEP-derived render",
-      "description": "An R3 finishing strip with female tile-edge joints. Length follows the unit count.",
+      "file": "images/attachments/edge-y-1-complete-holes.png",
+      "alt": "edge-y, 1 cell / 10 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "An R3 finishing strip with female tile-edge joints. Length follows the unit count; catalogue hole completion matches the selected tile pattern at every outward width.",
       "dimensions": [
         480,
         300
       ],
-      "pixels_per_mm": 1.9269800275925724,
-      "bytes": 4339,
-      "sha256": "e577a36e134f1964cca98ca89bd76de0b962ec86448629fb73fac58523c84273",
-      "source_render_sha256": "3f1113fc693b651a828161646e625d3d867869896e323ab112ffaba833015787",
-      "source_step_sha256": "db36e80154586215915cf4d3328a1cb21d2daebc201aba017d557b6866c5c124"
+      "pixels_per_mm": 1.8101933581919312,
+      "bytes": 3991,
+      "sha256": "0550616fe3dbb1370b213d2ea1863cc7d8ed95cc0baa515abbd9389a30c91b02",
+      "source_render_sha256": "7dc3b4c4ee7b0616f328c9f939342f0f6c5bdeb421c0d77b27fed52733e64f60",
+      "source_step_sha256": "c6ec8f846242cd414687e71c217e51813f455b60ab80507b7cc6d062e17b1d02",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
     },
     {
-      "key": "edge-y-2",
+      "key": "edge-y-1-out20-complete-holes",
       "family": "edge-y",
-      "public_name": "edge-y_2_original",
+      "public_name": "edge-y_1_out20mm_complete-holes_original",
+      "parameters": {
+        "family": "edge-y",
+        "nx": 1,
+        "ny": 1,
+        "variant": 1,
+        "length": 60,
+        "height": 50,
+        "interface": {
+          "pitch": 60.0,
+          "height": 13.0,
+          "fit_offset": 0.0,
+          "joint_style": "original"
+        },
+        "panel_height_cells": null,
+        "edge_outward": 20.0,
+        "complete_edge_holes": true
+      },
+      "size_mm": [
+        60.0000002,
+        20.0000001,
+        13.0000002
+      ],
+      "file": "images/attachments/edge-y-1-out20-complete-holes.png",
+      "alt": "edge-y, 1 cell / 20 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "An R3 finishing strip with female tile-edge joints. Length follows the unit count; catalogue hole completion matches the selected tile pattern at every outward width.",
+      "dimensions": [
+        480,
+        300
+      ],
+      "pixels_per_mm": 1.8101933581919312,
+      "bytes": 4642,
+      "sha256": "2b749f8f427023414f27ad451ad1861fcd8f93d14d6620b3198b6ee9ce2d0c69",
+      "source_render_sha256": "b8793d8a62a41d4a09dd87d25cfb10b8c0e5f142ce0476f65249f65332059723",
+      "source_step_sha256": "052c9d8afd6723f667ef47a41dea9e9f97636ec6b39da74d494d92a9abfc495a",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
+    },
+    {
+      "key": "edge-y-1-out30-complete-holes",
+      "family": "edge-y",
+      "public_name": "edge-y_1_out30mm_complete-holes_original",
+      "parameters": {
+        "family": "edge-y",
+        "nx": 1,
+        "ny": 1,
+        "variant": 1,
+        "length": 60,
+        "height": 50,
+        "interface": {
+          "pitch": 60.0,
+          "height": 13.0,
+          "fit_offset": 0.0,
+          "joint_style": "original"
+        },
+        "panel_height_cells": null,
+        "edge_outward": 30.0,
+        "complete_edge_holes": true
+      },
+      "size_mm": [
+        60.0000002,
+        30.0000001,
+        13.0000002
+      ],
+      "file": "images/attachments/edge-y-1-out30-complete-holes.png",
+      "alt": "edge-y, 1 cell / 30 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "An R3 finishing strip with female tile-edge joints. Length follows the unit count; catalogue hole completion matches the selected tile pattern at every outward width.",
+      "dimensions": [
+        480,
+        300
+      ],
+      "pixels_per_mm": 1.8101933581919312,
+      "bytes": 5271,
+      "sha256": "56a2995955941b443f8af4de522cbf046e36046a87f1721b77a10669483aef38",
+      "source_render_sha256": "b01f164e520f68d652a11adb5250a3b497ffdd68580e9ca0c1b28647aca68cdb",
+      "source_step_sha256": "a54b610833615f71cca8313b2cf16cd5f4c80d0a7b238af8ac20c47866409254",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
+    },
+    {
+      "key": "edge-y-2-complete-holes",
+      "family": "edge-y",
+      "public_name": "edge-y_2_complete-holes_original",
       "parameters": {
         "family": "edge-y",
         "nx": 2,
@@ -1575,30 +2157,127 @@
           "fit_offset": 0.0,
           "joint_style": "original"
         },
-        "panel_height_cells": null
+        "panel_height_cells": null,
+        "complete_edge_holes": true
       },
       "size_mm": [
-        120.0,
+        120.00000019999999,
         10.000000100000001,
         13.0000002
       ],
-      "file": "images/attachments/edge-y-2.png",
-      "alt": "edge-y, 2 cells, original joints: isometric STEP-derived render",
-      "description": "An R3 finishing strip with female tile-edge joints. Length follows the unit count.",
+      "file": "images/attachments/edge-y-2-complete-holes.png",
+      "alt": "edge-y, 2 cells / 10 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "An R3 finishing strip with female tile-edge joints. Length follows the unit count; catalogue hole completion matches the selected tile pattern at every outward width.",
       "dimensions": [
         480,
         300
       ],
-      "pixels_per_mm": 1.9269800275925724,
-      "bytes": 6729,
-      "sha256": "30d12848be99f9b6dabd5915b02d7a8ed5079f322ef2986134ce057e266b9fa0",
-      "source_render_sha256": "6408588e791a782d1e45d10cf7f27bd3e60a04e4c869560b48eec074fc0d6a33",
-      "source_step_sha256": "fef282832f30d459b0d9e4ea1e27ac30808960e3b080e9a7dbf8a61772943dfa"
+      "pixels_per_mm": 1.8101933581919312,
+      "bytes": 6482,
+      "sha256": "500aae88740ae7a979e1b55c21b1c1d4463d8070638af24b5811db2b617d4586",
+      "source_render_sha256": "996796c980804ee3d86901645f62d9c8e3ccda1242767a3a200a4571fb1cac43",
+      "source_step_sha256": "cfc486390c0f29c41af8e605c69c62aa02a0ce684c5c35f04c45e5da62d9e755",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
     },
     {
-      "key": "edge-y-3",
+      "key": "edge-y-2-out20-complete-holes",
       "family": "edge-y",
-      "public_name": "edge-y_3_original",
+      "public_name": "edge-y_2_out20mm_complete-holes_original",
+      "parameters": {
+        "family": "edge-y",
+        "nx": 2,
+        "ny": 1,
+        "variant": 1,
+        "length": 60,
+        "height": 50,
+        "interface": {
+          "pitch": 60.0,
+          "height": 13.0,
+          "fit_offset": 0.0,
+          "joint_style": "original"
+        },
+        "panel_height_cells": null,
+        "edge_outward": 20.0,
+        "complete_edge_holes": true
+      },
+      "size_mm": [
+        120.00000019999999,
+        20.0000001,
+        13.0000002
+      ],
+      "file": "images/attachments/edge-y-2-out20-complete-holes.png",
+      "alt": "edge-y, 2 cells / 20 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "An R3 finishing strip with female tile-edge joints. Length follows the unit count; catalogue hole completion matches the selected tile pattern at every outward width.",
+      "dimensions": [
+        480,
+        300
+      ],
+      "pixels_per_mm": 1.8101933581919312,
+      "bytes": 7116,
+      "sha256": "37af9837ea6e71b52c943c10174d7ed067bd3353cd0f01d2616e6db9b11b8584",
+      "source_render_sha256": "c20175a6d9276f46ad9c3bfe0c900dc92c6da0945236eea5d765a2c8329c0ab3",
+      "source_step_sha256": "5bfde1b0e719722eaf729f6c83645226d556849f7b14d38fc58ed4f02a82cfa9",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
+    },
+    {
+      "key": "edge-y-2-out30-complete-holes",
+      "family": "edge-y",
+      "public_name": "edge-y_2_out30mm_complete-holes_original",
+      "parameters": {
+        "family": "edge-y",
+        "nx": 2,
+        "ny": 1,
+        "variant": 1,
+        "length": 60,
+        "height": 50,
+        "interface": {
+          "pitch": 60.0,
+          "height": 13.0,
+          "fit_offset": 0.0,
+          "joint_style": "original"
+        },
+        "panel_height_cells": null,
+        "edge_outward": 30.0,
+        "complete_edge_holes": true
+      },
+      "size_mm": [
+        120.00000019999999,
+        30.0000001,
+        13.0000002
+      ],
+      "file": "images/attachments/edge-y-2-out30-complete-holes.png",
+      "alt": "edge-y, 2 cells / 30 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "An R3 finishing strip with female tile-edge joints. Length follows the unit count; catalogue hole completion matches the selected tile pattern at every outward width.",
+      "dimensions": [
+        480,
+        300
+      ],
+      "pixels_per_mm": 1.8101933581919312,
+      "bytes": 7779,
+      "sha256": "412768dd25603a5872f1ccd45c72988d479db851f32ace06e3195d9f14073445",
+      "source_render_sha256": "5017adcc66fcb89d714db1c857b76b5b14c691c4c128a78299194fb97d31275d",
+      "source_step_sha256": "38793a8d03de656e1bc2c3d552031b6829e1884e361a2c3adc8b96223f0ea28e",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
+    },
+    {
+      "key": "edge-y-3-complete-holes",
+      "family": "edge-y",
+      "public_name": "edge-y_3_complete-holes_original",
       "parameters": {
         "family": "edge-y",
         "nx": 3,
@@ -1612,30 +2291,127 @@
           "fit_offset": 0.0,
           "joint_style": "original"
         },
-        "panel_height_cells": null
+        "panel_height_cells": null,
+        "complete_edge_holes": true
       },
       "size_mm": [
-        180.0,
+        180.0000002,
         10.000000100000001,
         13.0000002
       ],
-      "file": "images/attachments/edge-y-3.png",
-      "alt": "edge-y, 3 cells, original joints: isometric STEP-derived render",
-      "description": "An R3 finishing strip with female tile-edge joints. Length follows the unit count.",
+      "file": "images/attachments/edge-y-3-complete-holes.png",
+      "alt": "edge-y, 3 cells / 10 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "An R3 finishing strip with female tile-edge joints. Length follows the unit count; catalogue hole completion matches the selected tile pattern at every outward width.",
       "dimensions": [
         480,
         300
       ],
-      "pixels_per_mm": 1.9269800275925724,
-      "bytes": 9186,
-      "sha256": "42e483d704aa6dcb29508b8fcc3e6fdee122b19407136f0fe93f2223e5019370",
-      "source_render_sha256": "41cb46ffaeb39d1812eebf7af66143bb3383dec6d61046a5cd0ca93c0387f738",
-      "source_step_sha256": "09012b183421898d60c8a7fc88ba064a9ae061a7b6cd05e596d66d06505a4113"
+      "pixels_per_mm": 1.8101933581919312,
+      "bytes": 9047,
+      "sha256": "4d8f7ea5cb9236a89f79b8dcf381ffe45eb952505fc09ff0b2b04384fbef6de8",
+      "source_render_sha256": "d291621c49e5862ba57bacc8e10945e200a60e376f180179b205828669a1a582",
+      "source_step_sha256": "1af86652b480356d4950c9c3b84a1a3f1f40937f455ba390e7da11929ac5ab34",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
     },
     {
-      "key": "edge-y-4",
+      "key": "edge-y-3-out20-complete-holes",
       "family": "edge-y",
-      "public_name": "edge-y_4_original",
+      "public_name": "edge-y_3_out20mm_complete-holes_original",
+      "parameters": {
+        "family": "edge-y",
+        "nx": 3,
+        "ny": 1,
+        "variant": 1,
+        "length": 60,
+        "height": 50,
+        "interface": {
+          "pitch": 60.0,
+          "height": 13.0,
+          "fit_offset": 0.0,
+          "joint_style": "original"
+        },
+        "panel_height_cells": null,
+        "edge_outward": 20.0,
+        "complete_edge_holes": true
+      },
+      "size_mm": [
+        180.0000002,
+        20.0000001,
+        13.0000002
+      ],
+      "file": "images/attachments/edge-y-3-out20-complete-holes.png",
+      "alt": "edge-y, 3 cells / 20 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "An R3 finishing strip with female tile-edge joints. Length follows the unit count; catalogue hole completion matches the selected tile pattern at every outward width.",
+      "dimensions": [
+        480,
+        300
+      ],
+      "pixels_per_mm": 1.8101933581919312,
+      "bytes": 9812,
+      "sha256": "c7bd6084c81d9ad1c24a5815adfd6e5efced17c8304d8def0abed3a83c2280e4",
+      "source_render_sha256": "8cd11cdf0b09aa12705a1bba88ddc9a896d90e711639cada4ca9a9008b49cc51",
+      "source_step_sha256": "931d81e9b729fb2918b464bcdd1ff5b9533ca4da9a4ac03b3791d24fca7c3296",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
+    },
+    {
+      "key": "edge-y-3-out30-complete-holes",
+      "family": "edge-y",
+      "public_name": "edge-y_3_out30mm_complete-holes_original",
+      "parameters": {
+        "family": "edge-y",
+        "nx": 3,
+        "ny": 1,
+        "variant": 1,
+        "length": 60,
+        "height": 50,
+        "interface": {
+          "pitch": 60.0,
+          "height": 13.0,
+          "fit_offset": 0.0,
+          "joint_style": "original"
+        },
+        "panel_height_cells": null,
+        "edge_outward": 30.0,
+        "complete_edge_holes": true
+      },
+      "size_mm": [
+        180.0000002,
+        30.0000001,
+        13.0000002
+      ],
+      "file": "images/attachments/edge-y-3-out30-complete-holes.png",
+      "alt": "edge-y, 3 cells / 30 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "An R3 finishing strip with female tile-edge joints. Length follows the unit count; catalogue hole completion matches the selected tile pattern at every outward width.",
+      "dimensions": [
+        480,
+        300
+      ],
+      "pixels_per_mm": 1.8101933581919312,
+      "bytes": 10442,
+      "sha256": "f364de73a271e0f3e7ac169412f1148c9d2db1eb503a7e427b1f5b552f67f8b7",
+      "source_render_sha256": "28e7ce9b3b6ae5f69589cec23c7a29c5eee666249f19c38c3dd80563816ba93a",
+      "source_step_sha256": "0b151dbc86386e3766d6dc4f4662e98f9146a1117c6d00a52b90ec26cd0466f8",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
+    },
+    {
+      "key": "edge-y-4-complete-holes",
+      "family": "edge-y",
+      "public_name": "edge-y_4_complete-holes_original",
       "parameters": {
         "family": "edge-y",
         "nx": 4,
@@ -1649,30 +2425,127 @@
           "fit_offset": 0.0,
           "joint_style": "original"
         },
-        "panel_height_cells": null
+        "panel_height_cells": null,
+        "complete_edge_holes": true
       },
       "size_mm": [
-        240.0,
+        240.0000002,
         10.000000100000001,
         13.0000002
       ],
-      "file": "images/attachments/edge-y-4.png",
-      "alt": "edge-y, 4 cells, original joints: isometric STEP-derived render",
-      "description": "An R3 finishing strip with female tile-edge joints. Length follows the unit count.",
+      "file": "images/attachments/edge-y-4-complete-holes.png",
+      "alt": "edge-y, 4 cells / 10 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "An R3 finishing strip with female tile-edge joints. Length follows the unit count; catalogue hole completion matches the selected tile pattern at every outward width.",
       "dimensions": [
         480,
         300
       ],
-      "pixels_per_mm": 1.9269800275925724,
-      "bytes": 12177,
-      "sha256": "b8a21fea4e601a95804f36c318075320ff98e5cbf8a5e11942a3b0cb2bce72e6",
-      "source_render_sha256": "ad2f18d17be6323628b6a8cfa09dcdeba2c305ea63346d9b9057cd3bfa5a6762",
-      "source_step_sha256": "8c9fec3bb7545af491b726d555752e27fe8dff7a8cdcab630bc9c6744520ec27"
+      "pixels_per_mm": 1.8101933581919312,
+      "bytes": 11971,
+      "sha256": "44962b1fd186c782d8172dd5cad0edc0dffc9bfc641c08e3a1f843e0432bb691",
+      "source_render_sha256": "2606e12e26d35cec0aa282c427ba8f03d17166cfd75abafe040a706433425c17",
+      "source_step_sha256": "fafccd94bda3dafc5be2e96c055186e1a7a0981f3828dc6b7c9289e86e81254c",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
     },
     {
-      "key": "edge-y-5",
+      "key": "edge-y-4-out20-complete-holes",
       "family": "edge-y",
-      "public_name": "edge-y_5_original",
+      "public_name": "edge-y_4_out20mm_complete-holes_original",
+      "parameters": {
+        "family": "edge-y",
+        "nx": 4,
+        "ny": 1,
+        "variant": 1,
+        "length": 60,
+        "height": 50,
+        "interface": {
+          "pitch": 60.0,
+          "height": 13.0,
+          "fit_offset": 0.0,
+          "joint_style": "original"
+        },
+        "panel_height_cells": null,
+        "edge_outward": 20.0,
+        "complete_edge_holes": true
+      },
+      "size_mm": [
+        240.0000002,
+        20.0000001,
+        13.0000002
+      ],
+      "file": "images/attachments/edge-y-4-out20-complete-holes.png",
+      "alt": "edge-y, 4 cells / 20 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "An R3 finishing strip with female tile-edge joints. Length follows the unit count; catalogue hole completion matches the selected tile pattern at every outward width.",
+      "dimensions": [
+        480,
+        300
+      ],
+      "pixels_per_mm": 1.8101933581919312,
+      "bytes": 12522,
+      "sha256": "131510c25adc9ae0fef1ca812faf4166d3d284d7e78138330335e41b4f32b60b",
+      "source_render_sha256": "2a9257d9165f834e86454375453c400706ac406c5fe91aae09af6bbc2c374d62",
+      "source_step_sha256": "02832271058ea602c9c0985258a746395339c41eef9c0ca30bf8f35abb94f7c1",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
+    },
+    {
+      "key": "edge-y-4-out30-complete-holes",
+      "family": "edge-y",
+      "public_name": "edge-y_4_out30mm_complete-holes_original",
+      "parameters": {
+        "family": "edge-y",
+        "nx": 4,
+        "ny": 1,
+        "variant": 1,
+        "length": 60,
+        "height": 50,
+        "interface": {
+          "pitch": 60.0,
+          "height": 13.0,
+          "fit_offset": 0.0,
+          "joint_style": "original"
+        },
+        "panel_height_cells": null,
+        "edge_outward": 30.0,
+        "complete_edge_holes": true
+      },
+      "size_mm": [
+        240.0000002,
+        30.0000001,
+        13.0000002
+      ],
+      "file": "images/attachments/edge-y-4-out30-complete-holes.png",
+      "alt": "edge-y, 4 cells / 30 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "An R3 finishing strip with female tile-edge joints. Length follows the unit count; catalogue hole completion matches the selected tile pattern at every outward width.",
+      "dimensions": [
+        480,
+        300
+      ],
+      "pixels_per_mm": 1.8101933581919312,
+      "bytes": 13389,
+      "sha256": "7f1020864d3f1fe163b281e41e2b289d689b13cb101a6079650112b418c79649",
+      "source_render_sha256": "353b6e01691c2bcd21856dd15e0ea76c07de24a6559d8f44e816acddd8273718",
+      "source_step_sha256": "6f8097acf952b34740469b114e05d33929605bd65667983848594ded13b7202d",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
+    },
+    {
+      "key": "edge-y-5-complete-holes",
+      "family": "edge-y",
+      "public_name": "edge-y_5_complete-holes_original",
       "parameters": {
         "family": "edge-y",
         "nx": 5,
@@ -1686,30 +2559,127 @@
           "fit_offset": 0.0,
           "joint_style": "original"
         },
-        "panel_height_cells": null
+        "panel_height_cells": null,
+        "complete_edge_holes": true
       },
       "size_mm": [
-        300.0,
+        300.00000020000004,
         10.000000100000001,
-        13.0000002
+        13.000000200000002
       ],
-      "file": "images/attachments/edge-y-5.png",
-      "alt": "edge-y, 5 cells, original joints: isometric STEP-derived render",
-      "description": "An R3 finishing strip with female tile-edge joints. Length follows the unit count.",
+      "file": "images/attachments/edge-y-5-complete-holes.png",
+      "alt": "edge-y, 5 cells / 10 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "An R3 finishing strip with female tile-edge joints. Length follows the unit count; catalogue hole completion matches the selected tile pattern at every outward width.",
       "dimensions": [
         480,
         300
       ],
-      "pixels_per_mm": 1.9269800275925724,
-      "bytes": 15336,
-      "sha256": "1c958e5970b0fe130b6723ed8236a6b3078c03ebf84846902ac6435f1c14c35c",
-      "source_render_sha256": "de2de806c55951f24c924e0ab418a63e7df421ebca75631d353f7d69b828c838",
-      "source_step_sha256": "09e8d71dec98f9657d6eb61764852f9d8fbe5772fd88573e69610c90529431dd"
+      "pixels_per_mm": 1.8101933581919312,
+      "bytes": 14757,
+      "sha256": "3039ed7495853dba58a3ad382de993a522faded5c45f89aab005a0ac7abd869f",
+      "source_render_sha256": "2298845db2224cf3195b265df4288fbd575e0b99bc518c70e20b66910cb2ae9e",
+      "source_step_sha256": "a21a2d50efb7def31a48e0981eeb772e448a4bec21aee93dd7016ac7bc411ec3",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
     },
     {
-      "key": "corner-in-v1",
+      "key": "edge-y-5-out20-complete-holes",
+      "family": "edge-y",
+      "public_name": "edge-y_5_out20mm_complete-holes_original",
+      "parameters": {
+        "family": "edge-y",
+        "nx": 5,
+        "ny": 1,
+        "variant": 1,
+        "length": 60,
+        "height": 50,
+        "interface": {
+          "pitch": 60.0,
+          "height": 13.0,
+          "fit_offset": 0.0,
+          "joint_style": "original"
+        },
+        "panel_height_cells": null,
+        "edge_outward": 20.0,
+        "complete_edge_holes": true
+      },
+      "size_mm": [
+        300.00000020000004,
+        20.0000001,
+        13.000000200000002
+      ],
+      "file": "images/attachments/edge-y-5-out20-complete-holes.png",
+      "alt": "edge-y, 5 cells / 20 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "An R3 finishing strip with female tile-edge joints. Length follows the unit count; catalogue hole completion matches the selected tile pattern at every outward width.",
+      "dimensions": [
+        480,
+        300
+      ],
+      "pixels_per_mm": 1.8101933581919312,
+      "bytes": 15725,
+      "sha256": "c7818b306059f0a4c63ef19a33e415f0a9c9ed854ab342a99a599125766fcc99",
+      "source_render_sha256": "96a707289330bc77dce05b0a5af67908d843f67122306a4e436dafd0753fd6c4",
+      "source_step_sha256": "f1a845f1b6af90db5ceff93976d8564ff4a72d057c625eecbc25060627a30281",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
+    },
+    {
+      "key": "edge-y-5-out30-complete-holes",
+      "family": "edge-y",
+      "public_name": "edge-y_5_out30mm_complete-holes_original",
+      "parameters": {
+        "family": "edge-y",
+        "nx": 5,
+        "ny": 1,
+        "variant": 1,
+        "length": 60,
+        "height": 50,
+        "interface": {
+          "pitch": 60.0,
+          "height": 13.0,
+          "fit_offset": 0.0,
+          "joint_style": "original"
+        },
+        "panel_height_cells": null,
+        "edge_outward": 30.0,
+        "complete_edge_holes": true
+      },
+      "size_mm": [
+        300.00000020000004,
+        30.0000001,
+        13.000000200000002
+      ],
+      "file": "images/attachments/edge-y-5-out30-complete-holes.png",
+      "alt": "edge-y, 5 cells / 30 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "An R3 finishing strip with female tile-edge joints. Length follows the unit count; catalogue hole completion matches the selected tile pattern at every outward width.",
+      "dimensions": [
+        480,
+        300
+      ],
+      "pixels_per_mm": 1.8101933581919312,
+      "bytes": 16456,
+      "sha256": "6944c8108c51b069c04d2bebc1acd1d79e3367b1bf49f1078a5f5b4543830323",
+      "source_render_sha256": "837ebf05adb6c64824d88a6d038867277c262013c9d0d923ce8ddd01fe9c04d7",
+      "source_step_sha256": "6bfaeacecb3eccbee2352e7cbc1e94e112e5110ea3f5a3d3c37305597aee577f",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
+    },
+    {
+      "key": "corner-in-v1-complete-holes",
       "family": "corner-in",
-      "public_name": "corner-in_v1_original",
+      "public_name": "corner-in_v1_complete-holes_original",
       "parameters": {
         "family": "corner-in",
         "nx": 1,
@@ -1723,30 +2693,127 @@
           "fit_offset": 0.0,
           "joint_style": "original"
         },
-        "panel_height_cells": null
+        "panel_height_cells": null,
+        "complete_edge_holes": true
       },
       "size_mm": [
-        60.0000001,
-        66.0,
+        60.0000002,
+        66.00000010000001,
         13.000000200005319
       ],
-      "file": "images/attachments/corner-in-v1.png",
-      "alt": "corner-in, variant 1, original joints: isometric STEP-derived render",
-      "description": "An R3 corner finishing piece in one of four supported joining arrangements.",
+      "file": "images/attachments/corner-in-v1-complete-holes.png",
+      "alt": "corner-in, variant 1 / 10 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "An R3 corner finishing piece in one of four supported joining arrangements, sized to match the selected edge projection and boundary-hole mode.",
       "dimensions": [
         480,
         300
       ],
-      "pixels_per_mm": 4.3646261520004925,
-      "bytes": 19291,
-      "sha256": "09277ec27e57edd051a175349fa7712645422f66214e41f2626297ea85fb9670",
-      "source_render_sha256": "5ef0ef47e5b4582b054ddf478d02fc35e3f7b7db4954700679439b315f8044dd",
-      "source_step_sha256": "0dba1873d5e983ba742de0c9050758f08958bd9751db0d48d202e0e9750da081"
+      "pixels_per_mm": 4.364626146592763,
+      "bytes": 19324,
+      "sha256": "e42a42f9e18f5aa50b201a8e0184c5fb59a7a473fab6bb084998da4015f04250",
+      "source_render_sha256": "b7c038ae7b3bfff87b4e1314198e5f2ec62b9bfe351bd1e7470b2f287f1f7313",
+      "source_step_sha256": "d2646b8c16a9af2ed38705aca64cbde2e64b157f88c0db047cc6dde01d670684",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
     },
     {
-      "key": "corner-in-v2",
+      "key": "corner-in-v1-out20-complete-holes",
       "family": "corner-in",
-      "public_name": "corner-in_v2_original",
+      "public_name": "corner-in_v1_out20mm_complete-holes_original",
+      "parameters": {
+        "family": "corner-in",
+        "nx": 1,
+        "ny": 1,
+        "variant": 1,
+        "length": 60,
+        "height": 50,
+        "interface": {
+          "pitch": 60.0,
+          "height": 13.0,
+          "fit_offset": 0.0,
+          "joint_style": "original"
+        },
+        "panel_height_cells": null,
+        "edge_outward": 20.0,
+        "complete_edge_holes": true
+      },
+      "size_mm": [
+        60.0000002,
+        66.00000010000001,
+        13.000000200005319
+      ],
+      "file": "images/attachments/corner-in-v1-out20-complete-holes.png",
+      "alt": "corner-in, variant 1 / 20 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "An R3 corner finishing piece in one of four supported joining arrangements, sized to match the selected edge projection and boundary-hole mode.",
+      "dimensions": [
+        480,
+        300
+      ],
+      "pixels_per_mm": 4.364626146592763,
+      "bytes": 19787,
+      "sha256": "c3a025a3a6b013021027f48275165ebd3e1be39c10ea6330aa90975960954274",
+      "source_render_sha256": "470ae87612529918f569ae3402f687efb5bdfd3ce994990f102327da4e8ad0b0",
+      "source_step_sha256": "a565cc00da2ac6ca1f339f00777c88d095c20b9ab87304a019da1288968bf691",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
+    },
+    {
+      "key": "corner-in-v1-out30-complete-holes",
+      "family": "corner-in",
+      "public_name": "corner-in_v1_out30mm_complete-holes_original",
+      "parameters": {
+        "family": "corner-in",
+        "nx": 1,
+        "ny": 1,
+        "variant": 1,
+        "length": 60,
+        "height": 50,
+        "interface": {
+          "pitch": 60.0,
+          "height": 13.0,
+          "fit_offset": 0.0,
+          "joint_style": "original"
+        },
+        "panel_height_cells": null,
+        "edge_outward": 30.0,
+        "complete_edge_holes": true
+      },
+      "size_mm": [
+        60.0000002,
+        66.00000010000001,
+        13.000000200005319
+      ],
+      "file": "images/attachments/corner-in-v1-out30-complete-holes.png",
+      "alt": "corner-in, variant 1 / 30 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "An R3 corner finishing piece in one of four supported joining arrangements, sized to match the selected edge projection and boundary-hole mode.",
+      "dimensions": [
+        480,
+        300
+      ],
+      "pixels_per_mm": 4.364626146592763,
+      "bytes": 20449,
+      "sha256": "7f8f988bec281731c8340402bf972bbde80bb2ff9340d8ceb23a93fba8f013f0",
+      "source_render_sha256": "61ed4fd9e99304987e785b6ab0609d3c6c55c2229fe210fda43d507c334ec20a",
+      "source_step_sha256": "615522d7fb096a5eaa340f3f6851ae227a01d8aa76c5078b7ffb1e6999fe7d7d",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
+    },
+    {
+      "key": "corner-in-v2-complete-holes",
+      "family": "corner-in",
+      "public_name": "corner-in_v2_complete-holes_original",
       "parameters": {
         "family": "corner-in",
         "nx": 1,
@@ -1760,30 +2827,127 @@
           "fit_offset": 0.0,
           "joint_style": "original"
         },
-        "panel_height_cells": null
+        "panel_height_cells": null,
+        "complete_edge_holes": true
       },
       "size_mm": [
-        66.0,
-        66.0,
+        66.0000001,
+        66.0000001,
         13.000000200005319
       ],
-      "file": "images/attachments/corner-in-v2.png",
-      "alt": "corner-in, variant 2, original joints: isometric STEP-derived render",
-      "description": "An R3 corner finishing piece in one of four supported joining arrangements.",
+      "file": "images/attachments/corner-in-v2-complete-holes.png",
+      "alt": "corner-in, variant 2 / 10 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "An R3 corner finishing piece in one of four supported joining arrangements, sized to match the selected edge projection and boundary-hole mode.",
       "dimensions": [
         480,
         300
       ],
-      "pixels_per_mm": 4.3646261520004925,
-      "bytes": 21627,
-      "sha256": "d44d2badb5b9674c2a3bc550f0a99cb0bcb8b113af2cb05361ab9fd8ef348377",
-      "source_render_sha256": "6f0b9473436882a3c6907157444a409c42de8dd7604310a59250e7b2e3d776b6",
-      "source_step_sha256": "4b78fba7e0e6b28d7508bfdc62b0f7e02f0b03af07153a226dc9e31978763c32"
+      "pixels_per_mm": 4.364626146592763,
+      "bytes": 21737,
+      "sha256": "c76e7c6d4dece3409b5ce2dfb6d69fd7275191ef2df239682384bdfbfba1caad",
+      "source_render_sha256": "f6f949cb2b75b2b64658010bd269fd3d136fdea62bb842ba76d24769b09deab0",
+      "source_step_sha256": "a54a9450d1d570114294b9a239bfc5868d5448ab8a49d6e1ffc1c1692e4c4936",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
     },
     {
-      "key": "corner-in-v3",
+      "key": "corner-in-v2-out20-complete-holes",
       "family": "corner-in",
-      "public_name": "corner-in_v3_original",
+      "public_name": "corner-in_v2_out20mm_complete-holes_original",
+      "parameters": {
+        "family": "corner-in",
+        "nx": 1,
+        "ny": 1,
+        "variant": 2,
+        "length": 60,
+        "height": 50,
+        "interface": {
+          "pitch": 60.0,
+          "height": 13.0,
+          "fit_offset": 0.0,
+          "joint_style": "original"
+        },
+        "panel_height_cells": null,
+        "edge_outward": 20.0,
+        "complete_edge_holes": true
+      },
+      "size_mm": [
+        66.0000001,
+        66.0000001,
+        13.000000200005319
+      ],
+      "file": "images/attachments/corner-in-v2-out20-complete-holes.png",
+      "alt": "corner-in, variant 2 / 20 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "An R3 corner finishing piece in one of four supported joining arrangements, sized to match the selected edge projection and boundary-hole mode.",
+      "dimensions": [
+        480,
+        300
+      ],
+      "pixels_per_mm": 4.364626146592763,
+      "bytes": 21383,
+      "sha256": "4c2b32cb20b3a14403bf4c72c5319197d97f1b5b00f69deb00ce5fd9d454f2ba",
+      "source_render_sha256": "6dc9d091b7df45bfb3d03c3ac431beea81bac1ee5c688c4b77a9bee4e7179db3",
+      "source_step_sha256": "d710add669bf501259e30f8db3e1e95a3a8262b2b47aa652256dbff87e6d0489",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
+    },
+    {
+      "key": "corner-in-v2-out30-complete-holes",
+      "family": "corner-in",
+      "public_name": "corner-in_v2_out30mm_complete-holes_original",
+      "parameters": {
+        "family": "corner-in",
+        "nx": 1,
+        "ny": 1,
+        "variant": 2,
+        "length": 60,
+        "height": 50,
+        "interface": {
+          "pitch": 60.0,
+          "height": 13.0,
+          "fit_offset": 0.0,
+          "joint_style": "original"
+        },
+        "panel_height_cells": null,
+        "edge_outward": 30.0,
+        "complete_edge_holes": true
+      },
+      "size_mm": [
+        66.0000001,
+        66.0000001,
+        13.000000200005319
+      ],
+      "file": "images/attachments/corner-in-v2-out30-complete-holes.png",
+      "alt": "corner-in, variant 2 / 30 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "An R3 corner finishing piece in one of four supported joining arrangements, sized to match the selected edge projection and boundary-hole mode.",
+      "dimensions": [
+        480,
+        300
+      ],
+      "pixels_per_mm": 4.364626146592763,
+      "bytes": 21142,
+      "sha256": "687f21b9fe6166adf32d364c16fb00f3cf951c2311d1581aa4454972e0eceaac",
+      "source_render_sha256": "a366ef550a46fbaf315aa886c6c551d81e1dbc5f06385840aca23902eba46a69",
+      "source_step_sha256": "f4193b8122e95339007bb2426a192d4bff94056016319cfd134f56e0460fc7af",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
+    },
+    {
+      "key": "corner-in-v3-complete-holes",
+      "family": "corner-in",
+      "public_name": "corner-in_v3_complete-holes_original",
       "parameters": {
         "family": "corner-in",
         "nx": 1,
@@ -1797,30 +2961,127 @@
           "fit_offset": 0.0,
           "joint_style": "original"
         },
-        "panel_height_cells": null
+        "panel_height_cells": null,
+        "complete_edge_holes": true
       },
       "size_mm": [
-        66.0,
-        60.0000001,
+        66.0000001,
+        60.0000002,
         13.000000200005319
       ],
-      "file": "images/attachments/corner-in-v3.png",
-      "alt": "corner-in, variant 3, original joints: isometric STEP-derived render",
-      "description": "An R3 corner finishing piece in one of four supported joining arrangements.",
+      "file": "images/attachments/corner-in-v3-complete-holes.png",
+      "alt": "corner-in, variant 3 / 10 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "An R3 corner finishing piece in one of four supported joining arrangements, sized to match the selected edge projection and boundary-hole mode.",
       "dimensions": [
         480,
         300
       ],
-      "pixels_per_mm": 4.3646261520004925,
-      "bytes": 19596,
-      "sha256": "0696c44cabd6df037c77130a25453811b39b4f37dd11180a5b6fc0973d1724e4",
-      "source_render_sha256": "f77494974d023e3d876b6e282b1b7765b79486fa794d1b9d343d853a87e593ad",
-      "source_step_sha256": "5fd01e52b30d1f96e234df5760d71c19b68b23886771f1c940cc8a2b914485c2"
+      "pixels_per_mm": 4.364626146592763,
+      "bytes": 19723,
+      "sha256": "31253d431da8b6a1525188c839c8f57b25b6d794b8b8179e1b605773f0fc22fd",
+      "source_render_sha256": "74a58897ebacdfb0803271d8a10ea14c67f0abd715cfb573897ed23059098a9f",
+      "source_step_sha256": "b5828ca53e1f35502e7899362ee969cd7e29816240a4c90fc2cde57f13783361",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
     },
     {
-      "key": "corner-in-v4",
+      "key": "corner-in-v3-out20-complete-holes",
       "family": "corner-in",
-      "public_name": "corner-in_v4_original",
+      "public_name": "corner-in_v3_out20mm_complete-holes_original",
+      "parameters": {
+        "family": "corner-in",
+        "nx": 1,
+        "ny": 1,
+        "variant": 3,
+        "length": 60,
+        "height": 50,
+        "interface": {
+          "pitch": 60.0,
+          "height": 13.0,
+          "fit_offset": 0.0,
+          "joint_style": "original"
+        },
+        "panel_height_cells": null,
+        "edge_outward": 20.0,
+        "complete_edge_holes": true
+      },
+      "size_mm": [
+        66.0000001,
+        60.0000002,
+        13.000000200005319
+      ],
+      "file": "images/attachments/corner-in-v3-out20-complete-holes.png",
+      "alt": "corner-in, variant 3 / 20 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "An R3 corner finishing piece in one of four supported joining arrangements, sized to match the selected edge projection and boundary-hole mode.",
+      "dimensions": [
+        480,
+        300
+      ],
+      "pixels_per_mm": 4.364626146592763,
+      "bytes": 19890,
+      "sha256": "d354d0114e432ce56aa33cfe7f7375700919c255e06391c5ad742ca95f4f1e9a",
+      "source_render_sha256": "590bb97d6de2f0f505bb0685819be79f7884a4e9208c642feca616423fa19d2c",
+      "source_step_sha256": "8538987b9b94531c7519282eb360872a357fa9a057f26b0b86d1de9e44007490",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
+    },
+    {
+      "key": "corner-in-v3-out30-complete-holes",
+      "family": "corner-in",
+      "public_name": "corner-in_v3_out30mm_complete-holes_original",
+      "parameters": {
+        "family": "corner-in",
+        "nx": 1,
+        "ny": 1,
+        "variant": 3,
+        "length": 60,
+        "height": 50,
+        "interface": {
+          "pitch": 60.0,
+          "height": 13.0,
+          "fit_offset": 0.0,
+          "joint_style": "original"
+        },
+        "panel_height_cells": null,
+        "edge_outward": 30.0,
+        "complete_edge_holes": true
+      },
+      "size_mm": [
+        66.0000001,
+        60.0000002,
+        13.000000200005319
+      ],
+      "file": "images/attachments/corner-in-v3-out30-complete-holes.png",
+      "alt": "corner-in, variant 3 / 30 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "An R3 corner finishing piece in one of four supported joining arrangements, sized to match the selected edge projection and boundary-hole mode.",
+      "dimensions": [
+        480,
+        300
+      ],
+      "pixels_per_mm": 4.364626146592763,
+      "bytes": 19798,
+      "sha256": "8cba53d79be0eb2be22b2b5d57c445aba9cd07c56d41cf3a5cc2a6c7c9e71986",
+      "source_render_sha256": "d6b520a179d2bec6d26bba2dc1ee3bf6567ec99f95c2f7db477b310c9f341253",
+      "source_step_sha256": "3cc9c4079d5d98d3b8d5c7cc07383013367f7a2230847431671508349a29846b",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
+    },
+    {
+      "key": "corner-in-v4-complete-holes",
+      "family": "corner-in",
+      "public_name": "corner-in_v4_complete-holes_original",
       "parameters": {
         "family": "corner-in",
         "nx": 1,
@@ -1834,30 +3095,127 @@
           "fit_offset": 0.0,
           "joint_style": "original"
         },
-        "panel_height_cells": null
+        "panel_height_cells": null,
+        "complete_edge_holes": true
       },
       "size_mm": [
-        60.0000001,
-        60.0000001,
+        60.0000002,
+        60.0000002,
         13.0000002
       ],
-      "file": "images/attachments/corner-in-v4.png",
-      "alt": "corner-in, variant 4, original joints: isometric STEP-derived render",
-      "description": "An R3 corner finishing piece in one of four supported joining arrangements.",
+      "file": "images/attachments/corner-in-v4-complete-holes.png",
+      "alt": "corner-in, variant 4 / 10 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "An R3 corner finishing piece in one of four supported joining arrangements, sized to match the selected edge projection and boundary-hole mode.",
       "dimensions": [
         480,
         300
       ],
-      "pixels_per_mm": 4.3646261520004925,
-      "bytes": 18214,
-      "sha256": "5869f7914c18a057775869542b7a896298e1e7c181f810e5f35b4d65d96c08a4",
-      "source_render_sha256": "933534397193829847de7a82c800bc37246beb64a631e94ae369979a5ad36721",
-      "source_step_sha256": "983663163aa7b0aa5b91fe6dc1142517897b8184382e18e7426270c409293dd1"
+      "pixels_per_mm": 4.364626146592763,
+      "bytes": 18270,
+      "sha256": "9b31a0c61ecbcc0281279fc430096127ece2a4ac20c795201d76270911818e05",
+      "source_render_sha256": "4e6c4a5d0d36d0ea3f1f91708b40db81e135b430ae1ab6144ef702734c49213e",
+      "source_step_sha256": "c2e8faa864baf81247f47ba6b6cf59cf17ead573a1ab9bd970e8d3426be1f100",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
     },
     {
-      "key": "corner-out-v1",
+      "key": "corner-in-v4-out20-complete-holes",
+      "family": "corner-in",
+      "public_name": "corner-in_v4_out20mm_complete-holes_original",
+      "parameters": {
+        "family": "corner-in",
+        "nx": 1,
+        "ny": 1,
+        "variant": 4,
+        "length": 60,
+        "height": 50,
+        "interface": {
+          "pitch": 60.0,
+          "height": 13.0,
+          "fit_offset": 0.0,
+          "joint_style": "original"
+        },
+        "panel_height_cells": null,
+        "edge_outward": 20.0,
+        "complete_edge_holes": true
+      },
+      "size_mm": [
+        60.0000002,
+        60.0000002,
+        13.0000002
+      ],
+      "file": "images/attachments/corner-in-v4-out20-complete-holes.png",
+      "alt": "corner-in, variant 4 / 20 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "An R3 corner finishing piece in one of four supported joining arrangements, sized to match the selected edge projection and boundary-hole mode.",
+      "dimensions": [
+        480,
+        300
+      ],
+      "pixels_per_mm": 4.364626146592763,
+      "bytes": 18368,
+      "sha256": "c1e547bbb679b2ec0abd7b00900e53ebc848a9d4f26dc58073164492139b4f6a",
+      "source_render_sha256": "90de117f2d72dc99a67d6928873fb4bbf1686eb03aa89a8cec74aeba6f5c6154",
+      "source_step_sha256": "ee2167c47e220a938c3e27afd8395e66824e10c5a76ac780af4e1f8faa1c95d9",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
+    },
+    {
+      "key": "corner-in-v4-out30-complete-holes",
+      "family": "corner-in",
+      "public_name": "corner-in_v4_out30mm_complete-holes_original",
+      "parameters": {
+        "family": "corner-in",
+        "nx": 1,
+        "ny": 1,
+        "variant": 4,
+        "length": 60,
+        "height": 50,
+        "interface": {
+          "pitch": 60.0,
+          "height": 13.0,
+          "fit_offset": 0.0,
+          "joint_style": "original"
+        },
+        "panel_height_cells": null,
+        "edge_outward": 30.0,
+        "complete_edge_holes": true
+      },
+      "size_mm": [
+        60.0000002,
+        60.0000002,
+        13.0000002
+      ],
+      "file": "images/attachments/corner-in-v4-out30-complete-holes.png",
+      "alt": "corner-in, variant 4 / 30 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "An R3 corner finishing piece in one of four supported joining arrangements, sized to match the selected edge projection and boundary-hole mode.",
+      "dimensions": [
+        480,
+        300
+      ],
+      "pixels_per_mm": 4.364626146592763,
+      "bytes": 18318,
+      "sha256": "90b997ae3e6e73a379e5a87ceaafba8b64aff8737861604751b5e3280c264871",
+      "source_render_sha256": "a73525d4d5fabf242cdd612f2184125a6320ba8cb1fa3ce0d28e48e95779e531",
+      "source_step_sha256": "94278463bbf5ba27f032fd03560ffa9f3a7d3e63ea2cf4d7108e6361c2b0b6e2",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
+    },
+    {
+      "key": "corner-out-v1-complete-holes",
       "family": "corner-out",
-      "public_name": "corner-out_v1_original",
+      "public_name": "corner-out_v1_complete-holes_original",
       "parameters": {
         "family": "corner-out",
         "nx": 1,
@@ -1871,30 +3229,127 @@
           "fit_offset": 0.0,
           "joint_style": "original"
         },
-        "panel_height_cells": null
+        "panel_height_cells": null,
+        "complete_edge_holes": true
       },
       "size_mm": [
-        16.000000000000007,
-        67.07106784524687,
+        16.000000000000004,
+        69.12132044355964,
         13.000000200005319
       ],
-      "file": "images/attachments/corner-out-v1.png",
-      "alt": "corner-out, variant 1, original joints: isometric STEP-derived render",
-      "description": "An R3 outer-edge finishing piece in one of six supported arrangements.",
+      "file": "images/attachments/corner-out-v1-complete-holes.png",
+      "alt": "corner-out, variant 1 / 10 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "The west half of the northwest mixed-sex corner, with one male tile-edge join. Use it with v2; their diagonal faces form a butt seam and do not clip together.",
       "dimensions": [
         480,
         300
       ],
-      "pixels_per_mm": 4.158531005439545,
-      "bytes": 13224,
-      "sha256": "7f07af61e72310d2e27b75c5056d91950099fa0a4c702e48e4a4b5eecf7db104",
-      "source_render_sha256": "83f7f52842980efe81a7ee42a8be56f0ee78d705241ea2152fe602c09ffda1ae",
-      "source_step_sha256": "fca7a766ee89855e9f5ad5f9274584a6f2ccf44a473362eb49a8681cc54a28d4"
+      "pixels_per_mm": 3.318687822681432,
+      "bytes": 10320,
+      "sha256": "ae06ce19013eea2746dbef18f53cd7511fcc730b57745f4735c95d19c662a142",
+      "source_render_sha256": "d004bde37b16e0388b89a14f69ff28b74636f2bfac25961c538a73838fce413c",
+      "source_step_sha256": "b369f24dc5c479e0cd7de1d1a957af6750c04dd069636be169dbf63a1bee8ae4",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
     },
     {
-      "key": "corner-out-v2",
+      "key": "corner-out-v1-out20-complete-holes",
       "family": "corner-out",
-      "public_name": "corner-out_v2_original",
+      "public_name": "corner-out_v1_out20mm_complete-holes_original",
+      "parameters": {
+        "family": "corner-out",
+        "nx": 1,
+        "ny": 1,
+        "variant": 1,
+        "length": 60,
+        "height": 50,
+        "interface": {
+          "pitch": 60.0,
+          "height": 13.0,
+          "fit_offset": 0.0,
+          "joint_style": "original"
+        },
+        "panel_height_cells": null,
+        "edge_outward": 20.0,
+        "complete_edge_holes": true
+      },
+      "size_mm": [
+        26.000000000000004,
+        79.12132044355964,
+        13.000000200005319
+      ],
+      "file": "images/attachments/corner-out-v1-out20-complete-holes.png",
+      "alt": "corner-out, variant 1 / 20 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "The west half of the northwest mixed-sex corner, with one male tile-edge join. Use it with v2; their diagonal faces form a butt seam and do not clip together.",
+      "dimensions": [
+        480,
+        300
+      ],
+      "pixels_per_mm": 3.318687822681432,
+      "bytes": 10982,
+      "sha256": "8921e1a7a3dd80ba2238b1807b85288d5ad3e65e88badbe66187e4a047532c77",
+      "source_render_sha256": "b458c421a2c4a3ba387bc5308139c293e3915daed41f475728db3b5e30286db6",
+      "source_step_sha256": "485c23f261f9de1399b88d7d59303037473633c20b0347a657a6db1a05605ce8",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
+    },
+    {
+      "key": "corner-out-v1-out30-complete-holes",
+      "family": "corner-out",
+      "public_name": "corner-out_v1_out30mm_complete-holes_original",
+      "parameters": {
+        "family": "corner-out",
+        "nx": 1,
+        "ny": 1,
+        "variant": 1,
+        "length": 60,
+        "height": 50,
+        "interface": {
+          "pitch": 60.0,
+          "height": 13.0,
+          "fit_offset": 0.0,
+          "joint_style": "original"
+        },
+        "panel_height_cells": null,
+        "edge_outward": 30.0,
+        "complete_edge_holes": true
+      },
+      "size_mm": [
+        36.0,
+        89.12132044355964,
+        13.000000200005319
+      ],
+      "file": "images/attachments/corner-out-v1-out30-complete-holes.png",
+      "alt": "corner-out, variant 1 / 30 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "The west half of the northwest mixed-sex corner, with one male tile-edge join. Use it with v2; their diagonal faces form a butt seam and do not clip together.",
+      "dimensions": [
+        480,
+        300
+      ],
+      "pixels_per_mm": 3.318687822681432,
+      "bytes": 11897,
+      "sha256": "b06463552fee2e920985925c1033b9a40de7442faa8bd3b06541edc6ff20742e",
+      "source_render_sha256": "525ef908bd573e6a07677f11ba772178cd73baf094b0517f721aae94cc474fec",
+      "source_step_sha256": "59cb622fc5e36d14d1796c4524920fa8a576b02056e19ea2503eb67ed0d878f9",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
+    },
+    {
+      "key": "corner-out-v2-complete-holes",
+      "family": "corner-out",
+      "public_name": "corner-out_v2_complete-holes_original",
       "parameters": {
         "family": "corner-out",
         "nx": 1,
@@ -1908,30 +3363,127 @@
           "fit_offset": 0.0,
           "joint_style": "original"
         },
-        "panel_height_cells": null
+        "panel_height_cells": null,
+        "complete_edge_holes": true
       },
       "size_mm": [
-        67.07106784524687,
+        69.12132044355964,
         10.000000100000001,
-        13.0000002
+        13.000000200000002
       ],
-      "file": "images/attachments/corner-out-v2.png",
-      "alt": "corner-out, variant 2, original joints: isometric STEP-derived render",
-      "description": "An R3 outer-edge finishing piece in one of six supported arrangements.",
+      "file": "images/attachments/corner-out-v2-complete-holes.png",
+      "alt": "corner-out, variant 2 / 10 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "The north half of the northwest mixed-sex corner, with one female tile-edge join. Use it with v1; their diagonal faces form a butt seam and do not clip together.",
       "dimensions": [
         480,
         300
       ],
-      "pixels_per_mm": 4.158531005439545,
-      "bytes": 9761,
-      "sha256": "1a694637ebe38b38a4eecc6dc464c21fdcf70c0666f9a10db6495ce8419ecaf8",
-      "source_render_sha256": "f8839f9808d3bdeee051e0b8977aaa8356fea69ea2d3e4e9bc24dd0644170db3",
-      "source_step_sha256": "79083bd72da2297c5956aa7e74a6f406516e7b021643f5d0a47d0c39a83f2c3f"
+      "pixels_per_mm": 3.318687822681432,
+      "bytes": 7838,
+      "sha256": "c5a3e6212f97027cf004c66f5429f24e66785fa2443872532f4f2f2c64c70db7",
+      "source_render_sha256": "d391c59ef7130abdc124259d17cf9c29f47a9bbc04d6181193f9e24007651d4a",
+      "source_step_sha256": "94635f669900928632595b60ff9f615f74f706765bca7caf59c709cdf46f6bb6",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
     },
     {
-      "key": "corner-out-v3",
+      "key": "corner-out-v2-out20-complete-holes",
       "family": "corner-out",
-      "public_name": "corner-out_v3_original",
+      "public_name": "corner-out_v2_out20mm_complete-holes_original",
+      "parameters": {
+        "family": "corner-out",
+        "nx": 1,
+        "ny": 1,
+        "variant": 2,
+        "length": 60,
+        "height": 50,
+        "interface": {
+          "pitch": 60.0,
+          "height": 13.0,
+          "fit_offset": 0.0,
+          "joint_style": "original"
+        },
+        "panel_height_cells": null,
+        "edge_outward": 20.0,
+        "complete_edge_holes": true
+      },
+      "size_mm": [
+        79.12132044355965,
+        20.0000001,
+        13.000000200000002
+      ],
+      "file": "images/attachments/corner-out-v2-out20-complete-holes.png",
+      "alt": "corner-out, variant 2 / 20 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "The north half of the northwest mixed-sex corner, with one female tile-edge join. Use it with v1; their diagonal faces form a butt seam and do not clip together.",
+      "dimensions": [
+        480,
+        300
+      ],
+      "pixels_per_mm": 3.318687822681432,
+      "bytes": 9392,
+      "sha256": "6e259d5868409cb76786d22450c7698c7847b15cd144e23ed1d1acbdf2c1cf87",
+      "source_render_sha256": "9af3729f38645798ac15c59e1cb0bebc157be8adbea3063f7d3280d6f3003034",
+      "source_step_sha256": "02aeb01003591d2d7b724e3ff6a1886f2f92657f3f5b0f5ba17a6deaea018666",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
+    },
+    {
+      "key": "corner-out-v2-out30-complete-holes",
+      "family": "corner-out",
+      "public_name": "corner-out_v2_out30mm_complete-holes_original",
+      "parameters": {
+        "family": "corner-out",
+        "nx": 1,
+        "ny": 1,
+        "variant": 2,
+        "length": 60,
+        "height": 50,
+        "interface": {
+          "pitch": 60.0,
+          "height": 13.0,
+          "fit_offset": 0.0,
+          "joint_style": "original"
+        },
+        "panel_height_cells": null,
+        "edge_outward": 30.0,
+        "complete_edge_holes": true
+      },
+      "size_mm": [
+        89.12132044355964,
+        30.0000001,
+        13.000000200000002
+      ],
+      "file": "images/attachments/corner-out-v2-out30-complete-holes.png",
+      "alt": "corner-out, variant 2 / 30 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "The north half of the northwest mixed-sex corner, with one female tile-edge join. Use it with v1; their diagonal faces form a butt seam and do not clip together.",
+      "dimensions": [
+        480,
+        300
+      ],
+      "pixels_per_mm": 3.318687822681432,
+      "bytes": 10508,
+      "sha256": "09867f68e3d0cccfca29c31b098d3d1c8e253488f391ec07c49e634d1ef81635",
+      "source_render_sha256": "c58ac4f54c31b45b33ff282e42df030fe5057f336776eeacb51cee91dcd32a76",
+      "source_step_sha256": "345864a6430fc48c5e9d84d6dcd5256009c7213194e24e301316ce6f7e6513d0",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
+    },
+    {
+      "key": "corner-out-v3-complete-holes",
+      "family": "corner-out",
+      "public_name": "corner-out_v3_complete-holes_original",
       "parameters": {
         "family": "corner-out",
         "nx": 1,
@@ -1945,30 +3497,127 @@
           "fit_offset": 0.0,
           "joint_style": "original"
         },
-        "panel_height_cells": null
+        "panel_height_cells": null,
+        "complete_edge_holes": true
       },
       "size_mm": [
-        70.0,
-        70.0,
+        70.0000001,
+        70.00000010000001,
         13.0000002
       ],
-      "file": "images/attachments/corner-out-v3.png",
-      "alt": "corner-out, variant 3, original joints: isometric STEP-derived render",
-      "description": "An R3 outer-edge finishing piece in one of six supported arrangements.",
+      "file": "images/attachments/corner-out-v3-complete-holes.png",
+      "alt": "corner-out, variant 3 / 10 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "The whole northeast L corner, with two female tile-edge joins.",
       "dimensions": [
         480,
         300
       ],
-      "pixels_per_mm": 4.158531005439545,
-      "bytes": 19587,
-      "sha256": "502fc64ab4333e1922a058d10c78e5f9b8b6d1721cfec58ca67f8b5ecec82501",
-      "source_render_sha256": "18cf2b762c0db197b112f95ef005a66bd00dfd5148f4a20fc630de80b8d3c7dd",
-      "source_step_sha256": "af75634ef041ada15f6878097fc8c0a151405a48e93e58ead7e5299b0e2b31f1"
+      "pixels_per_mm": 3.318687822681432,
+      "bytes": 15206,
+      "sha256": "d8945c1e93ebb59ec80663191482a18b8da56b6cd11118e272fda4ca5c13ef77",
+      "source_render_sha256": "6aa6147e335929c7c8dc4e272dc0387629eb50592f37d5e5d0f5bcf411d327fc",
+      "source_step_sha256": "b6a06ed0621be256f0dfd8493a45dcfe7170ce2a3a915715ff2764a41f01c1d2",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
     },
     {
-      "key": "corner-out-v4",
+      "key": "corner-out-v3-out20-complete-holes",
       "family": "corner-out",
-      "public_name": "corner-out_v4_original",
+      "public_name": "corner-out_v3_out20mm_complete-holes_original",
+      "parameters": {
+        "family": "corner-out",
+        "nx": 1,
+        "ny": 1,
+        "variant": 3,
+        "length": 60,
+        "height": 50,
+        "interface": {
+          "pitch": 60.0,
+          "height": 13.0,
+          "fit_offset": 0.0,
+          "joint_style": "original"
+        },
+        "panel_height_cells": null,
+        "edge_outward": 20.0,
+        "complete_edge_holes": true
+      },
+      "size_mm": [
+        80.0000001,
+        80.00000010000001,
+        13.0000002
+      ],
+      "file": "images/attachments/corner-out-v3-out20-complete-holes.png",
+      "alt": "corner-out, variant 3 / 20 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "The whole northeast L corner, with two female tile-edge joins.",
+      "dimensions": [
+        480,
+        300
+      ],
+      "pixels_per_mm": 3.318687822681432,
+      "bytes": 17326,
+      "sha256": "780406c24b488d2afc4e14109ac8ac59615e26534ac6b595448db3bd952973bb",
+      "source_render_sha256": "4088392387237a94c5a40a1d089bc9336da54de1093e2199f9c3a4ec2ac034d4",
+      "source_step_sha256": "24cd26a2c5d0811974c33f55a3ec66e0073a664df40042343881f65d60aa2e5c",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
+    },
+    {
+      "key": "corner-out-v3-out30-complete-holes",
+      "family": "corner-out",
+      "public_name": "corner-out_v3_out30mm_complete-holes_original",
+      "parameters": {
+        "family": "corner-out",
+        "nx": 1,
+        "ny": 1,
+        "variant": 3,
+        "length": 60,
+        "height": 50,
+        "interface": {
+          "pitch": 60.0,
+          "height": 13.0,
+          "fit_offset": 0.0,
+          "joint_style": "original"
+        },
+        "panel_height_cells": null,
+        "edge_outward": 30.0,
+        "complete_edge_holes": true
+      },
+      "size_mm": [
+        90.0000001,
+        90.00000010000001,
+        13.0000002
+      ],
+      "file": "images/attachments/corner-out-v3-out30-complete-holes.png",
+      "alt": "corner-out, variant 3 / 30 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "The whole northeast L corner, with two female tile-edge joins.",
+      "dimensions": [
+        480,
+        300
+      ],
+      "pixels_per_mm": 3.318687822681432,
+      "bytes": 19591,
+      "sha256": "3bd9d67d1d2e039a5cd49d0406ec3c9fa52a9022dd64efef3c525de519a1695d",
+      "source_render_sha256": "10ab7c37473fab3b481f052cb5f18f38b293aadb84b67a8423cc0381ddcd9a64",
+      "source_step_sha256": "33d15d90c6434bf99aead59478a68d0ee4199615cf6899534fdd9d8ee8f05652",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
+    },
+    {
+      "key": "corner-out-v4-complete-holes",
+      "family": "corner-out",
+      "public_name": "corner-out_v4_complete-holes_original",
       "parameters": {
         "family": "corner-out",
         "nx": 1,
@@ -1982,30 +3631,127 @@
           "fit_offset": 0.0,
           "joint_style": "original"
         },
-        "panel_height_cells": null
+        "panel_height_cells": null,
+        "complete_edge_holes": true
       },
       "size_mm": [
-        10.000000100000005,
-        67.07106784524687,
-        13.0000002
+        10.000000100000001,
+        69.12132044355964,
+        13.000000200000002
       ],
-      "file": "images/attachments/corner-out-v4.png",
-      "alt": "corner-out, variant 4, original joints: isometric STEP-derived render",
-      "description": "An R3 outer-edge finishing piece in one of six supported arrangements.",
+      "file": "images/attachments/corner-out-v4-complete-holes.png",
+      "alt": "corner-out, variant 4 / 10 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "The east half of the southeast mixed-sex corner, with one female tile-edge join. Use it with v5; their diagonal faces form a butt seam and do not clip together.",
       "dimensions": [
         480,
         300
       ],
-      "pixels_per_mm": 4.158531005439545,
-      "bytes": 11483,
-      "sha256": "0166872ebf00a1c8cf18a76d21f00c6a85978cc70ea93782474ee7a116c0f523",
-      "source_render_sha256": "406644e817f136f2849e107ff4094884d6024e64e6209f9917fa33f4650ccce8",
-      "source_step_sha256": "7b4f813f42506de18568e3159d6d8c8504676660bb123884bc534392c998718c"
+      "pixels_per_mm": 3.318687822681432,
+      "bytes": 9475,
+      "sha256": "7b650d8727faf4d38ab021b09e8f77099704aee3e7412041885fb520cb7fb004",
+      "source_render_sha256": "20dee631e75f47e7229f6bea7a12b458ebcfedcd787a309b8204c0261cd3cb80",
+      "source_step_sha256": "b1b04e07fd7f1d1ca12af7d0f347359e5a1bbb14c82ae8c7d4451c24c0598654",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
     },
     {
-      "key": "corner-out-v5",
+      "key": "corner-out-v4-out20-complete-holes",
       "family": "corner-out",
-      "public_name": "corner-out_v5_original",
+      "public_name": "corner-out_v4_out20mm_complete-holes_original",
+      "parameters": {
+        "family": "corner-out",
+        "nx": 1,
+        "ny": 1,
+        "variant": 4,
+        "length": 60,
+        "height": 50,
+        "interface": {
+          "pitch": 60.0,
+          "height": 13.0,
+          "fit_offset": 0.0,
+          "joint_style": "original"
+        },
+        "panel_height_cells": null,
+        "edge_outward": 20.0,
+        "complete_edge_holes": true
+      },
+      "size_mm": [
+        20.0000001,
+        79.12132044355965,
+        13.000000200000002
+      ],
+      "file": "images/attachments/corner-out-v4-out20-complete-holes.png",
+      "alt": "corner-out, variant 4 / 20 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "The east half of the southeast mixed-sex corner, with one female tile-edge join. Use it with v5; their diagonal faces form a butt seam and do not clip together.",
+      "dimensions": [
+        480,
+        300
+      ],
+      "pixels_per_mm": 3.318687822681432,
+      "bytes": 10934,
+      "sha256": "44572422ab050e31baf9ac8a306d1602243919dc031fc3773fd37f0052b834e1",
+      "source_render_sha256": "a4f4bf1102dcaa2b3d8e8da8c930caaa71be6ff3576993fec5a226d81aba5f19",
+      "source_step_sha256": "529ccffe0ccc7b1607a7c2bcf1878c73f282ef8a54acb7489506acb358e34247",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
+    },
+    {
+      "key": "corner-out-v4-out30-complete-holes",
+      "family": "corner-out",
+      "public_name": "corner-out_v4_out30mm_complete-holes_original",
+      "parameters": {
+        "family": "corner-out",
+        "nx": 1,
+        "ny": 1,
+        "variant": 4,
+        "length": 60,
+        "height": 50,
+        "interface": {
+          "pitch": 60.0,
+          "height": 13.0,
+          "fit_offset": 0.0,
+          "joint_style": "original"
+        },
+        "panel_height_cells": null,
+        "edge_outward": 30.0,
+        "complete_edge_holes": true
+      },
+      "size_mm": [
+        30.0000001,
+        89.12132044355964,
+        13.000000200000002
+      ],
+      "file": "images/attachments/corner-out-v4-out30-complete-holes.png",
+      "alt": "corner-out, variant 4 / 30 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "The east half of the southeast mixed-sex corner, with one female tile-edge join. Use it with v5; their diagonal faces form a butt seam and do not clip together.",
+      "dimensions": [
+        480,
+        300
+      ],
+      "pixels_per_mm": 3.318687822681432,
+      "bytes": 11894,
+      "sha256": "6c76299eff48cdcba56b050d470a21f786c30c02a3de82d29c53ab7961d0d572",
+      "source_render_sha256": "607e65c42d54489d740fb97c23fb13cab719c41be92a4c694008677d2825f2d9",
+      "source_step_sha256": "502186af64d88a28d70549f12652ae1ab44004984cf74f079197447bb05148ce",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
+    },
+    {
+      "key": "corner-out-v5-complete-holes",
+      "family": "corner-out",
+      "public_name": "corner-out_v5_complete-holes_original",
       "parameters": {
         "family": "corner-out",
         "nx": 1,
@@ -2019,30 +3765,127 @@
           "fit_offset": 0.0,
           "joint_style": "original"
         },
-        "panel_height_cells": null
+        "panel_height_cells": null,
+        "complete_edge_holes": true
       },
       "size_mm": [
-        67.07106784524687,
+        69.12132044355964,
         16.0,
         13.000000200005319
       ],
-      "file": "images/attachments/corner-out-v5.png",
-      "alt": "corner-out, variant 5, original joints: isometric STEP-derived render",
-      "description": "An R3 outer-edge finishing piece in one of six supported arrangements.",
+      "file": "images/attachments/corner-out-v5-complete-holes.png",
+      "alt": "corner-out, variant 5 / 10 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "The south half of the southeast mixed-sex corner, with one male tile-edge join. Use it with v4; their diagonal faces form a butt seam and do not clip together.",
       "dimensions": [
         480,
         300
       ],
-      "pixels_per_mm": 4.158531005439545,
-      "bytes": 11024,
-      "sha256": "c50563b34b2b23cbb6bb23d9dee8a2495df188a2345bd226f512022661a3d4ea",
-      "source_render_sha256": "63de24e83909dc86b3c1ebc6402331e343ccfd128d253147159e3f49869dff46",
-      "source_step_sha256": "8a08ffad465635ae2453a74fc7842773c6820f383c5ff8d1ebb366dd37b2e4e0"
+      "pixels_per_mm": 3.318687822681432,
+      "bytes": 8887,
+      "sha256": "076838dec5ac8a6f846d7a1670c4c08e4b4543a88ed1c382addd84e1621a011c",
+      "source_render_sha256": "d0911c195419d3a0fb80b722776ee46d530101fcbe63c05e47244a7386ca7335",
+      "source_step_sha256": "c59642ac28e2553cbcf346958e7af2f3d738ae03234c82121bf5a61a6f549df3",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
     },
     {
-      "key": "corner-out-v6",
+      "key": "corner-out-v5-out20-complete-holes",
       "family": "corner-out",
-      "public_name": "corner-out_v6_original",
+      "public_name": "corner-out_v5_out20mm_complete-holes_original",
+      "parameters": {
+        "family": "corner-out",
+        "nx": 1,
+        "ny": 1,
+        "variant": 5,
+        "length": 60,
+        "height": 50,
+        "interface": {
+          "pitch": 60.0,
+          "height": 13.0,
+          "fit_offset": 0.0,
+          "joint_style": "original"
+        },
+        "panel_height_cells": null,
+        "edge_outward": 20.0,
+        "complete_edge_holes": true
+      },
+      "size_mm": [
+        79.12132044355964,
+        26.0,
+        13.000000200005319
+      ],
+      "file": "images/attachments/corner-out-v5-out20-complete-holes.png",
+      "alt": "corner-out, variant 5 / 20 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "The south half of the southeast mixed-sex corner, with one male tile-edge join. Use it with v4; their diagonal faces form a butt seam and do not clip together.",
+      "dimensions": [
+        480,
+        300
+      ],
+      "pixels_per_mm": 3.318687822681432,
+      "bytes": 9621,
+      "sha256": "5b559354d54e9ce259a2274b5adee76dd23677a6d7942e17a6c0a547aac1a2a7",
+      "source_render_sha256": "9427a6e0614d5fef6c0c4e0b41fa700198dab0dca8db92285493cfe5cce3df38",
+      "source_step_sha256": "49c04ee93b431b87eb0f081b985dd61e83dc56d5dad4fe365d18296c7012bb43",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
+    },
+    {
+      "key": "corner-out-v5-out30-complete-holes",
+      "family": "corner-out",
+      "public_name": "corner-out_v5_out30mm_complete-holes_original",
+      "parameters": {
+        "family": "corner-out",
+        "nx": 1,
+        "ny": 1,
+        "variant": 5,
+        "length": 60,
+        "height": 50,
+        "interface": {
+          "pitch": 60.0,
+          "height": 13.0,
+          "fit_offset": 0.0,
+          "joint_style": "original"
+        },
+        "panel_height_cells": null,
+        "edge_outward": 30.0,
+        "complete_edge_holes": true
+      },
+      "size_mm": [
+        89.12132044355964,
+        36.0,
+        13.000000200005319
+      ],
+      "file": "images/attachments/corner-out-v5-out30-complete-holes.png",
+      "alt": "corner-out, variant 5 / 30 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "The south half of the southeast mixed-sex corner, with one male tile-edge join. Use it with v4; their diagonal faces form a butt seam and do not clip together.",
+      "dimensions": [
+        480,
+        300
+      ],
+      "pixels_per_mm": 3.318687822681432,
+      "bytes": 10310,
+      "sha256": "0258864351881c8f9076684b36164df93f7296f8aef0dc417b6f700f6b75dfe6",
+      "source_render_sha256": "68d1066b3ee29114b522e270938e3841bca005c65fa5549484390cad97e273f7",
+      "source_step_sha256": "b5149506e143e4201b582758192f2a7681867000777f7e18eb80853be2df9cc4",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
+    },
+    {
+      "key": "corner-out-v6-complete-holes",
+      "family": "corner-out",
+      "public_name": "corner-out_v6_complete-holes_original",
       "parameters": {
         "family": "corner-out",
         "nx": 1,
@@ -2056,25 +3899,122 @@
           "fit_offset": 0.0,
           "joint_style": "original"
         },
-        "panel_height_cells": null
+        "panel_height_cells": null,
+        "complete_edge_holes": true
       },
       "size_mm": [
-        70.0,
-        70.0,
+        70.0000001,
+        70.0000001,
         13.000000200005319
       ],
-      "file": "images/attachments/corner-out-v6.png",
-      "alt": "corner-out, variant 6, original joints: isometric STEP-derived render",
-      "description": "An R3 outer-edge finishing piece in one of six supported arrangements.",
+      "file": "images/attachments/corner-out-v6-complete-holes.png",
+      "alt": "corner-out, variant 6 / 10 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "The whole southwest L corner, with two male tile-edge joins.",
       "dimensions": [
         480,
         300
       ],
-      "pixels_per_mm": 4.158531005439545,
-      "bytes": 23138,
-      "sha256": "411f90ac0ef2b9e36daaa5bf15bd260c9f55d781a7aa130ebbd3254b58d24f4d",
-      "source_render_sha256": "fe64263af2d350e071c1b30a3dccc6b2260b3bc3cb2b4e501fee840180210357",
-      "source_step_sha256": "d6365d71164af0204c0efdd44672dee2452de32d16851d3230fbd1f546cb05a3"
+      "pixels_per_mm": 3.318687822681432,
+      "bytes": 18154,
+      "sha256": "80be743e35bb23784ca459f209bde325c0272d034e82d488ef9626c0e16838e2",
+      "source_render_sha256": "ccf66b968d43cbe88bfcc04dad8067135603e5cdfb732b546547b6bdc5b501d9",
+      "source_step_sha256": "61d9cd55c489a5487dba9fde7b5b085b2411f968f05869633942535bf438f8c0",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
+    },
+    {
+      "key": "corner-out-v6-out20-complete-holes",
+      "family": "corner-out",
+      "public_name": "corner-out_v6_out20mm_complete-holes_original",
+      "parameters": {
+        "family": "corner-out",
+        "nx": 1,
+        "ny": 1,
+        "variant": 6,
+        "length": 60,
+        "height": 50,
+        "interface": {
+          "pitch": 60.0,
+          "height": 13.0,
+          "fit_offset": 0.0,
+          "joint_style": "original"
+        },
+        "panel_height_cells": null,
+        "edge_outward": 20.0,
+        "complete_edge_holes": true
+      },
+      "size_mm": [
+        80.0000001,
+        80.0000001,
+        13.000000200005319
+      ],
+      "file": "images/attachments/corner-out-v6-out20-complete-holes.png",
+      "alt": "corner-out, variant 6 / 20 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "The whole southwest L corner, with two male tile-edge joins.",
+      "dimensions": [
+        480,
+        300
+      ],
+      "pixels_per_mm": 3.318687822681432,
+      "bytes": 20662,
+      "sha256": "db3eb5db866fcfe0028b20a56ac863346556b1f08dee4658cf306de2dc904c01",
+      "source_render_sha256": "918db2c26e5d5ec8aa55492d60beec4e027678c9460c32fe59ff5b93a75ec212",
+      "source_step_sha256": "0a6d3c6f87d2a5db1f550101c67465c423d615b634a0e61b7eab041152893cc3",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
+    },
+    {
+      "key": "corner-out-v6-out30-complete-holes",
+      "family": "corner-out",
+      "public_name": "corner-out_v6_out30mm_complete-holes_original",
+      "parameters": {
+        "family": "corner-out",
+        "nx": 1,
+        "ny": 1,
+        "variant": 6,
+        "length": 60,
+        "height": 50,
+        "interface": {
+          "pitch": 60.0,
+          "height": 13.0,
+          "fit_offset": 0.0,
+          "joint_style": "original"
+        },
+        "panel_height_cells": null,
+        "edge_outward": 30.0,
+        "complete_edge_holes": true
+      },
+      "size_mm": [
+        90.0000001,
+        90.0000001,
+        13.000000200005319
+      ],
+      "file": "images/attachments/corner-out-v6-out30-complete-holes.png",
+      "alt": "corner-out, variant 6 / 30 mm outward / completes accepted 10 mm boundary holes, original joints: isometric STEP-derived render",
+      "description": "The whole southwest L corner, with two male tile-edge joins.",
+      "dimensions": [
+        480,
+        300
+      ],
+      "pixels_per_mm": 3.318687822681432,
+      "bytes": 22966,
+      "sha256": "c59ab4bf9954110bbfceffb2e72c0062685048b30a6d2f945c1de122eaa883c8",
+      "source_render_sha256": "e3e752042bbf6367e37c6067a3439a7f41839df4ff8a9fb5e99f489c968d4ad4",
+      "source_step_sha256": "f414ddd2df4be2385083239686136844deaf42327db92ae6eb59002db5b5555f",
+      "provenance": {
+        "generator_commit": "9abf4b06e14717445a3d0e823e93d9c70a6757bd",
+        "generator_tree": "131ea1cd227d2ecd544a2eb3dc5800d32e6b845f",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "4ff30e16ed99cb7a6aae661f686062c4d1f93d28d0ebcc7188e0e0e2b0137a71"
+      }
     },
     {
       "key": "support-1",
@@ -2558,5 +4498,5 @@
       "source_step_sha256": "699d766094e354d4655cb4318f5fb84f0fc66c3c03e5899d30f74c221b42b109"
     }
   ],
-  "provenance_scope": "Top-level revisions describe retained baseline images; per-image provenance overrides them for regenerated assets. This is not a full-gallery rerender."
+  "provenance_scope": "Top-level revisions describe retained baseline images; per-image provenance overrides them for regenerated perimeter assets. This is not a full-gallery rerender."
 }
