@@ -33,8 +33,36 @@ jobs:
         run: |
           uv run --no-sync ruff check .
           uv run --no-sync ruff format --check .
+      - name: Record runner resources
+        run: |
+          uv run --no-sync python - <<'PY'
+          import importlib.metadata
+          import os
+          import platform
+          from pathlib import Path
+
+          print("Platform:", platform.platform())
+          print("Logical CPUs:", os.cpu_count())
+          print("Allowed CPUs:", sorted(os.sched_getaffinity(0)))
+          print("Load:", os.getloadavg())
+          print("\n".join(line for line in Path("/proc/meminfo").read_text().splitlines() if line.startswith(("MemTotal:", "MemAvailable:"))))
+          for name in ("cpu.max", "memory.max", "memory.current"):
+              path = Path("/sys/fs/cgroup") / name
+              print(name, path.read_text().strip() if path.exists() else "unavailable")
+          for package in ("build123d", "cadquery-ocp-novtk", "numpy", "scipy", "pytest", "pytest-xdist"):
+              print(package, importlib.metadata.version(package))
+          PY
       - name: Portable geometry and export tests
-        run: uv run --no-sync pytest -q -n 2 --dist loadfile -m "not native and not reference" --durations=0 --durations-min=0
+        run: /usr/bin/time -v uv run --no-sync pytest -q -n 2 --dist worksteal -m "not native and not reference" --durations=0 --durations-min=0
+      - name: Record job memory high-water mark
+        if: always()
+        run: |
+          if [ -r /sys/fs/cgroup/memory.peak ]; then
+            printf 'Cgroup memory.peak (whole job, bytes): '
+            cat /sys/fs/cgroup/memory.peak
+          else
+            echo 'Cgroup memory.peak unavailable; GNU time reports maximum individual process RSS, not combined worker RSS.'
+          fi
       - name: Build and inspect distributions
         run: |
           uv build

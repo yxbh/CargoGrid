@@ -15,13 +15,22 @@ from scipy.spatial import cKDTree
 
 
 def _mesh_edges(faces):
-    counts, orientation = Counter(), Counter()
-    for a, b, c in faces:
-        for x, y in ((a, b), (b, c), (c, a)):
-            edge = (min(x, y), max(x, y))
-            counts[edge] += 1
-            orientation[edge] += 1 if x < y else -1
-    return counts, orientation
+    if not len(faces):
+        return Counter(), Counter()
+    faces = np.asarray(faces)
+    edges = np.concatenate((faces[:, (0, 1)], faces[:, (1, 2)], faces[:, (2, 0)]))
+    direction = np.where(edges[:, 0] < edges[:, 1], 1, -1)
+    edges.sort(axis=1)
+    order = np.lexsort((edges[:, 1], edges[:, 0]))
+    edges, direction = edges[order], direction[order]
+    starts = np.r_[0, np.flatnonzero(np.any(edges[1:] != edges[:-1], axis=1)) + 1]
+    counts = np.diff(np.r_[starts, len(edges)])
+    orientation = np.add.reduceat(direction, starts)
+    keys = [tuple(edge) for edge in edges[starts].tolist()]
+    return (
+        Counter(dict(zip(keys, counts.tolist()))),
+        Counter(dict(zip(keys, orientation.tolist()))),
+    )
 
 
 def _close_cad_microtriangles(shape, vertices, faces, counts, orientation):

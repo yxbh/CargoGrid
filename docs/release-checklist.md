@@ -22,7 +22,7 @@ uv build
 uv run python tools/check_distributions.py dist
 ```
 
-Use fewer workers on a smaller machine. CI uses two workers on the GitHub runner. Do not use xdist for native Bambu or local-reference tests.
+Use fewer workers on a smaller machine. CI uses two workers with `--dist worksteal` so a long geometry test does not leave the other worker idle behind a whole-file assignment. `--dist loadfile` remains useful for controlled comparisons and module-local fixtures; work stealing can initialize a module fixture on both workers. Do not use xdist for native Bambu or local-reference tests.
 
 Build into a fresh directory. The distribution checker expects one wheel and one source archive and rejects extra build output. It checks package metadata, entry points, the licence and the allowlist; it isn't a general secret or licence scanner.
 
@@ -32,7 +32,7 @@ Install the wheel into a clean Python 3.12 environment outside the source path. 
 
 CI runs for pull requests, pushes to `main` and manual dispatches. It does not run a second copy for every push to a PR branch. A concurrency group cancels older runs when a newer commit reaches the same PR.
 
-The Linux job installs the CAD runtime libraries, runs Ruff, runs the portable tests with two process workers, builds both distributions and installs the wheel into a clean environment. Its smoke commands generate a tile, bracket, normal stop and ramp, then check their manifest dimensions, orientations and support settings with named assertion messages.
+The Linux job installs the CAD runtime libraries, runs Ruff, runs the portable tests with two process workers, builds both distributions and installs the wheel into a clean environment. Its smoke commands generate a tile, bracket, normal stop and ramp, then check their manifest dimensions, orientations and support settings with named assertion messages. Resource logs report available CPUs, affinity, cgroup limits and memory where the runner exposes them. GNU time's maximum process RSS is not the sum or simultaneous peak of both workers; a cgroup high-water mark covers the whole job, not only pytest.
 
 The portable test command includes pytest's built-in `--durations=0 --durations-min=0` report. It lists every test's setup, call and teardown durations, slowest first, without adding a timing plugin. Add the same flags to a local run when investigating slow tests. These are per-phase elapsed times: phases on parallel workers can overlap, so their sum is not the CI job's wall time.
 
@@ -41,6 +41,8 @@ Keep option propagation, design metadata, family geometry and whole-catalogue pa
 The bracket catalogue-fit test limits enumeration to all maintained brackets, then makes independent source-pose and print-pose catalogue requests with real geometry. The H2D integration test keeps the whole unpatched inventory, compares complete parameters against independent per-family contracts, and checks actual posed solids, reach, gaps, support settings and family-grouped plates. Add an independent inventory and grouping contract when introducing a family; don't replace those contracts with global design totals or incidental plate numbers. The native archive's plate limit remains a separate export contract.
 
 For a test refactor, collect test IDs before and after, map renamed or split assertions to their new owners, and compare equivalent selectors with the same worker count and `--dist loadfile`. Keep raw duration reports and measurements with the review, not in maintained documentation. Run the full portable suite after the focused checks. Keep geometry cases and tolerances intact; don't introduce shared mutable solids or cross-run geometry caches to improve a timing result.
+
+Export-lifecycle tests check fresh ownership, mutations between requests, one checked mesh shared by output formats and copies, and the actual serialized STL/3MF topology and coordinates. Tile-construction tests check independent joint-tool topology and one multi-tool socket cut; the family, hole, scaled-interface, STEP and mesh tests still establish the resulting geometry. When changing these stages, compare complete cold CLI exports as well as the suite. Record source and dependency versions, worker count, host contention, CPU time and peak memory; overlapping test or profiler phases must not be added together as wall time.
 
 CI can't use private reference files, local slicer profiles or printers. Treat a CI failure as a source, package or test failure until the log shows otherwise.
 

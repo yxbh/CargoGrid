@@ -1,5 +1,6 @@
 """Shared tile construction and default circular-hole keep-out checks."""
 
+from copy import deepcopy
 from dataclasses import dataclass
 from math import hypot
 
@@ -106,8 +107,14 @@ def make_tile(tile: Tile = Tile()) -> Part:
         d + tile.filler_south + tile.filler_north,
     )
 
+    tools: dict[tuple[float, bool], Part] = {}
+
     def tool(x: float, y: float, angle: float, depth: float, male: bool) -> Part:
-        solid = tile_join_tool(tile.interface, depth=depth, male=male)
+        key = (depth, male)
+        if key not in tools:
+            tools[key] = tile_join_tool(tile.interface, depth=depth, male=male)
+        # Located OCP shapes share topology; each Boolean needs an independent tool.
+        solid = deepcopy(tools[key])
         return solid.rotate(Axis.Z, angle).moved(Location((x, y, 0)))
 
     male_tools = []
@@ -215,14 +222,11 @@ def make_tile(tile: Tile = Tile()) -> Part:
         cutter = socket_entry_tool(tile.interface)
         part = part.cut(*(cutter.moved(Location((cx, cy, 0))) for cx, cy in socket_centers(tile)))
     else:
-        for cx, cy in socket_centers(tile):
-            cutter = prism(x_profile(tile.interface, offset=tile.interface.fit_offset), h + 2)
-            part = part.cut(cutter.moved(Location((cx, cy, -1))))
+        profile = x_profile(tile.interface, offset=tile.interface.fit_offset)
+        cutter = prism(profile, h + 2)
+        part = part.cut(*(cutter.moved(Location((cx, cy, -1))) for cx, cy in socket_centers(tile)))
         entry_wires = [
-            x_profile(tile.interface, offset=tile.interface.fit_offset)
-            .outer_wire()
-            .moved(Location((cx, cy, h)))
-            for cx, cy in socket_centers(tile)
+            profile.outer_wire().moved(Location((cx, cy, h))) for cx, cy in socket_centers(tile)
         ]
         entry_edges = [
             e
