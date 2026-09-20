@@ -299,7 +299,6 @@ def test_separate_tile_insertion_bearing_and_solid_backing(nx, ny, holes):
 
 def test_bracket_variants_and_scaled_interface_policy():
     variants = accessory_variants(BuildVolume(350, 320, 325))
-    assert len(variants) == 61
     assert {
         (a.nx, a.ny, a.panel_height_cells or a.ny)
         for a in variants
@@ -323,13 +322,6 @@ def test_bracket_variants_and_scaled_interface_policy():
     assert custom_bracket.is_valid
     with pytest.raises(ValueError, match="was replaced"):
         Accessory("lock-90")
-    a = accessory_design(Accessory("vertical-tile-bracket", nx=1, ny=2))
-    b = accessory_design(Accessory("vertical-tile-bracket", nx=2, ny=1))
-    assert a.name != b.name
-    assert a.display_name == "Deep tall tile bracket — floor 1x2, wall 1x2"
-    assert b.display_name == "Wide low tile bracket — floor 2x1, wall 2x1"
-    assert a.apply_orientation_to_bambu
-    assert a.recommended_print_rotation_x == pytest.approx(134.22827708427317)
     assert make_accessory(
         replace(
             Accessory("vertical-tile-bracket", nx=2), interface=Interface(joint_style="full-height")
@@ -449,7 +441,9 @@ def test_shallow_bracket_side_down_pose_and_scoped_support(nx):
     assert design.bambu_size == pytest.approx((140.378174593052, 60, 60 * nx))
 
 
-def test_explicit_matching_panel_height_normalizes_to_stable_existing_identity():
+def test_explicit_matching_panel_height_normalizes_to_stable_existing_identity(
+    accessory_metadata_shape,
+):
     implicit = Accessory("vertical-tile-bracket", nx=2, ny=1)
     explicit = Accessory(
         "vertical-tile-bracket",

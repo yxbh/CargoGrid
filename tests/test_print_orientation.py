@@ -11,6 +11,7 @@ from build123d import import_step
 from test_export import _project_facts
 
 from cargo_grid import BuildVolume
+from cargo_grid import catalogue as catalogue_module
 from cargo_grid.accessories import (
     VERTICAL_BRACKET_CELLS,
     VERTICAL_BRACKET_CONFIGS,
@@ -338,18 +339,61 @@ def test_cli_default_bracket_cells_and_orientation_aware_height(tmp_path):
         )
 
 
-def test_catalogue_fit_uses_project_pose_only_when_requested():
+def test_catalogue_fit_uses_project_pose_only_when_requested(monkeypatch):
+    enumerate_accessories = catalogue_module.accessory_variants
+    requests = []
+
+    def brackets(build, interface):
+        specs = [
+            spec
+            for spec in enumerate_accessories(build, interface)
+            if spec.family == "vertical-tile-bracket"
+        ]
+        requests.append(specs)
+        return specs
+
+    monkeypatch.setattr(catalogue_module, "accessory_variants", brackets)
+    monkeypatch.setattr(catalogue_module, "tile_sizes", lambda build, interface: [])
     build = BuildVolume(180, 130, 110)
     source = catalogue_job(build)
     project = catalogue_job(build, orient_for_bambu=True)
-    assert (
-        len([d for d in source.designs if d.parameters.get("family") == "vertical-tile-bracket"])
-        == 1
-    )
-    assert (
-        len([d for d in project.designs if d.parameters.get("family") == "vertical-tile-bracket"])
-        == 4
-    )
+    expected_specs = {
+        Accessory("vertical-tile-bracket", nx=1, ny=2),
+        Accessory("vertical-tile-bracket", nx=2, ny=1),
+        Accessory("vertical-tile-bracket", nx=2, ny=2),
+        Accessory("vertical-tile-bracket", nx=1, ny=1, panel_height_cells=2),
+        Accessory("vertical-tile-bracket", nx=2, ny=1, panel_height_cells=2),
+    }
+    assert len(requests) == 2
+    assert all(len(specs) == len(set(specs)) and set(specs) == expected_specs for specs in requests)
+
+    def cells(parameters):
+        return (
+            parameters["nx"],
+            parameters["ny"],
+            parameters.get("panel_height_cells", parameters["ny"]),
+        )
+
+    all_cells = {(1, 2, 2), (2, 1, 1), (2, 2, 2), (1, 1, 2), (2, 1, 2)}
+    for job, expected, oriented in (
+        (source, {(2, 1, 1)}, False),
+        (project, {(1, 2, 2), (2, 1, 1), (2, 2, 2), (1, 1, 2)}, True),
+    ):
+        assert {cells(design.parameters) for design in job.designs} == expected
+        assert len(job.designs) == len(expected)
+        assert {cells(item["parameters"]) for item in job.omitted} == all_cells - expected
+        assert len(job.omitted) == len(all_cells - expected)
+        for design in job.designs:
+            assert design.shape.is_valid and len(design.shape.solids()) == 1
+            assert design.shape.volume > 0
+            size = design.bambu_size if oriented else design.size
+            assert build.placement(size) is not None
+        for item in job.omitted:
+            assert build.placement(item["size_mm"]) is None
+            assert item["reason"] == "actual bounds exceed usable envelope"
+    assert not {id(design) for design in source.designs} & {
+        id(design) for design in project.designs
+    }
 
 
 def test_bambu_rejects_claimed_accessory_without_its_validated_pose(tmp_path):

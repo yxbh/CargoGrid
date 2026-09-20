@@ -36,6 +36,12 @@ The Linux job installs the CAD runtime libraries, runs Ruff, runs the portable t
 
 The portable test command includes pytest's built-in `--durations=0 --durations-min=0` report. It lists every test's setup, call and teardown durations, slowest first, without adding a timing plugin. Add the same flags to a local run when investigating slow tests. These are per-phase elapsed times: phases on parallel workers can overlap, so their sum is not the CI job's wall time.
 
+Keep option propagation, design metadata, family geometry and whole-catalogue packing as separate test responsibilities. CLI option tests capture the resolved spec at the construction boundary; each distinct physical hole configuration also goes through real CLI export. Metadata-only accessory tests use a small real solid at `make_accessory`, while family geometry tests still construct the actual bodies. Neither parser results nor manifest hole counts prove that a bore was cut.
+
+The bracket catalogue-fit test limits enumeration to all maintained brackets, then makes independent source-pose and print-pose catalogue requests with real geometry. The H2D integration test keeps the whole unpatched inventory, compares complete parameters against independent per-family contracts, and checks actual posed solids, reach, gaps, support settings and family-grouped plates. Add an independent inventory and grouping contract when introducing a family; don't replace those contracts with global design totals or incidental plate numbers. The native archive's plate limit remains a separate export contract.
+
+For a test refactor, collect test IDs before and after, map renamed or split assertions to their new owners, and compare equivalent selectors with the same worker count and `--dist loadfile`. Keep raw duration reports and measurements with the review, not in maintained documentation. Run the full portable suite after the focused checks. Keep geometry cases and tolerances intact; don't introduce shared mutable solids or cross-run geometry caches to improve a timing result.
+
 CI can't use private reference files, local slicer profiles or printers. Treat a CI failure as a source, package or test failure until the log shows otherwise.
 
 ## Optional local Bambu and reference checks
