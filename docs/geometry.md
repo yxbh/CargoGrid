@@ -118,6 +118,8 @@ The 2x2 angled stop supports unit sizes up to 60 mm because its coupled R2 body 
 
 Each exported design must be one valid, positive-volume solid. STEP reimport checks body count, bounds within 0.00001 mm and adaptive BRepGProp volume at 1e-12 against the existing surface-area-times-OCCT-confusion budget. The writer tries OCCT precision modes against those same gates and keeps the first passing file; it doesn't change the source solid or widen a tolerance. The manifest records the chosen mode, delta, method and budget.
 
+Within one STEP check, the writer measures the unchanged source bounds once and each precision attempt's reimported bounds once, using the same precise CAD query for both. These measurements are local to the check; another export measures again, including after a source shape is moved or changed.
+
 Mesh chord tolerance is 0.02 mm. Surface seams are welded only within 0.000001--0.00001 mm, bounded by kernel vertex tolerance and an independent displacement cap. Unmeshed faces are accepted only below 0.0000000001 mm2; all resulting meshes must still be closed, consistently oriented and positive-volume, without zero-area triangles.
 
 A remaining isolated three-edge crack can be closed only when it is an unambiguous oppositely oriented triangle, contains no duplicate face, has maximum edge 0.1 mm, and has area below both 0.0000001 mm2 and its perimeter times OCCT linear confusion. Fifteen barycentric probes, including vertices and edge-quarter points, must lie within OCCT's 0.0000001 mm tolerance of the unchanged CAD surface. No vertices move. Larger, ambiguous, nontriangular or off-surface gaps remain errors. The mesh report records any repair and the strict checks still run afterward.

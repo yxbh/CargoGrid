@@ -144,6 +144,7 @@ def _checked_step_roundtrip(
     )
     volume_budget = max(1e-6, shape.area * Precision.Confusion_s())
     source_adaptive_volume = _adaptive_volume(shape)
+    source_bounds = shape.bounding_box()
     last = None
     failures = []
     for precision_mode, mode in attempts:
@@ -152,11 +153,12 @@ def _checked_step_roundtrip(
         restored = import_step(path)
         default_volume_delta = abs(restored.volume - shape.volume)
         adaptive_delta = abs(_adaptive_volume(restored) - source_adaptive_volume)
+        restored_bounds = restored.bounding_box()
         bounds_delta = max(
             abs(a - b)
             for a, b in zip(
-                (*shape.bounding_box().min, *shape.bounding_box().max),
-                (*restored.bounding_box().min, *restored.bounding_box().max),
+                (*source_bounds.min, *source_bounds.max),
+                (*restored_bounds.min, *restored_bounds.max),
             )
         )
         last = (
