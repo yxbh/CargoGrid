@@ -81,9 +81,160 @@
       ],
       "bytes": 74145,
       "sha256": "3b348bcb7cfc4667c827d307d6806609cd279aac19ac87880e9504352d42306f"
+    },
+    {
+      "file": "images/rods-and-braces.png",
+      "dimensions": [
+        1800,
+        900
+      ],
+      "bytes": 79723,
+      "sha256": "8c4c54c55d51d4568ebb67e93a2200c9882e7477f8c2ae26d9e4a608b4f0f776",
+      "provenance": {
+        "generator_commit": "5296a5bf605d5c9be7ac2b753da068f46125a81c",
+        "generator_tree": "8525b8604683cfd4b882e6425b69fb576decd421",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "ecc2309b7263e2b31a0c1df605708e83560831cb6695dd85009b9aa7762ab885"
+      },
+      "items": [
+        "rod-120",
+        "rod-240",
+        "rod-brace-60-d10",
+        "rod-brace-120-d10"
+      ]
     }
   ],
   "items": [
+    {
+      "key": "rod-120",
+      "family": "rod",
+      "public_name": "rod_h120_peg10",
+      "parameters": {
+        "above_mat_height_mm": 120.0,
+        "peg_diameter_mm": 10.0,
+        "tile_thickness_mm": 13.0
+      },
+      "size_mm": [
+        18.0,
+        18.0,
+        132.0
+      ],
+      "file": "images/attachments/rod-120.png",
+      "alt": "rod, 120 mm above mat / 10 mm peg: isometric STEP-derived render",
+      "description": "A 10 mm shaft with a stop collar and a round mat peg. Height is measured above the mat; Bambu projects lay rods horizontally at Y=90 with normal Auto support for these objects.",
+      "dimensions": [
+        480,
+        300
+      ],
+      "pixels_per_mm": 1.1619837862271039,
+      "bytes": 2327,
+      "sha256": "22db16b0b9736526480b1f226e935886f5969e2cc7802ae0b98b8d541401cf7f",
+      "source_render_sha256": "455b9b65cf7a3e29d55ed66410e9af76bac7cd954880226ade635521df4014ee",
+      "source_step_sha256": "46a5d29ddcdb43b7436967cfae281b8c9f0feea617d1ba2413d295a95f980077",
+      "provenance": {
+        "generator_commit": "5296a5bf605d5c9be7ac2b753da068f46125a81c",
+        "generator_tree": "8525b8604683cfd4b882e6425b69fb576decd421",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "ecc2309b7263e2b31a0c1df605708e83560831cb6695dd85009b9aa7762ab885"
+      }
+    },
+    {
+      "key": "rod-240",
+      "family": "rod",
+      "public_name": "rod_h240_peg10",
+      "parameters": {
+        "above_mat_height_mm": 240.0,
+        "peg_diameter_mm": 10.0,
+        "tile_thickness_mm": 13.0
+      },
+      "size_mm": [
+        18.0,
+        18.0,
+        252.0
+      ],
+      "file": "images/attachments/rod-240.png",
+      "alt": "rod, 240 mm above mat / 10 mm peg: isometric STEP-derived render",
+      "description": "A 10 mm shaft with a stop collar and a round mat peg. Height is measured above the mat; Bambu projects lay rods horizontally at Y=90 with normal Auto support for these objects.",
+      "dimensions": [
+        480,
+        300
+      ],
+      "pixels_per_mm": 1.1619837862271039,
+      "bytes": 2451,
+      "sha256": "ce4c9966723230c98487a5d21e379d86c97e07401cb99c4eb1ceb26bf7d1cca8",
+      "source_render_sha256": "63583efb8f459ade7414de2fbad882c0b6b529add71d451f88fc837637961e6f",
+      "source_step_sha256": "171e1c1a424aca84296ce5494792e08a4699bcf5272295a6bd676a84f7ed9964",
+      "provenance": {
+        "generator_commit": "5296a5bf605d5c9be7ac2b753da068f46125a81c",
+        "generator_tree": "8525b8604683cfd4b882e6425b69fb576decd421",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "ecc2309b7263e2b31a0c1df605708e83560831cb6695dd85009b9aa7762ab885"
+      }
+    },
+    {
+      "key": "rod-brace-60-d10",
+      "family": "rod-brace",
+      "public_name": "rod-brace_c60_bore10",
+      "parameters": {
+        "center_spacing_mm": 60.0,
+        "bore_diameter_mm": 10.0
+      },
+      "size_mm": [
+        78.0,
+        18.000000000000004,
+        6.400000000000001
+      ],
+      "file": "images/attachments/rod-brace-60-d10.png",
+      "alt": "rod-brace, 60 mm centres / 10 mm bores: isometric STEP-derived render",
+      "description": "A labelled two-bore link for round rods. Spacing is physical millimetres, not unit cells. Print flat with bores upright and no object support. Nominal 10.0 mm bore fit is user-reported; tested spacing(s) were not specified.",
+      "dimensions": [
+        480,
+        300
+      ],
+      "pixels_per_mm": 3.8292551842717657,
+      "bytes": 16051,
+      "sha256": "fd8d2a5c5309f77acca4b0ec54a3dd9d0358aa2c674f1128c18eb4022296b87b",
+      "source_render_sha256": "70378b4c30d9e9933c72cf88c39f51aeeff4ac57a51428937b0cce2a719701e1",
+      "source_step_sha256": "fc7c0007cbfdca11cd309c6e8251910983512328ebd31288a82e6d73cc2f3d0b",
+      "provenance": {
+        "generator_commit": "5296a5bf605d5c9be7ac2b753da068f46125a81c",
+        "generator_tree": "8525b8604683cfd4b882e6425b69fb576decd421",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "ecc2309b7263e2b31a0c1df605708e83560831cb6695dd85009b9aa7762ab885"
+      }
+    },
+    {
+      "key": "rod-brace-120-d10",
+      "family": "rod-brace",
+      "public_name": "rod-brace_c120_bore10",
+      "parameters": {
+        "center_spacing_mm": 120.0,
+        "bore_diameter_mm": 10.0
+      },
+      "size_mm": [
+        138.0,
+        18.000000000000004,
+        6.4
+      ],
+      "file": "images/attachments/rod-brace-120-d10.png",
+      "alt": "rod-brace, 120 mm centres / 10 mm bores: isometric STEP-derived render",
+      "description": "A labelled two-bore link for round rods. Spacing is physical millimetres, not unit cells. Print flat with bores upright and no object support. Nominal 10.0 mm bore fit is user-reported; tested spacing(s) were not specified.",
+      "dimensions": [
+        480,
+        300
+      ],
+      "pixels_per_mm": 3.8292551842717657,
+      "bytes": 22873,
+      "sha256": "1b84961e25ae4fd663a1a1b33d007bce567d584b22a860f8eee7630cdd9f2587",
+      "source_render_sha256": "c34144fe11f84c9544e1820de275f13e4fd5509a4d3e9663dd368292796a3fb0",
+      "source_step_sha256": "7800eddf3f4fac1b08331354e539bccd4f7f21cb971a3d173378a5d91dc46e46",
+      "provenance": {
+        "generator_commit": "5296a5bf605d5c9be7ac2b753da068f46125a81c",
+        "generator_tree": "8525b8604683cfd4b882e6425b69fb576decd421",
+        "workbench_commit": "ff5b2181afec7f80571fbb95f57dc244418be2d2",
+        "recipe_sha256": "ecc2309b7263e2b31a0c1df605708e83560831cb6695dd85009b9aa7762ab885"
+      }
+    },
     {
       "key": "ramp-1",
       "family": "ramp",

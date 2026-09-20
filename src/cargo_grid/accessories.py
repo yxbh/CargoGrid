@@ -31,6 +31,7 @@ from cargo_grid.interfaces import (
     x_profile,
 )
 from cargo_grid.parameters import Interface, count, positive
+from cargo_grid.rods import Rod, RodBrace, brace_datums, make_rod, make_rod_brace, rod_datums
 
 FAMILIES = (
     "edge-x",
@@ -95,6 +96,7 @@ BAMBU_PRINT_ROTATIONS = {
     "plate": 180.0,
 }
 BAMBU_OBJECT_SETTINGS = {
+    "rod": {"enable_support": "1", "support_type": "normal(auto)"},
     "ramp": {"enable_support": "1", "support_type": "normal(auto)"},
     "vertical-stop": {"enable_support": "1", "support_type": "normal(auto)"},
 }
@@ -781,7 +783,7 @@ def vertical_stop_print_rotation(spec: Accessory) -> float:
     return 180 - degrees(atan(_vertical_stop_slope(spec)))
 
 
-def bambu_print_rotation(spec: Accessory) -> float | None:
+def bambu_print_rotation(spec: Accessory | Rod | RodBrace) -> float | None:
     if spec.family == "vertical-tile-bracket" and spec.panel_height_cells is not None:
         return None
     if spec.family == "vertical-tile-bracket":
@@ -795,7 +797,9 @@ def bambu_print_rotation(spec: Accessory) -> float | None:
     )
 
 
-def bambu_print_rotation_y(spec: Accessory) -> float | None:
+def bambu_print_rotation_y(spec: Accessory | Rod | RodBrace) -> float | None:
+    if isinstance(spec, Rod):
+        return 90.0
     return (
         -90.0
         if spec.family == "vertical-tile-bracket" and spec.panel_height_cells is not None
@@ -828,6 +832,8 @@ def required_bambu_print_rotation(parameters: dict) -> float | None:
 
 
 def required_bambu_print_rotation_y(parameters: dict) -> float | None:
+    if parameters.get("family") == "rod":
+        return 90.0
     return (
         -90.0
         if parameters.get("family") == "vertical-tile-bracket"
@@ -1221,8 +1227,12 @@ def _support(spec: Accessory, *, round_top: bool = True) -> Part:
     return _apply_joins(part, joins)
 
 
-def accessory_datums(spec: Accessory) -> dict:
+def accessory_datums(spec: Accessory | Rod | RodBrace) -> dict:
     """Machine-readable nominal mating datums; no physical-fit assertions."""
+    if isinstance(spec, Rod):
+        return rod_datums(spec)
+    if isinstance(spec, RodBrace):
+        return brace_datums(spec)
     if spec.family in ("plate", "vertical-tile-bracket", "vertical-stop", "lock-45"):
         if spec.family == "vertical-tile-bracket":
             p = spec.interface.pitch
@@ -1338,10 +1348,14 @@ def accessory_datums(spec: Accessory) -> dict:
     return {"underside_z": 0, "top_z": spec.interface.height, "mount_centers": [], "joins": joins}
 
 
-def make_accessory(spec: Accessory) -> Part:
+def make_accessory(spec: Accessory | Rod | RodBrace) -> Part:
     """Build one connected, labeled accessory without changing print orientation."""
+    if isinstance(spec, Rod):
+        return make_rod(spec)
+    if isinstance(spec, RodBrace):
+        return make_rod_brace(spec)
     if not isinstance(spec, Accessory):
-        raise ValueError("spec must be an Accessory")
+        raise ValueError("spec must be an Accessory, Rod or RodBrace")
     if spec.family == "vertical-tile-bracket":
         part = _vertical_bracket(spec)
     elif spec.family == "vertical-stop":

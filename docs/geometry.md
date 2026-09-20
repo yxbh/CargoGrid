@@ -54,9 +54,21 @@ Expansion changes the first support/raft layer, not the model CAD. It may affect
 
 Stacking adds sacrificial support-base and release-interface volumes between copies of the same tile. The gap must leave some support-base thickness after both interfaces. The manifest records quantities, partial batches and material roles. A valid stack file still doesn't tell you how cleanly the parts will separate.
 
-The accessory catalogue contains independently authored functional edge/corner pieces, X-plug plates, normal full-solid stops, angled stops, vertical tile brackets and physical support rails. It is not a promise that every contour or secondary mechanism matches another design. Physical support rails use separate end-to-end dovetails and a 25 mm supporting depth; they are not X-plug attachments, and no positive mat-to-rail latch is assumed.
+The accessory catalogue contains independently authored functional edge/corner pieces, X-plug plates, normal full-solid stops, angled stops, vertical tile brackets, round-hole rods, upper rod braces and physical support rails. It is not a promise that every contour or secondary mechanism matches another design. Physical support rails use separate end-to-end dovetails and a 25 mm supporting depth; they are not X-plug attachments, and no positive mat-to-rail latch is assumed.
 
 Catalogue membership depends on the chosen build envelope and interface settings. Oversized parts are listed as omitted rather than shrunk, and ordered tile sizes stay distinct even when either orientation fits. Bambu uses the per-family poses listed under [Export checks](#export-checks), then packing may add a 90-degree XY turn.
+
+### Round-hole rods and upper braces
+
+`Rod(above_mat_height_mm=120, peg_diameter_mm=10, tile_thickness_mm=13)` and `RodBrace(center_spacing_mm=60, bore_diameter_mm=10)` are separate narrow parameter types, with families `rod` and `rod-brace`. They do not have an `Interface`, cell counts or tile/X joints. `make_rod` / `make_rod_brace` generate the solids; `rod_datums` / `brace_datums` describe their mating dimensions. The shared accessory dispatch and catalogue accept these types without adding round-part defaults to existing accessory identities.
+
+Rod height is measured above the mat's seating plane, including the Ø18 x 3.2 mm stop collar. The shaft stays Ø10 mm with an R2 top. Insertion depth is tile thickness minus 1 mm: the standard 13 mm tile gives a 12 mm peg, comprising 11 mm straight engagement and a 1 mm lead. Source orientation is upright along Z, peg tip at Z=0 and collar underside at Z=12. Standard 120/240 mm rods therefore measure 132/252 mm overall. Custom tile thickness changes only insertion depth; unit size does not scale peg/shaft diameter, collar, height or comfort radii.
+
+Braces have physical centre spacings of 60 or 120 mm and overall bounds 78/138 x 18 x 6.4 mm. Their capsule ends are R9, top edges R1 and bottom chamfer 0.4 mm. Each bore has 5.6 mm straight depth plus a 0.4 mm lead at each mouth. Size and bore labels are part of the solid. Both official braces use nominal Ø10 mm bores for the Ø10 mm rod shafts. Neither spacing nor bore diameter scales with unit size.
+
+The standard bore and shaft have the same nominal 10 mm diameter. For an explicit custom `bore_diameter_mm`, diametral clearance is the bore diameter minus shaft diameter; radial clearance is half that difference. This parameter describes customization, not additional catalogue variants, and nominal CAD clearance is not an as-printed measurement. For standard tiles, a 60 mm pair is (30,60) to (90,60) within one 2x2 tile. A 120 mm pair is (60,30) to (180,30) across two ordinary 2x1 tiles, with the second body origin translated 120 mm along X. These are complete round holes checked in the generated tile solids, not X openings or exposed half-holes. Check the chosen holes on a custom mat rather than assuming every half-unit grid site is usable.
+
+Bambu exports apply Y=+90 degrees to rods before packing and scope normal Auto support to rod objects. STEP, STL and core 3MF keep the upright source pose. Braces retain their flat source pose with bores along Z and no object support. The H2D catalogue groups the two rods and two nominal braces on `Rods and upper braces`. Custom dimensions and fit remain untested.
 
 ### Vertical tile brackets
 
@@ -147,3 +159,5 @@ Sampling is not an exhaustive insertion/collision sweep or full-surface equivale
 ## What still needs a real print
 
 CAD and slicer checks don't measure insertion force, retention, support release, flatness, heat creep, impact strength or load capacity. Record real results with the exact model revision, material and print profile. No load or restraint rating is supplied.
+
+The user completed the 120/240 mm rod test print and reported that the nominal 10 mm rod/peg-to-mat fit was fine with PETG, a 0.8 mm nozzle and 0.32 mm layers. That report applies to the tested horizontal rod pose and standard 13 mm tile thickness; no measured diameter, insertion force or filament brand was supplied. The user subsequently test-printed and fitted the upper braces, reported that they worked fine, and identified the 10.0 mm bore label. This confirms the nominal 10.0 mm bore-to-nominal-10 mm shaft fit; the tested brace spacing or spacings were not specified. Other bore sizes, measured clearances, holding force and load performance remain unconfirmed. Bags rest on the mat; a friction-fit brace is not a positive height lock.

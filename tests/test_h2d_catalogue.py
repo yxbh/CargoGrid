@@ -11,6 +11,7 @@ from cargo_grid.catalogue import accessory_variants, h2d_dual_safe_catalogue_job
 from cargo_grid.cli import main
 from cargo_grid.jobs import Design
 from cargo_grid.parameters import BuildVolume, Tile
+from cargo_grid.rods import Rod, RodBrace
 
 
 def required_accessories(max_cells):
@@ -42,6 +43,14 @@ def required_accessories(max_cells):
         ],
         "lock-45": [Accessory("lock-45", nx=n, ny=n) for n in (1, 2)],
         "plate": [Accessory("plate", nx=x, ny=y) for x, y in ((1, 1), (1, 2), (2, 2))],
+        "rod": [
+            Rod(above_mat_height_mm=120, peg_diameter_mm=10, tile_thickness_mm=13),
+            Rod(above_mat_height_mm=240, peg_diameter_mm=10, tile_thickness_mm=13),
+        ],
+        "rod-brace": [
+            RodBrace(center_spacing_mm=60, bore_diameter_mm=10),
+            RodBrace(center_spacing_mm=120, bore_diameter_mm=10),
+        ],
     }
 
 
@@ -93,6 +102,8 @@ PLATE_GROUPS = {
     "support": "Rails and connectors",
     "support-bit": "Rails and connectors",
     "support-end": "Rails and connectors",
+    "rod": "Rods and upper braces",
+    "rod-brace": "Rods and upper braces",
 }
 
 
@@ -208,7 +219,7 @@ def test_h2d_dual_safe_plan_keeps_full_family_inventory_and_hardware_zones(monke
             design.parameters.get("family") == "ramp"
             and design.parameters.get("ramp_join", "female") == "female"
         )
-        or design.parameters.get("family") == "vertical-stop"
+        or design.parameters.get("family") in {"vertical-stop", "rod"}
         or (
             design.parameters.get("family") == "vertical-tile-bracket"
             and design.parameters.get("panel_height_cells") is not None
@@ -217,8 +228,11 @@ def test_h2d_dual_safe_plan_keeps_full_family_inventory_and_hardware_zones(monke
     assert all(
         not design.bambu_object_settings
         for design in job.designs
-        if design.parameters.get("family") == "ramp"
-        and design.parameters.get("ramp_join") == "male"
+        if design.parameters.get("family") == "rod-brace"
+        or (
+            design.parameters.get("family") == "ramp"
+            and design.parameters.get("ramp_join") == "male"
+        )
     )
 
 

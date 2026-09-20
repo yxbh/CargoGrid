@@ -29,6 +29,9 @@ DOCUMENTATION_IMAGES = {
     "docs/images/vertical-stops.png",
     "docs/images/ramps.png",
     "docs/images/interface-sizes.png",
+    "docs/images/rods-and-braces.png",
+    *(f"docs/images/attachments/rod-{height}.png" for height in (120, 240)),
+    *(f"docs/images/attachments/rod-brace-{spacing}-d10.png" for spacing in (60, 120)),
     *(
         f"docs/images/attachments/{family}-{number}.png"
         for family in ("edge-x", "edge-y", "support")
