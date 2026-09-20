@@ -2,7 +2,18 @@
 
 from dataclasses import dataclass
 
-from cargo_grid.parameters import BuildVolume, positive
+from cargo_grid.parameters import BuildVolume, Exclusion, positive
+
+
+def h2d_common_build() -> BuildVolume:
+    """H2D shared nozzle reach with a further 5 mm model inset."""
+    return BuildVolume(
+        350,
+        320,
+        320,
+        margin=5,
+        exclusions=(Exclusion(0, 0, 30, 320), Exclusion(320, 0, 30, 320)),
+    )
 
 
 @dataclass(frozen=True)

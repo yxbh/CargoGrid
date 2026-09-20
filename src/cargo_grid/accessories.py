@@ -73,6 +73,7 @@ STOP_WALL_MM = 6.0
 EDGE_TOP_RADIUS_MM = 2.0
 EDGE_BODY_RADIUS_MM = 3.0
 EDGE_OUTWARD_OPTIONS_MM = (10.0, 20.0, 30.0)
+STRAIGHT_EDGE_OUTWARD_OPTIONS_MM = (*EDGE_OUTWARD_OPTIONS_MM, 40.0)
 EDGE_FAMILIES = ("edge-x", "edge-y", "corner-in", "corner-out")
 SUPPORT_TOP_RADIUS_MM = 1.0
 SUPPORT_BODY_RADIUS_MM = 3.0
@@ -129,7 +130,8 @@ class Accessory:
     ``variant`` selects corner and support-end types. Interface unit size scales
     tile-facing local-plane geometry; tile thickness independently controls
     insertion depth. Comfort radii and the separate support-rail join stay in mm.
-    ``edge_outward`` is the total horizontal projection of an edge or corner.
+    ``edge_outward`` is the outward body width, excluding male tab projection.
+    Straight edges also accept 40 mm with original roofed joints; corners do not.
     ``complete_edge_holes`` continues accepted tile-boundary hole sites through
     perimeter parts. ``None`` matches the normal full tile pattern at every
     outward width. Explicit ``False`` keeps the part plain.
@@ -221,8 +223,18 @@ class Accessory:
         if self.edge_hole_diameter is not None:
             positive("edge hole diameter", self.edge_hole_diameter)
         if self.family in EDGE_FAMILIES:
-            if self.edge_outward not in EDGE_OUTWARD_OPTIONS_MM:
-                raise ValueError("edge outward projection must be 10, 20 or 30 mm")
+            allowed_widths = (
+                STRAIGHT_EDGE_OUTWARD_OPTIONS_MM
+                if self.family in ("edge-x", "edge-y")
+                else EDGE_OUTWARD_OPTIONS_MM
+            )
+            if self.edge_outward not in allowed_widths:
+                raise ValueError(
+                    "edge outward projection must be 10, 20 or 30 mm; "
+                    "40 mm is supported only for straight edge-x/edge-y parts"
+                )
+            if self.edge_outward == 40 and self.interface.joint_style != "original":
+                raise ValueError("40 mm straight edges require original roofed tile-edge joints")
             object.__setattr__(self, "edge_outward", float(self.edge_outward))
             requested_completion = self.complete_edge_holes
             hole_diameter = self.edge_hole_diameter or DEFAULT_HOLE_DIAMETER_MM
@@ -443,6 +455,36 @@ def edge_hole_completion_supported(
 ) -> bool:
     """Whether at least one matching full-pattern boundary site is accepted."""
     return bool(_edge_hole_centers_for(family, nx, variant, interface, hole_diameter))
+
+
+def tile_matched_perimeter(
+    family: str,
+    *,
+    nx: int = 1,
+    variant: int = 1,
+    outward: float,
+    interface: Interface = Interface(),
+    hole_diameter: float | None = DEFAULT_HOLE_DIAMETER_MM,
+    hole_scope: Literal["interior", "full"] = "full",
+) -> Accessory:
+    """Select one perimeter hole mode from the matching tile's accepted sites."""
+    if family not in EDGE_FAMILIES:
+        raise ValueError(f"tile-matched perimeter does not apply to {family}")
+    Tile(interface=interface, hole_diameter=hole_diameter, hole_scope=hole_scope)
+    complete = (
+        hole_diameter is not None
+        and hole_scope == "full"
+        and edge_hole_completion_supported(family, nx, variant, interface, hole_diameter)
+    )
+    return Accessory(
+        family,
+        nx=nx,
+        variant=variant,
+        interface=interface,
+        edge_outward=outward,
+        complete_edge_holes=complete,
+        edge_hole_diameter=hole_diameter if complete else None,
+    )
 
 
 def _edge_hole_centers(spec: Accessory) -> list[tuple[float, float]]:

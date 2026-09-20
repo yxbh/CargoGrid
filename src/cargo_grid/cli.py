@@ -7,7 +7,13 @@ from math import floor
 from pathlib import Path
 
 from cargo_grid._version import __version__
-from cargo_grid.accessories import EDGE_FAMILIES, EDGE_OUTWARD_OPTIONS_MM, FAMILIES, Accessory
+from cargo_grid.accessories import (
+    EDGE_FAMILIES,
+    EDGE_OUTWARD_OPTIONS_MM,
+    FAMILIES,
+    STRAIGHT_EDGE_OUTWARD_OPTIONS_MM,
+    Accessory,
+)
 from cargo_grid.catalogue import (
     H2D_DEFAULT_PART_CLEARANCE_MM,
     accessory_design,
@@ -17,6 +23,7 @@ from cargo_grid.catalogue import (
 from cargo_grid.export import BambuSettings, Material, export_job
 from cargo_grid.jobs import Job, layout_job, tile_design
 from cargo_grid.layout import exact_layout
+from cargo_grid.packing import h2d_common_build
 from cargo_grid.parameters import (
     DEFAULT_HOLE_DIAMETER_MM,
     BuildVolume,
@@ -29,6 +36,7 @@ from cargo_grid.parameters import (
 from cargo_grid.rods import ROD_FAMILIES, Rod, RodBrace
 from cargo_grid.roof_support import RoofSupportSettings
 from cargo_grid.stacking import StackSettings
+from cargo_grid.vehicles import zeekr_7x
 
 
 def _positive_mm(value: str) -> float:
@@ -182,7 +190,9 @@ def _roof_support(args) -> RoofSupportSettings | None:
         raise ValueError("roof supports require --bambu; core 3MF has no native support semantics")
     if args.joint_style != "original":
         raise ValueError("roof supports require original roofed joints")
-    if args.command == "catalogue" or (args.command == "part" and args.family != "tile"):
+    if args.command in ("catalogue", "extras") or (
+        args.command == "part" and args.family != "tile"
+    ):
         raise ValueError("roof supports require a tile-only part or layout job")
     if any(
         value is not None
@@ -260,7 +270,7 @@ def _stack_settings(args, bambu, build: BuildVolume, interface: Interface):
             "stacking requires --bambu, --stack-count, --stack-gap-mm, "
             "--stack-interface-thickness-mm and --stack-material-slots"
         )
-    if args.command == "catalogue":
+    if args.command in ("catalogue", "extras"):
         raise ValueError("stack repeated part/layout quantities, not mixed catalogue samples")
     if args.command == "part" and args.family != "tile":
         raise ValueError("stacking is restricted to identical tile quantities")
@@ -290,8 +300,9 @@ def parser() -> argparse.ArgumentParser:
         "part": "Generate one tile or accessory, with as many copies as requested.",
         "layout": "Fill an exact rectangle with whole-unit tiles and built-in edge fillers.",
         "catalogue": "Generate every supported ordered tile size that fits, plus the finite accessory catalogue.",
+        "extras": "Generate only a named extras recipe using the shared parts and export APIs.",
     }
-    for command in ("part", "layout", "catalogue"):
+    for command in ("part", "layout", "catalogue", "extras"):
         p = commands.add_parser(
             command,
             help=descriptions[command],
@@ -299,6 +310,12 @@ def parser() -> argparse.ArgumentParser:
             formatter_class=argparse.ArgumentDefaultsHelpFormatter,
             allow_abbrev=False,
         )
+        if command == "extras":
+            p.add_argument(
+                "vehicle",
+                choices=("zeekr-7x",),
+                help="personal collection name, not a measured vehicle-fit claim",
+            )
         for axis, meaning in (
             ("width", "X: build-plate left-right"),
             ("depth", "Y: build-plate front-back"),
@@ -550,22 +567,22 @@ def parser() -> argparse.ArgumentParser:
             p.add_argument(
                 "--edge-outward-mm",
                 type=float,
-                choices=EDGE_OUTWARD_OPTIONS_MM,
+                choices=STRAIGHT_EDGE_OUTWARD_OPTIONS_MM,
                 metavar="MM",
-                help="edge/corner horizontal outward projection: 10 (default), 20 or 30 mm",
+                help="outward body width excluding tabs: 10 (default), 20 or 30 mm; 40 mm only for original-style straight edges",
             )
             edge_holes = p.add_mutually_exclusive_group()
             edge_holes.add_argument(
                 "--complete-edge-holes",
                 action="store_true",
                 default=None,
-                help="continue matching accepted full-pattern tile boundary sites through a 10, 20 or 30 mm edge/corner; diameter defaults to 10 mm",
+                help="continue matching accepted full-pattern tile boundary sites through an edge/corner; diameter defaults to 10 mm",
             )
             edge_holes.add_argument(
                 "--plain-edge",
                 dest="complete_edge_holes",
                 action="store_false",
-                help="keep a 10, 20 or 30 mm edge/corner plain instead of matching the normal tile-hole pattern",
+                help="keep an edge/corner plain instead of matching the normal tile-hole pattern",
             )
             p.add_argument(
                 "--copy-count",
@@ -619,7 +636,7 @@ def parser() -> argparse.ArgumentParser:
                 default="balanced",
                 help="put leftover edge material on both ends, the positive X/Y ends, or the negative X/Y ends; unit spacing stays unchanged",
             )
-        if command == "catalogue":
+        if command in ("catalogue", "extras"):
             p.add_argument(
                 "--h2d-dual-safe",
                 action="store_true",
@@ -788,6 +805,12 @@ def main(argv: list[str] | None = None) -> int:
             )
             job = layout_job(layout, build)
         else:
+            requested_gap = getattr(args, "packing_gap_mm", None)
+            packing_gap = (
+                (H2D_DEFAULT_PART_CLEARANCE_MM if args.h2d_dual_safe else 2)
+                if requested_gap is None
+                else requested_gap
+            )
             if args.h2d_dual_safe:
                 if not bambu:
                     raise ValueError("--h2d-dual-safe requires --bambu")
@@ -808,13 +831,35 @@ def main(argv: list[str] | None = None) -> int:
                         "--h2d-dual-safe requires original joints, --unit-size-mm 60, "
                         "--tile-thickness-mm 13 and zero fit offset"
                     )
-                requested_gap = getattr(args, "packing_gap_mm", None)
+                positive("H2D packing gap", packing_gap)
+            if args.command == "extras":
+                job = zeekr_7x.extras_job(
+                    build,
+                    interface=interface,
+                    hole_diameter=hole_diameter,
+                    hole_scope=args.hole_scope,
+                    placement_build=h2d_common_build() if args.h2d_dual_safe else None,
+                    part_gap=packing_gap,
+                )
+                if args.h2d_dual_safe:
+                    job.placement_policy.update(
+                        name="H2D dual-nozzle safe",
+                        common_reach_mm={
+                            "min_x": 25,
+                            "max_x": 325,
+                            "min_y": 0,
+                            "max_y": 320,
+                            "max_z": 320,
+                        },
+                        common_model_inset_mm=5,
+                        minimum_actual_part_xy_clearance_mm=packing_gap,
+                        clearance_measurement="model bounds on rectangle-packed plates",
+                    )
+            elif args.h2d_dual_safe:
                 job = h2d_dual_safe_catalogue_job(
                     hole_diameter=hole_diameter,
                     hole_scope=args.hole_scope,
-                    packing_gap=(
-                        H2D_DEFAULT_PART_CLEARANCE_MM if requested_gap is None else requested_gap
-                    ),
+                    packing_gap=packing_gap,
                 )
             else:
                 job = catalogue_job(

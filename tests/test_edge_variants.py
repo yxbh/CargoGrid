@@ -751,3 +751,73 @@ def test_replacing_interface_preserves_edge_options():
     updated = replace(spec, interface=Interface(height=18))
     assert updated.edge_outward == 20
     assert updated.complete_edge_holes is True
+
+
+@pytest.mark.parametrize("family", ["edge-x", "edge-y"])
+@pytest.mark.parametrize("cells", [1, 4, 5])
+def test_forty_mm_straights_keep_tile_interfaces_and_complete_middle_holes(family, cells):
+    spec = Accessory(family, nx=cells, edge_outward=40)
+    shape = _accessory_shape(spec)
+    narrow = _accessory_shape(replace(spec, edge_outward=30))
+    assert shape.is_valid and len(shape.solids()) == 1 and shape.volume > 0
+    assert tuple(shape.bounding_box().size) == pytest.approx(
+        (cells * 60, 46 if family == "edge-x" else 40, 13),
+        abs=1e-5,
+    )
+    assert shape.bounding_box().min.Z == pytest.approx(0, abs=1e-6)
+    clip = Box(cells * 60 + 2, 20, 15).moved(Location((cells * 30, 0, 6.5)))
+    first = _part(shape.intersect(clip))
+    second = _part(narrow.intersect(clip))
+    assert not first.cut(second).solids()
+    assert not second.cut(first).solids()
+    tile = _tile_shape(Tile(cells, 1))
+    if family == "edge-y":
+        tile = tile.moved(Location((0, -60, 0)))
+    shapes = (shape, tile)
+    datums = accessory_datums(spec)
+    assert datums["edge_hole_centers"] == [(x, 0) for x in range(0, cells * 60 + 1, 30)]
+    for x in range(30, cells * 60, 30):
+        _assert_completed_circle(shapes, (x, 0), 13, minimum_ring_samples=59)
+    # End holes still need the neighboring perimeter's quarter; no 40 mm corners are supplied.
+    outside_y = -3.6 if family == "edge-x" else 3.6
+    assert not any(part.is_inside(Vector(-3.6, outside_y, 6.5)) for part in shapes)
+    assert any(
+        face.geom_type == GeomType.CYLINDER
+        and BRepAdaptor_Surface(face.wrapped).Cylinder().Radius() == pytest.approx(3, abs=1e-7)
+        for face in shape.faces()
+    )
+
+
+@pytest.mark.parametrize("family", ["edge-x", "edge-y"])
+@pytest.mark.parametrize("unit,thickness,diameter", [(45, 8, 8), (60, 18, 10), (90, 13, 12)])
+def test_forty_mm_custom_interface_keeps_physical_width_and_hole_diameter(
+    family,
+    unit,
+    thickness,
+    diameter,
+    tmp_path,
+):
+    spec = Accessory(
+        family,
+        nx=2,
+        edge_outward=40,
+        interface=Interface(unit, thickness),
+        edge_hole_diameter=diameter,
+        complete_edge_holes=True,
+    )
+    shape = _accessory_shape(spec)
+    assert tuple(shape.bounding_box().size) == pytest.approx(
+        (2 * unit, 40 + (unit * 0.1 if family == "edge-x" else 0), thickness),
+        abs=1e-5,
+    )
+    direction = -1 if family == "edge-x" else 1
+    for z in (1, thickness / 2, thickness - 1):
+        assert not shape.is_inside(Vector(unit, direction * (diameter / 2 - 0.01), z))
+        assert shape.is_inside(Vector(unit, direction * (diameter / 2 + 0.01), z))
+    restored, _, delta, budget, bounds_delta = _checked_step_roundtrip(
+        shape, tmp_path / "edge.step"
+    )
+    assert restored.is_valid and len(restored.solids()) == 1
+    assert delta <= budget and bounds_delta <= 1e-5
+    _, _, report = checked_mesh(shape)
+    assert report["closed_oriented_manifold"]
