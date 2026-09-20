@@ -174,10 +174,30 @@ def test_round_family_exports_strict_step_mesh_and_evidence(spec, tmp_path):
             entry["recommended_bambu_object_settings"]["settings"]["support_type"] == "normal(auto)"
         )
     else:
-        assert entry["fit_evidence"]["status"] == "provisional"
-        assert entry["fit_evidence"]["physical_test_pending"]
+        assert entry["fit_evidence"]["status"] == "user-reported-fit"
+        assert not entry["fit_evidence"]["physical_test_pending"]
+        assert entry["fit_evidence"]["scope"] == "bore-to-shaft fit only"
+        assert entry["fit_evidence"]["tested_center_spacings_mm"] is None
+        assert not entry["fit_evidence"]["spacing_specific_fit_verified"]
         assert "recommended_bambu_object_settings" not in entry
     assert report["physical_fit_verified"] is False
+
+
+@pytest.mark.parametrize("spacing", BRACE_SPACINGS_MM)
+@pytest.mark.parametrize("diameter", BRACE_BORES_MM)
+def test_brace_fit_evidence_scopes_user_report_to_nominal_ten_mm_bores(spacing, diameter):
+    evidence = fit_evidence(RodBrace(spacing, diameter))
+    reported = diameter == 10
+    assert evidence["status"] == ("user-reported-fit" if reported else "not-tested")
+    assert evidence["scope"] == "bore-to-shaft fit only"
+    assert evidence["applies_to_this_bore_diameter"] is reported
+    assert evidence["physical_test_pending"] is not reported
+    assert evidence["reported_bore_diameter_mm"] == evidence["reported_shaft_diameter_mm"] == 10
+    assert evidence["tested_center_spacings_mm"] is None
+    assert evidence["spacing_specific_fit_verified"] is False
+    assert evidence["measured_diameter_or_force"] is None
+    assert evidence["strength_and_service_suitability"] == "not tested"
+    assert "not a positive lock" in evidence["height_retention"]
 
 
 def test_core_stays_upright_and_bambu_requires_the_tested_pose(tmp_path):

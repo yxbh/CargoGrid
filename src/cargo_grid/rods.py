@@ -275,9 +275,21 @@ def fit_evidence(spec: Rod | RodBrace) -> dict:
             "strength_and_service_suitability": "not tested",
         }
     return {
-        "status": "provisional" if spec.bore_diameter_mm == 10 else "not-tested",
-        "interface": "brace bores to rod shafts",
+        "status": "user-reported-fit" if spec.bore_diameter_mm == 10 else "not-tested",
+        "interface": "brace bores to nominal 10 mm rod shafts",
+        "scope": "bore-to-shaft fit only",
+        "reported_bore_diameter_mm": 10.0,
+        "reported_shaft_diameter_mm": 10.0,
+        "applies_to_this_bore_diameter": spec.bore_diameter_mm == 10,
+        "tested_center_spacings_mm": None,
+        "spacing_specific_fit_verified": False,
+        "observation": (
+            "User reported the printed braces fitted fine and identified the 10.0 mm bore label; "
+            "the tested brace spacing or spacings were not specified."
+        ),
         "user_accepted_nominal_10mm_bores": spec.bore_diameter_mm == 10,
-        "physical_test_pending": True,
-        "height_retention": "not tested; friction only, not a positive lock",
+        "physical_test_pending": spec.bore_diameter_mm != 10,
+        "measured_diameter_or_force": None,
+        "height_retention": "not measured; friction only, not a positive lock",
+        "strength_and_service_suitability": "not tested",
     }

@@ -186,7 +186,7 @@
       ],
       "file": "images/attachments/rod-brace-60-d10.png",
       "alt": "rod-brace, 60 mm centres / 10 mm bores: isometric STEP-derived render",
-      "description": "A labelled two-bore link for round rods. Spacing is physical millimetres, not unit cells. Print flat with bores upright and no object support. Nominal 10 mm brace fit still needs a print test.",
+      "description": "A labelled two-bore link for round rods. Spacing is physical millimetres, not unit cells. Print flat with bores upright and no object support. Nominal 10.0 mm bore fit is user-reported; tested spacing(s) were not specified.",
       "dimensions": [
         480,
         300
@@ -218,7 +218,7 @@
       ],
       "file": "images/attachments/rod-brace-120-d10.png",
       "alt": "rod-brace, 120 mm centres / 10 mm bores: isometric STEP-derived render",
-      "description": "A labelled two-bore link for round rods. Spacing is physical millimetres, not unit cells. Print flat with bores upright and no object support. Nominal 10 mm brace fit still needs a print test.",
+      "description": "A labelled two-bore link for round rods. Spacing is physical millimetres, not unit cells. Print flat with bores upright and no object support. Nominal 10.0 mm bore fit is user-reported; tested spacing(s) were not specified.",
       "dimensions": [
         480,
         300

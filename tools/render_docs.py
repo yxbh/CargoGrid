@@ -63,7 +63,7 @@ FAMILIES = {
     ),
     "rod-brace": (
         "Upper rod braces",
-        "A labelled two-bore link for round rods. Spacing is physical millimetres, not unit cells. Print flat with bores upright and no object support. Nominal 10 mm brace fit still needs a print test.",
+        "A labelled two-bore link for round rods. Spacing is physical millimetres, not unit cells. Print flat with bores upright and no object support. Nominal 10.0 mm bore fit is user-reported; tested spacing(s) were not specified.",
     ),
     "ramp": (
         "Floor ramps",
@@ -814,7 +814,7 @@ def write_gallery(
         "",
         "Round-hole rods stand 120 or 240 mm above the mat. Their Ø18 mm stop collar seats on the mat; the Ø10 mm shaft and selected peg diameter stay physical sizes. The two upper braces join rod centres 60 or 120 mm apart, independent of unit size. The [rod and brace overview](images/rods-and-braces.png) shows all four catalogue parts; optional 10.2 and 10.4 mm bores are available as individual parts, not additional catalogue rows.",
         "",
-        "Keep bags resting on the mat. Braces are friction-fit links, not a positive height lock: they may slide or jam, and their physical fit is still pending. These parts have no hooks or load/crash rating. Bambu projects turn only rod objects Y=90 onto their side and enable normal Auto support; braces stay flat with their bores along Z and no object support. Remove rod support before fitting.",
+        "Keep bags resting on the mat. Braces are friction-fit links, not a positive height lock; they may slide or jam. These parts have no hooks or load/crash rating. Bambu projects turn only rod objects Y=90 onto their side and enable normal Auto support; braces stay flat with their bores along Z and no object support. Remove rod support before fitting.",
         "",
         "Bracket names state both footprints. Deep tall is floor 1x2 -> wall 1x2, Wide low is floor 2x1 -> wall 2x1 and Deep square is floor 2x2 -> wall 2x2. Shallow tall is floor 1x1 -> wall 1x2, and Shallow wide is floor 2x1 -> wall 2x2. The two shallow IDs spell out `base..._wall...`; the original three keep their shorter IDs. Gallery examples use the standard 60 mm unit, 13 mm thickness and zero fit offset; custom matching parts use the same effective interface parameters.",
         "",
