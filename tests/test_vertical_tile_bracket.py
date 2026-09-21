@@ -30,6 +30,7 @@ from cargo_grid.accessories import (
     _vertical_bracket,
     accessory_datums,
     make_accessory,
+    make_bidirectional_panel_connector,
 )
 from cargo_grid.catalogue import accessory_design, accessory_variants
 from cargo_grid.cli import main
@@ -217,6 +218,7 @@ def test_accepted_bidirectional_panel_post_preserves_tip_and_nominal_interferenc
         0.12236687691122836,
         abs=1e-8,
     )
+    assert difference(make_bidirectional_panel_connector(), _panel_connector()) < 1e-7
 
     spec = Accessory("vertical-tile-bracket", nx=1, ny=1, panel_height_cells=2)
     bracket = make_accessory(spec)
