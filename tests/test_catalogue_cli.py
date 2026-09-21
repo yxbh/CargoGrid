@@ -1,3 +1,4 @@
+import hashlib
 import json
 from dataclasses import asdict
 from zipfile import ZipFile
@@ -6,10 +7,22 @@ import pytest
 from build123d import Box
 
 from cargo_grid import cli
-from cargo_grid.accessories import Accessory
-from cargo_grid.catalogue import accessory_design, tile_sizes
+from cargo_grid.accessories import (
+    Accessory,
+    BambuPrintPolicy,
+    bambu_print_policy,
+    bambu_print_rotation,
+    bambu_print_rotation_y,
+    required_bambu_object_settings,
+)
+from cargo_grid.catalogue import (
+    accessory_design,
+    accessory_identity,
+    accessory_variants,
+    tile_sizes,
+)
 from cargo_grid.cli import _resolved_hole_diameter, main, parser
-from cargo_grid.jobs import Design
+from cargo_grid.jobs import Design, tile_identity
 from cargo_grid.parameters import BuildVolume, Tile
 from cargo_grid.tiles import hole_placements
 
@@ -21,6 +34,34 @@ def test_complete_ordered_tile_family():
     assert (5, 1) in tile_sizes(BuildVolume(306, 126, 13))
     assert (1, 5) in tile_sizes(BuildVolume(306, 126, 13))
     assert (5, 5) not in tile_sizes(BuildVolume(306, 126, 13))
+
+
+def test_standard_catalogue_identity_payload_is_frozen_without_building_geometry():
+    build = BuildVolume(350, 320, 325)
+    records = []
+    for x, y in tile_sizes(build):
+        name, parameters = tile_identity(Tile(x, y))
+        records.append({"name": name, "parameters": parameters})
+    records.extend(
+        {"name": name, "parameters": parameters}
+        for name, parameters in (accessory_identity(spec) for spec in accessory_variants(build))
+    )
+    assert len(records) == 130
+    payload = json.dumps(records, sort_keys=True, separators=(",", ":"))
+    assert (
+        hashlib.sha256(payload.encode()).hexdigest()
+        == "ce06ed147f704b78915c7cee4ac1b18ec83987df64402ad2e3001e5fe4bb588c"
+    )
+
+
+def test_typed_and_serialized_accessory_print_policies_agree_for_full_inventory():
+    for spec in accessory_variants(BuildVolume(350, 320, 325)):
+        _, parameters = accessory_identity(spec)
+        assert bambu_print_policy(parameters) == BambuPrintPolicy(
+            bambu_print_rotation(spec),
+            bambu_print_rotation_y(spec),
+            required_bambu_object_settings(parameters),
+        )
 
 
 def test_ramp_design_identity_preserves_legacy_female_and_non_ramp_names(

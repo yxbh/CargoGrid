@@ -12,7 +12,7 @@ ends 1/2/3/4 denote X/Xs/Y/Ys respectively. Non-mating outlines, reinforcement,
 and lightening apertures are independently constructed, not reference contours.
 """
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from functools import lru_cache
 from math import atan, degrees, sqrt, tan
 from typing import Literal
@@ -102,6 +102,13 @@ BAMBU_OBJECT_SETTINGS = {
     "ramp": {"enable_support": "1", "support_type": "normal(auto)"},
     "vertical-stop": {"enable_support": "1", "support_type": "normal(auto)"},
 }
+
+
+@dataclass(frozen=True)
+class BambuPrintPolicy:
+    rotation_x: float | None
+    rotation_y: float | None
+    object_settings: dict[str, str]
 
 
 @dataclass(frozen=True)
@@ -897,87 +904,93 @@ def _shallow_vertical_bracket(spec: Accessory, panel_rows: int) -> Part:
     return Part(rounded_body.fuse(*floor_connectors, *panel_connectors).clean().solids())
 
 
-def _vertical_stop_slope(spec: Accessory, radius: float = VERTICAL_STOP_RADIUS_MM) -> float:
-    depth = spec.ny * spec.interface.pitch
+def _vertical_stop_slope_values(
+    depth: float,
+    height: float,
+    radius: float = VERTICAL_STOP_RADIUS_MM,
+) -> float:
     a = depth - radius
-    b = spec.height - radius - BASE_HEIGHT_MM
+    b = height - radius - BASE_HEIGHT_MM
     return (a * b + radius * sqrt(a * a + b * b - radius * radius)) / (a * a - radius * radius)
+
+
+def _vertical_stop_slope(spec: Accessory, radius: float = VERTICAL_STOP_RADIUS_MM) -> float:
+    return _vertical_stop_slope_values(
+        spec.ny * spec.interface.pitch,
+        spec.height,
+        radius,
+    )
+
+
+def _typed_print_parameters(spec: Accessory | Rod | RodBrace) -> dict:
+    return {"family": spec.family, **asdict(spec)}
+
+
+def bambu_print_policy(parameters: dict) -> BambuPrintPolicy:
+    family = parameters.get("family")
+    panel_height_cells = parameters.get("panel_height_cells")
+    interface = parameters.get("interface", {})
+    pitch = interface.get("pitch", 60)
+    thickness = interface.get("height", 13)
+    if family == "vertical-tile-bracket" and panel_height_cells is None:
+        rows = parameters["ny"]
+        seat = rows * pitch - thickness
+        slope = (seat + BRACKET_TOP_EXTENSION_MM[rows]) / seat
+        rotation_x = 180 - degrees(atan(slope))
+    elif family == "vertical-stop":
+        slope = _vertical_stop_slope_values(
+            parameters["ny"] * pitch,
+            parameters["height"],
+        )
+        rotation_x = 180 - degrees(atan(slope))
+    else:
+        rotation_x = (
+            None
+            if family == "vertical-tile-bracket" and panel_height_cells is not None
+            else BAMBU_PRINT_ROTATIONS.get(family)
+        )
+    rotation_y = (
+        90.0
+        if family == "rod"
+        else -90.0
+        if family == "vertical-tile-bracket" and panel_height_cells is not None
+        else None
+    )
+    if family == "ramp" and parameters.get("ramp_join") == "male":
+        object_settings = {}
+    elif family == "vertical-tile-bracket" and panel_height_cells is not None:
+        object_settings = {"enable_support": "1", "support_type": "normal(auto)"}
+    else:
+        object_settings = dict(BAMBU_OBJECT_SETTINGS.get(family, {}))
+    return BambuPrintPolicy(rotation_x, rotation_y, object_settings)
 
 
 def vertical_stop_print_rotation(spec: Accessory) -> float:
     if spec.family != "vertical-stop":
         raise ValueError("vertical-stop print rotation requires a vertical-stop specification")
-    return 180 - degrees(atan(_vertical_stop_slope(spec)))
+    rotation = bambu_print_policy(_typed_print_parameters(spec)).rotation_x
+    assert rotation is not None
+    return rotation
 
 
 def bambu_print_rotation(spec: Accessory | Rod | RodBrace) -> float | None:
-    if spec.family == "vertical-tile-bracket" and spec.panel_height_cells is not None:
-        return None
-    if spec.family == "vertical-tile-bracket":
-        seat = spec.ny * spec.interface.pitch - spec.interface.height
-        slope = (seat + BRACKET_TOP_EXTENSION_MM[spec.ny]) / seat
-        return 180 - degrees(atan(slope))
-    return (
-        vertical_stop_print_rotation(spec)
-        if spec.family == "vertical-stop"
-        else BAMBU_PRINT_ROTATIONS.get(spec.family)
-    )
+    return bambu_print_policy(_typed_print_parameters(spec)).rotation_x
 
 
 def bambu_print_rotation_y(spec: Accessory | Rod | RodBrace) -> float | None:
-    if isinstance(spec, Rod):
-        return 90.0
-    return (
-        -90.0
-        if spec.family == "vertical-tile-bracket" and spec.panel_height_cells is not None
-        else None
-    )
+    return bambu_print_policy(_typed_print_parameters(spec)).rotation_y
 
 
 def required_bambu_print_rotation(parameters: dict) -> float | None:
-    family = parameters.get("family")
-    if family == "vertical-tile-bracket" and parameters.get("panel_height_cells") is not None:
-        return None
-    if family == "vertical-tile-bracket":
-        interface = parameters.get("interface", {})
-        pitch = interface.get("pitch", 60)
-        thickness = interface.get("height", 13)
-        rows = parameters["ny"]
-        seat = rows * pitch - thickness
-        slope = (seat + BRACKET_TOP_EXTENSION_MM[rows]) / seat
-        return 180 - degrees(atan(slope))
-    if family != "vertical-stop":
-        return BAMBU_PRINT_ROTATIONS.get(family)
-    interface = parameters.get("interface", {})
-    pitch = interface.get("pitch", 60)
-    depth = parameters["ny"] * pitch
-    radius = VERTICAL_STOP_RADIUS_MM
-    a = depth - radius
-    b = parameters["height"] - radius - BASE_HEIGHT_MM
-    slope = (a * b + radius * sqrt(a * a + b * b - radius * radius)) / (a * a - radius * radius)
-    return 180 - degrees(atan(slope))
+    return bambu_print_policy(parameters).rotation_x
 
 
 def required_bambu_print_rotation_y(parameters: dict) -> float | None:
-    if parameters.get("family") == "rod":
-        return 90.0
-    return (
-        -90.0
-        if parameters.get("family") == "vertical-tile-bracket"
-        and parameters.get("panel_height_cells") is not None
-        else None
-    )
+    return bambu_print_policy(parameters).rotation_y
 
 
 def required_bambu_object_settings(parameters: dict) -> dict[str, str]:
-    if parameters.get("family") == "ramp" and parameters.get("ramp_join") == "male":
-        return {}
-    if (
-        parameters.get("family") == "vertical-tile-bracket"
-        and parameters.get("panel_height_cells") is not None
-    ):
-        return {"enable_support": "1", "support_type": "normal(auto)"}
-    return BAMBU_OBJECT_SETTINGS.get(parameters.get("family"), {})
+    return bambu_print_policy(parameters).object_settings
 
 
 def _vertical_stop(spec: Accessory) -> Part:

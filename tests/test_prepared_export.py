@@ -14,6 +14,7 @@ from OCP.TopLoc import TopLoc_Location
 from cargo_grid import BuildVolume, export, prepared
 from cargo_grid.export import BambuSettings, Material, export_job, write_3mf
 from cargo_grid.jobs import Design, Job
+from cargo_grid.packing import PrintPlacement
 
 BAMBU = BambuSettings((Material("PETG", "PETG", "#637b70"),), 0.4, 0.2)
 
@@ -229,6 +230,52 @@ def test_prepared_packing_bounds_match_independent_cad_with_displaced_origin(rot
     actual = shape.rotate(Axis.Z, rotation).bounding_box()
     assert measured.minimum == pytest.approx(tuple(actual.min), abs=1e-7)
     assert measured.maximum == pytest.approx(tuple(actual.max), abs=1e-7)
+
+
+def test_combined_xy_and_packing_rotation_share_one_exact_transform(tmp_path):
+    source = Box(20, 30, 4).moved(Location((7, 11, -13)))
+    rotation_x, rotation_y, rotation_z = 31, -17, 90
+    design = Design(
+        "combined",
+        source,
+        {},
+        recommended_print_rotation_x=rotation_x,
+        recommended_print_rotation_y=rotation_y,
+        apply_orientation_to_bambu=True,
+    )
+    placement = PrintPlacement(0, 7, 9, rotation_z)
+    path = tmp_path / "combined.3mf"
+    project = write_3mf(
+        Job(
+            [design],
+            BuildVolume(100, 100, 100),
+            "part",
+            print_placements=[placement],
+        ),
+        path,
+        bambu=BAMBU,
+    )
+    transform = project["plates"][0]["items"][0]["source_to_project_transform"]
+    basis = [
+        Vector(*coordinates)
+        .rotate(Axis.X, rotation_x)
+        .rotate(Axis.Y, rotation_y)
+        .rotate(Axis.Z, rotation_z)
+        for coordinates in ((1, 0, 0), (0, 1, 0), (0, 0, 1))
+    ]
+    expected_matrix = tuple(float(value) for vector in basis for value in vector)
+    assert transform["matrix_3mf"][:9] == pytest.approx(expected_matrix, abs=1e-12)
+    assert all(type(value) is float for value in transform["matrix_3mf"])
+    posed = source.rotate(Axis.X, rotation_x).rotate(Axis.Y, rotation_y).rotate(Axis.Z, rotation_z)
+    expected_translation = (
+        placement.x - posed.bounding_box().min.X,
+        placement.y - posed.bounding_box().min.Y,
+        -posed.bounding_box().min.Z,
+    )
+    assert transform["translation_mm"] == pytest.approx(expected_translation, abs=1e-7)
+    meshes, _ = archive_triangles(path)
+    assert len(meshes) == 1
+    assert all(posed.distance_to(Vector(*point)) < 1e-5 for point in meshes[0].reshape(-1, 3))
 
 
 def test_mesh_failure_is_not_replaced_by_a_successful_export(tmp_path, monkeypatch):

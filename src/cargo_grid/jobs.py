@@ -89,6 +89,7 @@ class Job:
     placement_policy: dict = field(default_factory=dict)
     projected_footprints: list[ProjectedFootprint | None] | None = None
     projected_footprint_clearances: dict[int, float] = field(default_factory=dict)
+    plate_builds: dict[int, BuildVolume] = field(default_factory=dict)
 
     def __post_init__(self):
         if not self.designs:
@@ -96,6 +97,7 @@ class Job:
         positive("part gap", self.part_gap, zero=True)
         if self.print_placements is not None and len(self.print_placements) != len(self.designs):
             raise ValueError("explicit print placements must match the design count")
+        self.validate_plate_builds()
         if self.projected_footprints is not None:
             if self.print_placements is None:
                 raise ValueError("projected footprints require explicit print placements")
@@ -128,12 +130,41 @@ class Job:
                         "projected footprint clearance plates require every design footprint"
                     )
 
+    def validate_plate_builds(self) -> None:
+        if not isinstance(self.plate_builds, dict):
+            raise ValueError("plate_builds must be a mapping")
+        if self.plate_builds and self.print_placements is None:
+            raise ValueError("plate_builds require explicit print placements")
+        if self.print_placements is not None and any(
+            not isinstance(placement, PrintPlacement) for placement in self.print_placements
+        ):
+            raise ValueError("explicit placements must be PrintPlacement instances")
+        placement_plates = (
+            {placement.plate for placement in self.print_placements}
+            if self.print_placements is not None
+            else set()
+        )
+        for plate, build in self.plate_builds.items():
+            if isinstance(plate, bool) or not isinstance(plate, int) or plate < 0:
+                raise ValueError("plate_builds keys must be nonnegative integer plate indices")
+            if not isinstance(build, BuildVolume):
+                raise ValueError("plate_builds values must be BuildVolume instances")
+            if plate not in placement_plates:
+                raise ValueError("plate_builds entry has no placed design")
+            if build.x > self.build.x or build.y > self.build.y or build.z > self.build.z:
+                raise ValueError("plate build dimensions cannot exceed the physical build")
 
-def tile_design(tile: Tile) -> Design:
+
+def tile_identity(tile: Tile) -> tuple[str, dict]:
     parameters = asdict(tile)
     token = sha256(json.dumps(parameters, sort_keys=True).encode()).hexdigest()[:10]
     scope = f"_{tile.hole_scope}-holes" if tile.hole_diameter is not None else ""
     name = f"tile_{tile.nx}x{tile.ny}_{tile.interface.joint_style}{scope}_{token}"
+    return name, parameters
+
+
+def tile_design(tile: Tile) -> Design:
+    name, parameters = tile_identity(tile)
     shape = make_tile(tile)
     shape.label = name
     return Design(name, shape, parameters, holes=[asdict(h) for h in hole_placements(tile)])

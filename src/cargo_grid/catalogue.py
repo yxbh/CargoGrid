@@ -45,6 +45,61 @@ BRACKET_DISPLAY_NAMES = {
 }
 
 
+def accessory_identity_parameters(spec: Accessory | Rod | RodBrace) -> dict:
+    parameters = (
+        {"family": spec.family, **asdict(spec)}
+        if isinstance(spec, (Rod, RodBrace))
+        else asdict(spec)
+    )
+    if isinstance(spec, Accessory):
+        if spec.family != "ramp" or spec.ramp_join == "female":
+            del parameters["ramp_join"]
+        if parameters["panel_height_cells"] is None:
+            del parameters["panel_height_cells"]
+        if parameters["edge_outward"] == 10.0:
+            del parameters["edge_outward"]
+        if not parameters["complete_edge_holes"]:
+            del parameters["complete_edge_holes"]
+        if parameters["edge_hole_diameter"] in (None, DEFAULT_HOLE_DIAMETER_MM):
+            del parameters["edge_hole_diameter"]
+    return parameters
+
+
+def accessory_identity(spec: Accessory | Rod | RodBrace) -> tuple[str, dict]:
+    parameters = accessory_identity_parameters(spec)
+    token = sha256(json.dumps(parameters, sort_keys=True).encode()).hexdigest()[:10]
+    if isinstance(spec, Rod):
+        return (
+            f"rod_h{spec.above_mat_height_mm:g}_peg{spec.peg_diameter_mm:g}_{token}",
+            parameters,
+        )
+    if isinstance(spec, RodBrace):
+        return (
+            f"rod-brace_c{spec.center_spacing_mm:g}_bore{spec.bore_diameter_mm:g}_{token}",
+            parameters,
+        )
+    dimensions = (
+        f"{spec.nx}x{spec.ny}_h{spec.height:g}"
+        if spec.family == "vertical-stop"
+        else f"base{spec.nx}x{spec.ny}_wall{spec.nx}x{spec.panel_height_cells}"
+        if spec.family == "vertical-tile-bracket" and spec.panel_height_cells is not None
+        else f"{spec.nx}x{spec.ny}"
+    )
+    edge_suffix = f"_out{spec.edge_outward:g}mm" if spec.edge_outward != 10 else ""
+    if spec.complete_edge_holes:
+        edge_suffix += (
+            "_complete-holes"
+            if spec.edge_hole_diameter == DEFAULT_HOLE_DIAMETER_MM
+            else f"_complete-{spec.edge_hole_diameter:g}mm-holes"
+        )
+    join_suffix = "_male" if spec.family == "ramp" and spec.ramp_join == "male" else ""
+    return (
+        f"{spec.family}_{dimensions}{join_suffix}_v{spec.variant}{edge_suffix}_"
+        f"{spec.interface.joint_style}_{token}",
+        parameters,
+    )
+
+
 def tile_sizes(build: BuildVolume, interface: Interface = Interface()) -> list[tuple[int, int]]:
     longest = max(build.usable[:2])
     maximum = max(0, floor((longest - 6 + 1e-6) / interface.pitch))
@@ -161,11 +216,10 @@ def accessory_variants(
 
 
 def accessory_design(spec: Accessory | Rod | RodBrace) -> Design:
+    name, parameters = accessory_identity(spec)
     if isinstance(spec, (Rod, RodBrace)):
-        parameters = {"family": spec.family, **asdict(spec)}
-        token = sha256(json.dumps(parameters, sort_keys=True).encode()).hexdigest()[:10]
         shape = make_accessory(spec)
-        shape.label = f"{shape.label}_{token}"
+        shape.label = name
         display = (
             f"Rod - {spec.above_mat_height_mm:g} mm above mat - {spec.peg_diameter_mm:g} mm peg"
             if isinstance(spec, Rod)
@@ -180,37 +234,6 @@ def accessory_design(spec: Accessory | Rod | RodBrace) -> Design:
             apply_orientation_to_bambu=isinstance(spec, Rod),
             bambu_object_settings=dict(required_bambu_object_settings(parameters)),
         )
-    parameters = asdict(spec)
-    if spec.family != "ramp" or spec.ramp_join == "female":
-        del parameters["ramp_join"]
-    if parameters["panel_height_cells"] is None:
-        del parameters["panel_height_cells"]
-    if parameters["edge_outward"] == 10.0:
-        del parameters["edge_outward"]
-    if not parameters["complete_edge_holes"]:
-        del parameters["complete_edge_holes"]
-    if parameters["edge_hole_diameter"] in (None, DEFAULT_HOLE_DIAMETER_MM):
-        del parameters["edge_hole_diameter"]
-    token = sha256(json.dumps(parameters, sort_keys=True).encode()).hexdigest()[:10]
-    dimensions = (
-        f"{spec.nx}x{spec.ny}_h{spec.height:g}"
-        if spec.family == "vertical-stop"
-        else f"base{spec.nx}x{spec.ny}_wall{spec.nx}x{spec.panel_height_cells}"
-        if spec.family == "vertical-tile-bracket" and spec.panel_height_cells is not None
-        else f"{spec.nx}x{spec.ny}"
-    )
-    edge_suffix = f"_out{spec.edge_outward:g}mm" if spec.edge_outward != 10 else ""
-    if spec.complete_edge_holes:
-        edge_suffix += (
-            "_complete-holes"
-            if spec.edge_hole_diameter == DEFAULT_HOLE_DIAMETER_MM
-            else f"_complete-{spec.edge_hole_diameter:g}mm-holes"
-        )
-    join_suffix = "_male" if spec.family == "ramp" and spec.ramp_join == "male" else ""
-    name = (
-        f"{spec.family}_{dimensions}{join_suffix}_v{spec.variant}{edge_suffix}_"
-        f"{spec.interface.joint_style}_{token}"
-    )
     shape = make_accessory(spec)
     shape.label = name
     rotation = bambu_print_rotation(spec)
@@ -467,9 +490,10 @@ def h2d_dual_safe_catalogue_job(
         common_designs
     ):
         raise ValueError("H2D dual-safe family grouping is incomplete or duplicated")
+    left_nozzle_build = BuildVolume(325, 320, 320, margin=5)
     exception_placement = pack_sizes(
         [sizes[id(exception)]],
-        BuildVolume(325, 320, 320, margin=5),
+        left_nozzle_build,
         gap=packing_gap,
         pack=True,
     )[0]
@@ -498,6 +522,10 @@ def h2d_dual_safe_catalogue_job(
         print_placements=placements,
         plate_names=plate_names,
         plate_settings=plate_settings,
+        plate_builds={
+            **{plate: common_build for plate in range(plate_offset)},
+            plate_offset: left_nozzle_build,
+        },
         placement_policy={
             "name": "H2D dual-nozzle safe",
             "common_reach_mm": {"min_x": 25, "max_x": 325, "min_y": 0, "max_y": 320, "max_z": 320},

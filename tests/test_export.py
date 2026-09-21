@@ -14,7 +14,13 @@ from build123d import Box, import_step
 
 from cargo_grid.accessories import Accessory
 from cargo_grid.catalogue import accessory_design
-from cargo_grid.export import BambuSettings, Material, export_job, write_3mf
+from cargo_grid.export import (
+    BambuSettings,
+    Material,
+    _bambu_project_settings,
+    export_job,
+    write_3mf,
+)
 from cargo_grid.jobs import Design, Job, tile_design
 from cargo_grid.packing import PrintPlacement
 from cargo_grid.parameters import BuildVolume, Exclusion, Tile
@@ -218,6 +224,7 @@ def test_bambu_explicit_materials_and_plate_membership(box_job, materials, tmp_p
     path = tmp_path / "bambu.3mf"
     result = write_3mf(box_job, path, bambu=materials)
     settings, plates, volumes = _project_facts(path)
+    assert settings == _bambu_project_settings(box_job, materials)
     assert settings["filament_type"] == ["PETG", "PLA"]
     assert settings["filament_colour"] == ["#778877", "#DDDDDD"]
     assert settings["filament_is_support"] == ["0", "0"]
@@ -467,6 +474,20 @@ def test_explicit_placements_keep_plate_names_settings_and_reject_overlap(materi
         write_3mf(overlapping, tmp_path / "overlap.3mf", bambu=materials)
 
 
+def test_export_rejects_mutated_nonplacement_before_writing(materials, tmp_path):
+    job = Job(
+        [Design("box", Box(10, 10, 3), {})],
+        BuildVolume(30, 30, 10),
+        "catalogue",
+        print_placements=[PrintPlacement(0, 0, 0, 0)],
+    )
+    job.print_placements[0] = None
+    path = tmp_path / "invalid-placement.3mf"
+    with pytest.raises(ValueError, match="PrintPlacement instances"):
+        write_3mf(job, path, bambu=materials)
+    assert not path.exists()
+
+
 def test_job_exports_roundtripped_step_and_honest_manifest(box_job, tmp_path):
     directory = tmp_path / "new-job"
     manifest_path = export_job(box_job, directory)
@@ -551,6 +572,26 @@ def test_stack_export_preserves_partial_batch_quantity(materials, tmp_path):
     _, _, volumes = _project_facts(path)
     assert len(volumes) == sum(len(p["volumes"]) for p in result["plates"])
     assert max(v[-1][-1] for v in volumes) == pytest.approx(27, abs=1e-5)
+
+
+def test_stack_explicit_placements_must_match_prepared_batches(materials, tmp_path):
+    design = tile_design(Tile())
+    design.quantity = 3
+    job = Job(
+        [design],
+        BuildVolume(150, 150, 50),
+        "diagnostic-stack",
+        print_placements=[PrintPlacement(0, 5, 5, 0)],
+    )
+    path = tmp_path / "explicit-stack.3mf"
+    with pytest.raises(ValueError, match="must match packed batches"):
+        write_3mf(
+            job,
+            path,
+            bambu=materials,
+            stack=StackSettings(2, 1, 0.2, 1, 1, 2),
+        )
+    assert not path.exists()
 
 
 @pytest.mark.parametrize("stacked", [False, True], ids=["multi-plate", "supported-stack"])

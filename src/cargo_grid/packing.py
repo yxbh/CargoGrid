@@ -30,8 +30,6 @@ def pack_sizes(
     )
     for index in order:
         size = sizes[index]
-        for dimension in size:
-            positive("part dimension", dimension)
         if build.placement(size) is None:
             raise ValueError(f"part {index} bounds {size} do not fit the usable envelope")
         chosen = None
@@ -52,16 +50,7 @@ def pack_sizes(
                 w, d = size[:2] if angle == 0 else size[1::-1]
                 for y in sorted(ys):
                     for x in sorted(xs):
-                        if x < build.margin or y < build.margin:
-                            continue
-                        if x + w > build.x - build.margin - build.reserve_x + 1e-6:
-                            continue
-                        if y + d > build.y - build.margin - build.reserve_y + 1e-6:
-                            continue
-                        if any(
-                            x < a.x + a.width and x + w > a.x and y < a.y + a.depth and y + d > a.y
-                            for a in build.exclusions
-                        ):
+                        if not build.contains_box(x, y, w, d, size[2]):
                             continue
                         if any(
                             x < rx + rw + gap - 1e-6
@@ -125,20 +114,7 @@ def _compact_sizes(
                 width, depth = size[:2] if angle == 0 else size[1::-1]
                 for y in sorted(ys):
                     for x in sorted(xs):
-                        if x < build.margin or y < build.margin:
-                            continue
-                        if (
-                            x + width > build.x - build.margin - build.reserve_x + 1e-6
-                            or y + depth > build.y - build.margin - build.reserve_y + 1e-6
-                        ):
-                            continue
-                        if any(
-                            x < area.x + area.width
-                            and x + width > area.x
-                            and y < area.y + area.depth
-                            and y + depth > area.y
-                            for area in build.exclusions
-                        ):
+                        if not build.contains_box(x, y, width, depth, size[2]):
                             continue
                         if any(
                             x < other_x + other_width + gap - 1e-6

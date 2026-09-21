@@ -8,13 +8,18 @@ from types import SimpleNamespace
 import pytest
 
 from cargo_grid.accessories import Accessory, accessory_datums
-from cargo_grid.catalogue import accessory_variants, h2d_dual_safe_catalogue_job, tile_sizes
+from cargo_grid.catalogue import (
+    H2D_DEFAULT_PART_CLEARANCE_MM,
+    accessory_variants,
+    h2d_dual_safe_catalogue_job,
+    tile_sizes,
+)
 from cargo_grid.cli import main
 from cargo_grid.export import BambuSettings, Material, _PreparedProject
-from cargo_grid.footprints import minimum_projected_clearance, pack_projected_footprints
+from cargo_grid.footprints import minimum_projected_clearance
 from cargo_grid.jobs import Design
 from cargo_grid.packing import PrintPlacement
-from cargo_grid.parameters import BuildVolume, Tile
+from cargo_grid.parameters import BuildVolume, Exclusion, Tile
 from cargo_grid.rods import Rod, RodBrace
 from cargo_grid.tiles import hole_placements
 
@@ -247,7 +252,7 @@ def test_h2d_dual_safe_plan_keeps_full_family_inventory_and_hardware_zones(monke
     assert (
         set(job.plate_names) == {p.plate for p in job.print_placements} == set(range(plate_count))
     )
-    assert job.part_gap == 4
+    assert job.part_gap == H2D_DEFAULT_PART_CLEARANCE_MM
     assert job.omitted == []
     assert job.placement_policy["common_reach_mm"] == {
         "min_x": 25,
@@ -259,6 +264,22 @@ def test_h2d_dual_safe_plan_keeps_full_family_inventory_and_hardware_zones(monke
     exception_plate = job.print_placements[-1].plate
     assert job.plate_names[exception_plate] == "5x5 TILE - SINGLE NOZZLE ONLY - LEFT"
     assert exception_plate == plate_count - 1
+    assert set(job.plate_builds) == set(range(plate_count))
+    assert job.plate_builds[exception_plate] == BuildVolume(325, 320, 320, margin=5)
+    assert all(
+        job.plate_builds[plate]
+        == BuildVolume(
+            350,
+            320,
+            320,
+            margin=5,
+            exclusions=(
+                Exclusion(0, 0, 30, 320),
+                Exclusion(320, 0, 30, 320),
+            ),
+        )
+        for plate in range(exception_plate)
+    )
     assert job.plate_settings == {
         exception_plate: {
             "filament_map_mode": "Manual",
@@ -426,21 +447,6 @@ def test_h2d_dual_safe_plan_keeps_full_family_inventory_and_hardware_zones(monke
         nested_placements,
         plate=0,
     ) == pytest.approx(4, abs=1e-6)
-    reordered = list(reversed(nested_footprints))
-    repacked = pack_projected_footprints(
-        reordered,
-        (30, 5, 320, 315),
-        gap=4,
-        search_gap=3.25,
-    )
-    assert {placement.plate for placement in repacked} == {0}
-    assert minimum_projected_clearance(reordered, repacked, plate=0) >= 4 - 1e-6
-    assert repacked == pack_projected_footprints(
-        reordered,
-        (30, 5, 320, 315),
-        gap=4,
-        search_gap=3.25,
-    )
     prepared = _PreparedProject(
         job,
         BambuSettings((Material("PETG", "PETG", "#637b70"),), 0.8, 0.32),
@@ -570,3 +576,48 @@ def test_h2d_dual_safe_cli_forwards_an_explicit_packing_gap(monkeypatch, tmp_pat
         == 0
     )
     assert supplied["packing_gap"] == 5
+
+
+def test_h2d_dual_safe_cli_uses_shared_implicit_packing_gap(monkeypatch, tmp_path):
+    supplied = {}
+
+    def fake_job(**kwargs):
+        supplied.update(kwargs)
+        return SimpleNamespace(
+            designs=[],
+            omitted=[],
+            print_placements=[PrintPlacement(0, 0, 0, 0)],
+        )
+
+    monkeypatch.setattr("cargo_grid.cli.h2d_dual_safe_catalogue_job", fake_job)
+    monkeypatch.setattr(
+        "cargo_grid.cli.export_job",
+        lambda *args, **kwargs: tmp_path / "catalogue" / "manifest.json",
+    )
+    assert (
+        main(
+            [
+                "catalogue",
+                "--h2d-dual-safe",
+                "--bambu",
+                "--material",
+                "Bambu PETG Basic @BBL H2D 0.8 nozzle",
+                "PETG",
+                "#637b70",
+                "--nozzle-diameter-mm",
+                ".8",
+                "--layer-height-mm",
+                ".32",
+                "--build-width-mm",
+                "350",
+                "--build-depth-mm",
+                "320",
+                "--build-height-mm",
+                "325",
+                "--output",
+                str(tmp_path / "catalogue"),
+            ]
+        )
+        == 0
+    )
+    assert supplied["packing_gap"] == H2D_DEFAULT_PART_CLEARANCE_MM

@@ -3,7 +3,7 @@
 import json
 from copy import deepcopy
 from dataclasses import asdict, dataclass
-from math import ceil, cos, radians, sin, sqrt
+from math import ceil, isfinite, sqrt
 from pathlib import Path
 from shutil import copyfileobj
 from tempfile import TemporaryFile
@@ -33,8 +33,8 @@ from cargo_grid.footprints import (
 from cargo_grid.jobs import Design, Job
 from cargo_grid.meshes import write_stl
 from cargo_grid.packing import PrintPlacement, pack_sizes
-from cargo_grid.parameters import DEFAULT_HOLE_DIAMETER_MM, Interface, count, positive
-from cargo_grid.prepared import Bounds, PreparedShape, rotated_points
+from cargo_grid.parameters import DEFAULT_HOLE_DIAMETER_MM, BuildVolume, Interface, count, positive
+from cargo_grid.prepared import Bounds, PreparedShape, rotated_points, rotation_matrix_3mf
 from cargo_grid.rods import ROD_FAMILIES, Rod, RodBrace, fit_evidence
 from cargo_grid.roof_support import RoofSupportSettings, roof_enforcers, validate_roof_job
 from cargo_grid.stacking import StackSettings, Volume, stack_volumes
@@ -128,6 +128,53 @@ def _filament_mode(settings: BambuSettings) -> str:
     if settings.roof_support and settings.roof_support.nozzle_map is not None:
         return "Manual"
     return "Auto For Match"
+
+
+def _bambu_project_settings(job: Job, bambu: BambuSettings) -> dict:
+    nozzle_count = max(
+        bambu.machine_nozzle_count,
+        2 if bambu.roof_support else 1,
+    )
+    settings = {
+        "version": "2.8.2.61",
+        "printer_settings_id": bambu.printer_settings_id
+        or "Cargo-Grid explicit envelope (not calibrated)",
+        "print_settings_id": bambu.print_settings_id
+        or "Cargo-Grid diagnostic layout (not a print preset)",
+        "printable_area": [
+            "0x0",
+            f"{job.build.x:g}x0",
+            f"{job.build.x:g}x{job.build.y:g}",
+            f"0x{job.build.y:g}",
+        ],
+        "printable_height": f"{job.build.z:g}",
+        "nozzle_diameter": [f"{bambu.nozzle:g}"] * nozzle_count,
+        "layer_height": f"{bambu.layer_height:g}",
+        "filament_diameter": ["1.75"] * len(bambu.materials),
+        "filament_type": [material.kind for material in bambu.materials],
+        "filament_colour": [material.color for material in bambu.materials],
+        "filament_settings_id": [material.name for material in bambu.materials],
+        "filament_is_support": ["0"] * len(bambu.materials),
+        "filament_map_mode": _filament_mode(bambu),
+    }
+    settings.update(BAMBU_PROCESS_DEFAULTS)
+    if bambu.printer_model is not None:
+        settings["printer_model"] = bambu.printer_model
+    if nozzle_count > 1:
+        settings["extruder_type"] = ["Direct Drive"] * nozzle_count
+        settings["default_nozzle_volume_type"] = ["Standard"] * nozzle_count
+        settings["nozzle_volume_type"] = ["Standard"] * nozzle_count
+    if bambu.bed_type is not None:
+        settings["curr_bed_type"] = bambu.bed_type
+    overrides = set(BAMBU_PROCESS_DEFAULTS)
+    if bambu.roof_support:
+        settings.update(bambu.roof_support.native_settings())
+        overrides.update(bambu.roof_support.process_override_keys)
+    settings["different_settings_to_system"] = [
+        ";".join(sorted(overrides)),
+        *[""] * (len(bambu.materials) + 1),
+    ]
+    return settings
 
 
 def _adaptive_volume(shape) -> float:
@@ -303,38 +350,70 @@ def _explicit_placements(
     gap: float,
     projected_footprints: list[ProjectedFootprint | None] | None = None,
     projected_clearances: dict[int, float] | None = None,
+    plate_builds: dict[int, BuildVolume] | None = None,
 ) -> list[PrintPlacement]:
     if len(placements) != len(sizes):
         raise ValueError("explicit print placements must match packed batches")
     projected_clearances = projected_clearances or {}
+    plate_builds = plate_builds or {}
+    placement_plates = {
+        placement.plate for placement in placements if isinstance(placement, PrintPlacement)
+    }
+    if set(plate_builds) - placement_plates:
+        raise ValueError("plate_builds entry has no placed batch")
     occupied = {}
     projected = {}
     for index, (placement, size) in enumerate(zip(placements, sizes)):
-        if placement.rotation not in (0, 90) or placement.plate < 0:
-            raise ValueError("explicit placements require nonnegative plates and 0/90 rotations")
-        width, depth = size[:2] if placement.rotation == 0 else size[1::-1]
+        if not isinstance(placement, PrintPlacement):
+            raise ValueError("explicit placements must be PrintPlacement instances")
         if (
-            placement.x < 0
-            or placement.y < 0
-            or placement.x + width > build.x + 1e-6
-            or placement.y + depth > build.y + 1e-6
-            or size[2] > build.z + 1e-6
+            isinstance(placement.plate, bool)
+            or not isinstance(placement.plate, int)
+            or placement.plate < 0
+            or isinstance(placement.rotation, bool)
+            or not isinstance(placement.rotation, int)
+            or placement.rotation not in (0, 90)
         ):
+            raise ValueError("explicit placements require nonnegative plates and 0/90 rotations")
+        if not isfinite(placement.x) or not isfinite(placement.y):
+            raise ValueError("explicit placement coordinates must be finite")
+        for dimension in size:
+            positive("part dimension", dimension)
+        width, depth = size[:2] if placement.rotation == 0 else size[1::-1]
+        if not build.contains_box(placement.x, placement.y, width, depth, size[2]):
             raise ValueError(f"explicit placement {index} exceeds the build envelope")
+        plate_build = plate_builds.get(placement.plate)
+        if plate_build is not None and not plate_build.contains_box(
+            placement.x, placement.y, width, depth, size[2]
+        ):
+            raise ValueError(f"explicit placement {index} exceeds its plate build envelope")
         rectangles = occupied.setdefault(placement.plate, [])
         if placement.plate in projected_clearances:
             if projected_footprints is None or projected_footprints[index] is None:
                 raise ValueError(f"explicit placement {index} lacks its projected footprint")
             geometry = placed_footprint(projected_footprints[index], placement)
             minimum_x, minimum_y, maximum_x, maximum_y = geometry.bounds
-            if (
-                minimum_x < -1e-6
-                or minimum_y < -1e-6
-                or maximum_x > build.x + 1e-6
-                or maximum_y > build.y + 1e-6
+            footprint_width = maximum_x - minimum_x
+            footprint_depth = maximum_y - minimum_y
+            if not build.contains_box(
+                placement.x,
+                placement.y,
+                footprint_width,
+                footprint_depth,
+                size[2],
             ):
                 raise ValueError(
                     f"explicit placement {index} projected footprint exceeds the build envelope"
+                )
+            if plate_build is not None and not plate_build.contains_box(
+                placement.x,
+                placement.y,
+                footprint_width,
+                footprint_depth,
+                size[2],
+            ):
+                raise ValueError(
+                    f"explicit placement {index} projected footprint exceeds its plate build envelope"
                 )
             clearance = projected_clearances[placement.plate]
             plate_footprints = projected.setdefault(placement.plate, [])
@@ -366,6 +445,7 @@ class _PreparedProject:
         catalogue: bool = False,
     ):
         self.job = deepcopy(job)
+        self.job.validate_plate_builds()
         self.geometries: dict[int, PreparedShape] = {}
         self.mesh_sources: dict[int, tuple[PreparedShape, float, float]] = {}
         self.project_geometry: dict[int, PreparedShape] = {}
@@ -426,6 +506,7 @@ class _PreparedProject:
                 self.job.part_gap,
                 projected_footprints,
                 self.job.projected_footprint_clearances,
+                self.job.plate_builds,
             )
         else:
             self.placements = pack_sizes(
@@ -678,27 +759,13 @@ def _write_3mf(
         if bambu and design.apply_orientation_to_bambu:
             angle_x = design.recommended_print_rotation_x or 0
             angle_y = design.recommended_print_rotation_y or 0
-            cx, sx = cos(radians(angle_x)), sin(radians(angle_x))
-            cy, sy = cos(radians(angle_y)), sin(radians(angle_y))
-            cz, sz = cos(radians(rotation)), sin(radians(rotation))
             # 3MF stores basis columns; this translation includes the displayed plate origin.
             transform = {
                 "packing_rotation_z_degrees": rotation,
                 "translation_mm": translation,
                 "packed_size_mm": tuple(rotated_bounds.size),
                 "plate_local_lower_corner_mm": (px, py, 0),
-                "matrix_3mf": (
-                    cz * cy,
-                    sz * cy,
-                    -sy,
-                    cz * sy * sx - sz * cx,
-                    sz * sy * sx + cz * cx,
-                    cy * sx,
-                    cz * sy * cx + sz * sx,
-                    sz * sy * cx - cz * sx,
-                    cy * cx,
-                    *translation,
-                ),
+                "matrix_3mf": (*rotation_matrix_3mf(angle_x, angle_y, rotation), *translation),
                 "applied_to_mesh": True,
             }
             if design.recommended_print_rotation_x is not None:
@@ -768,50 +835,10 @@ def _write_3mf(
             output.write(b"</model>")
         if bambu:
             archive.writestr("Metadata/model_settings.config", _bytes(config))
-            nozzle_count = max(
-                bambu.machine_nozzle_count,
-                2 if bambu.roof_support else 1,
+            archive.writestr(
+                "Metadata/project_settings.config",
+                json.dumps(_bambu_project_settings(job, bambu), indent=2),
             )
-            settings = {
-                "version": "2.8.2.61",
-                "printer_settings_id": bambu.printer_settings_id
-                or "Cargo-Grid explicit envelope (not calibrated)",
-                "print_settings_id": bambu.print_settings_id
-                or "Cargo-Grid diagnostic layout (not a print preset)",
-                "printable_area": [
-                    "0x0",
-                    f"{job.build.x:g}x0",
-                    f"{job.build.x:g}x{job.build.y:g}",
-                    f"0x{job.build.y:g}",
-                ],
-                "printable_height": f"{job.build.z:g}",
-                "nozzle_diameter": [f"{bambu.nozzle:g}"] * nozzle_count,
-                "layer_height": f"{bambu.layer_height:g}",
-                "filament_diameter": ["1.75"] * len(bambu.materials),
-                "filament_type": [m.kind for m in bambu.materials],
-                "filament_colour": [m.color for m in bambu.materials],
-                "filament_settings_id": [m.name for m in bambu.materials],
-                "filament_is_support": ["0"] * len(bambu.materials),
-                "filament_map_mode": _filament_mode(bambu),
-            }
-            settings.update(BAMBU_PROCESS_DEFAULTS)
-            if bambu.printer_model is not None:
-                settings["printer_model"] = bambu.printer_model
-            if nozzle_count > 1:
-                settings["extruder_type"] = ["Direct Drive"] * nozzle_count
-                settings["default_nozzle_volume_type"] = ["Standard"] * nozzle_count
-                settings["nozzle_volume_type"] = ["Standard"] * nozzle_count
-            if bambu.bed_type is not None:
-                settings["curr_bed_type"] = bambu.bed_type
-            overrides = set(BAMBU_PROCESS_DEFAULTS)
-            if bambu.roof_support:
-                settings.update(bambu.roof_support.native_settings())
-                overrides.update(bambu.roof_support.process_override_keys)
-            settings["different_settings_to_system"] = [
-                ";".join(sorted(overrides)),
-                *[""] * (len(bambu.materials) + 1),
-            ]
-            archive.writestr("Metadata/project_settings.config", json.dumps(settings, indent=2))
     return {
         "format": "bambu-project" if bambu else "core-geometry",
         "plates": plates,
