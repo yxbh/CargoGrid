@@ -37,6 +37,7 @@ from cargo_grid.pull_handle_set import extras_job as pull_handle_extras_job
 from cargo_grid.rods import ROD_FAMILIES, Rod, RodBrace
 from cargo_grid.roof_support import RoofSupportSettings, check_roof_job_kind
 from cargo_grid.stacking import StackSettings
+from cargo_grid.trunk_blocker import TrunkBlockerSpec
 from cargo_grid.vehicles import zeekr_7x
 
 EXTRAS_RECIPES = ("zeekr-7x", "pull-handle")
@@ -787,6 +788,34 @@ def parser() -> argparse.ArgumentParser:
     compare.add_argument(
         "--output", type=Path, required=True, help="new JSON report path; never overwritten"
     )
+    blocker = commands.add_parser(
+        "trunk-blocker",
+        help="Generate the native-CAD experimental three-part blocker.",
+        description=(
+            "Generate the complete experimental three-part blocker as native STEP plus checked "
+            "STL and core 3MF derivatives. Front plugs reuse Cargo-Grid's shared CAD interface."
+        ),
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        allow_abbrev=False,
+    )
+    blocker.add_argument(
+        "--extension-mm",
+        type=float,
+        default=24,
+        metavar="MM",
+        help="static wall extension within the approved 0..48 mm locking travel",
+    )
+    blocker.add_argument(
+        "--released-illustration",
+        action="store_true",
+        help="prescribed squeezed-finger geometry illustration; not an elastic simulation",
+    )
+    blocker.add_argument(
+        "--output",
+        type=Path,
+        required=True,
+        help="new or empty output directory; never overwritten",
+    )
     return root
 
 
@@ -834,6 +863,20 @@ def main(argv: list[str] | None = None) -> int:
                 f"reference comparison (joint-style original): {'PASS' if result['checked_pass'] else 'FAIL'}; {args.output}"
             )
             return 0 if result["checked_pass"] else 1
+        if args.command == "trunk-blocker":
+            from cargo_grid.trunk_blocker_export import export_trunk_blocker
+
+            manifest = export_trunk_blocker(
+                args.output,
+                TrunkBlockerSpec(args.extension_mm, args.released_illustration),
+            )
+            print(manifest)
+            print(
+                "Generated complete native STEP, checked STL and core 3MF geometry; no slicer "
+                "preset, physical fit or load qualification is claimed.",
+                file=sys.stderr,
+            )
+            return 0
         hole_diameter = _resolved_hole_diameter(args)
         build = _build_volume(args)
         interface = _interface(args)
