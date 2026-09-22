@@ -8,7 +8,12 @@ from pathlib import Path
 
 from cargo_grid._version import __version__
 from cargo_grid.accessories import EDGE_FAMILIES, EDGE_OUTWARD_OPTIONS_MM, FAMILIES, Accessory
-from cargo_grid.catalogue import accessory_design, catalogue_job, h2d_dual_safe_catalogue_job
+from cargo_grid.catalogue import (
+    H2D_DEFAULT_PART_CLEARANCE_MM,
+    accessory_design,
+    catalogue_job,
+    h2d_dual_safe_catalogue_job,
+)
 from cargo_grid.export import BambuSettings, Material, export_job
 from cargo_grid.jobs import Job, layout_job, tile_design
 from cargo_grid.layout import exact_layout
@@ -319,7 +324,10 @@ def parser() -> argparse.ArgumentParser:
             type=float,
             default=argparse.SUPPRESS,
             metavar="MM",
-            help="minimum packed-part separation in mm; default 2, or 4 with --h2d-dual-safe",
+            help=(
+                "minimum packed-part separation in mm; default 2, "
+                f"or {H2D_DEFAULT_PART_CLEARANCE_MM:g} with --h2d-dual-safe"
+            ),
         )
         for axis, meaning in (
             ("width", "positive X edge"),
@@ -615,7 +623,12 @@ def parser() -> argparse.ArgumentParser:
             p.add_argument(
                 "--h2d-dual-safe",
                 action="store_true",
-                help="H2D family-grouped plan: 5 mm inset inside common X25..325/Y0..320/Z<=320 reach, 10 mm model gaps, and an isolated left-nozzle-only 5x5 tile plate",
+                help=(
+                    "H2D family-grouped plan: 5 mm inset inside common "
+                    "X25..325/Y0..320/Z<=320 reach, "
+                    f"{H2D_DEFAULT_PART_CLEARANCE_MM:g} mm actual-part XY clearance, "
+                    "and an isolated left-nozzle-only 5x5 tile plate"
+                ),
             )
     compare = commands.add_parser(
         "compare-reference",
@@ -799,7 +812,9 @@ def main(argv: list[str] | None = None) -> int:
                 job = h2d_dual_safe_catalogue_job(
                     hole_diameter=hole_diameter,
                     hole_scope=args.hole_scope,
-                    packing_gap=4 if requested_gap is None else requested_gap,
+                    packing_gap=(
+                        H2D_DEFAULT_PART_CLEARANCE_MM if requested_gap is None else requested_gap
+                    ),
                 )
             else:
                 job = catalogue_job(

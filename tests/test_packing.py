@@ -136,6 +136,28 @@ def test_exclusions_and_upper_reservations_are_not_used_for_packing():
     _assert_placements(sizes, placements, build, 3)
 
 
+def test_shared_box_contract_preserves_boundaries_and_exclusion_touching():
+    build = BuildVolume(
+        100,
+        80,
+        30,
+        margin=5,
+        reserve_x=10,
+        reserve_y=5,
+        reserve_z=5,
+        exclusions=(Exclusion(30, 20, 10, 10),),
+    )
+    assert build.contains_box(40, 30, 45, 40, 25)
+    assert build.contains_box(20, 20, 10, 10, 25)
+    assert build.contains_box(40, 20, 10, 10, 25)
+    assert not build.contains_box(5 - 1e-9, 5, 10, 10, 5)
+    assert not build.contains_box(5, 5 - 1e-9, 10, 10, 5)
+    assert not build.contains_box(20 + 1e-9, 20, 10, 10, 5)
+    assert not build.contains_box(30, 10 + 1e-9, 10, 10, 5)
+    assert not build.contains_box(nan, 5, 10, 10, 5)
+    assert not build.contains_box(5, 5, inf, 10, 5)
+
+
 def test_compact_fallback_fits_all_10mm_perimeter_bounds_on_one_h2d_plate():
     sizes = [
         (60, 66, 13),

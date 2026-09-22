@@ -73,14 +73,24 @@ def rotated_points(
     """Apply the same world-axis X, then Y, then packing Z rotations as CAD."""
     if not (rotation_x or rotation_y or rotation_z):
         return points
+    return points @ rotation_matrix(rotation_x, rotation_y, rotation_z).T
+
+
+def rotation_matrix(rotation_x: float, rotation_y: float, rotation_z: int) -> np.ndarray:
+    """Return the column-vector matrix for world-axis X, then Y, then Z rotations."""
     cx, sx = cos(radians(rotation_x)), sin(radians(rotation_x))
     cy, sy = cos(radians(rotation_y)), sin(radians(rotation_y))
     cz, sz = cos(radians(rotation_z)), sin(radians(rotation_z))
-    matrix = np.array(
+    return np.array(
         [
             [cz * cy, cz * sy * sx - sz * cx, cz * sy * cx + sz * sx],
             [sz * cy, sz * sy * sx + cz * cx, sz * sy * cx - cz * sx],
             [-sy, cy * sx, cy * cx],
         ]
     )
-    return points @ matrix.T
+
+
+def rotation_matrix_3mf(rotation_x: float, rotation_y: float, rotation_z: int) -> tuple[float, ...]:
+    """Return 3MF's basis-column ordering as JSON-serializable Python floats."""
+    matrix = rotation_matrix(rotation_x, rotation_y, rotation_z)
+    return tuple(float(value) for value in matrix.T.flat)

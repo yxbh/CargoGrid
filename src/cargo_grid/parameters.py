@@ -199,26 +199,43 @@ class BuildVolume:
             self.z - self.reserve_z,
         )
 
+    def contains_box(
+        self,
+        x: float,
+        y: float,
+        width: float,
+        depth: float,
+        height: float,
+    ) -> bool:
+        """Return whether normalized positive bounds fit the usable envelope."""
+        return (
+            width > 0
+            and depth > 0
+            and height > 0
+            and x >= self.margin
+            and y >= self.margin
+            and x + width <= self.x - self.margin - self.reserve_x + 1e-6
+            and y + depth <= self.y - self.margin - self.reserve_y + 1e-6
+            and height <= self.z - self.reserve_z + 1e-6
+            and not any(
+                x < area.x + area.width
+                and x + width > area.x
+                and y < area.y + area.depth
+                and y + depth > area.y
+                for area in self.exclusions
+            )
+        )
+
     def placement(self, size: tuple[float, float, float]) -> tuple[float, float, int] | None:
         """Find a single-object placement, trying 0 and 90 degree print rotations."""
-        if size[2] > self.usable[2] + 1e-6:
-            return None
+        for dimension in size:
+            positive("part dimension", dimension)
         for angle in (0, 90):
             w, d = size[:2] if angle == 0 else size[1::-1]
             xs = sorted({self.margin, *(a.x + a.width for a in self.exclusions)})
             ys = sorted({self.margin, *(a.y + a.depth for a in self.exclusions)})
             for x in xs:
                 for y in ys:
-                    if x < self.margin or y < self.margin:
-                        continue
-                    if x + w > self.x - self.margin - self.reserve_x + 1e-6:
-                        continue
-                    if y + d > self.y - self.margin - self.reserve_y + 1e-6:
-                        continue
-                    if any(
-                        x < a.x + a.width and x + w > a.x and y < a.y + a.depth and y + d > a.y
-                        for a in self.exclusions
-                    ):
-                        continue
-                    return x, y, angle
+                    if self.contains_box(x, y, w, d, size[2]):
+                        return x, y, angle
         return None

@@ -111,7 +111,6 @@ def test_thumbnail_manifest_has_unique_rows_and_family_scale(gallery):
     )
     assert set(ramp_overview["items"]) == {entry["key"] for entry in ramps}
     assert all(entry["provenance"] == ramp_overview["provenance"] for entry in ramps)
-    assert ramps[0]["provenance"]["generator_commit"] != manifest["geometry_commit"]
     perimeters = [
         entry
         for entry in entries
@@ -119,7 +118,6 @@ def test_thumbnail_manifest_has_unique_rows_and_family_scale(gallery):
     ]
     assert len(perimeters) == 60
     assert all("provenance" in entry for entry in perimeters)
-    assert perimeters[0]["provenance"]["generator_commit"] != manifest["geometry_commit"]
     assert "not a full-gallery" in manifest["provenance_scope"]
     round_parts = [entry for entry in entries if entry["family"] in ("rod", "rod-brace")]
     assert len(round_parts) == 4
@@ -130,8 +128,79 @@ def test_thumbnail_manifest_has_unique_rows_and_family_scale(gallery):
     )
     assert set(rod_overview["items"]) == {entry["key"] for entry in round_parts}
     assert all(entry["provenance"] == rod_overview["provenance"] for entry in round_parts)
-    assert round_parts[0]["provenance"]["generator_commit"] != manifest["geometry_commit"]
     assert all("original joints" not in entry["alt"] for entry in round_parts)
+
+
+@pytest.mark.parametrize("provenance_shape", ["baseline", "mixed", "fresh"])
+def test_gallery_accepts_immutable_and_mixed_provenance(
+    gallery, tmp_path, monkeypatch, provenance_shape
+):
+    import shutil
+
+    docs = tmp_path / "docs"
+    shutil.copytree(ROOT / "docs/images", docs / "images")
+    shutil.copy2(ROOT / "docs/attachments.md", docs / "attachments.md")
+    path = docs / "images/attachments/manifest.json"
+    manifest = json.loads(path.read_text())
+    if provenance_shape == "baseline":
+        for entry in [*manifest["items"], *manifest["overview_images"]]:
+            entry.pop("provenance", None)
+    elif provenance_shape == "fresh":
+        provenance = {
+            "generator_commit": "1" * 40,
+            "generator_tree": "2" * 40,
+            "workbench_commit": "3" * 40,
+            "recipe_sha256": "4" * 64,
+        }
+        for entry in [*manifest["items"], *manifest["overview_images"]]:
+            entry["provenance"] = provenance
+    path.write_text(json.dumps(manifest))
+    monkeypatch.setattr(gallery, "ROOT", tmp_path)
+    assert len(gallery.verify_assets()) == len(gallery.IMAGE_NAMES) + len(gallery.inventory())
+
+
+def test_missing_render_source_at_revision_is_a_clear_mismatch(gallery, monkeypatch):
+    import subprocess
+
+    revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+    monkeypatch.setattr(gallery, "GEOMETRY_FILES", ("missing-render-source.py",))
+    with pytest.raises(ValueError, match="source is missing"):
+        gallery.verify_geometry_source(revision)
+
+
+def test_retained_thumbnail_scale_rejects_subset_overflow(gallery):
+    gallery._validate_thumbnail_scale([(480, 300)], 1, "example")
+    with pytest.raises(ValueError, match="retained family scale"):
+        gallery._validate_thumbnail_scale([(480.001, 300)], 1, "example")
+
+
+def test_thumbnail_entries_rejects_scale_override_overflow(gallery, tmp_path, monkeypatch):
+    from types import ModuleType
+
+    item = next(item for item in gallery.inventory() if item.spec.family == "plate")
+    work = tmp_path / "work"
+    facts = work / "facts"
+    facts.mkdir(parents=True)
+    (facts / f"{item.key}.json").write_text(json.dumps({"size_mm": [1000, 1000, 1000]}))
+    monkeypatch.setattr(gallery, "ROOT", tmp_path)
+    monkeypatch.setattr(gallery, "verify_geometry_source", lambda revision: None)
+    pillow = ModuleType("PIL")
+    pillow.Image = object()
+    monkeypatch.setitem(sys.modules, "PIL", pillow)
+    provenance = {
+        "generator_commit": "1" * 40,
+        "generator_tree": "2" * 40,
+        "workbench_commit": "3" * 40,
+        "recipe_sha256": "4" * 64,
+    }
+    with pytest.raises(ValueError, match="retained family scale"):
+        gallery.thumbnail_entries(
+            work,
+            provenance,
+            keys={item.key},
+            scale_overrides={"plate": 1},
+            write_manifest=False,
+        )
 
 
 def test_bracket_family_context_is_separate_from_the_part_inventory(gallery):
@@ -327,6 +396,64 @@ def test_incremental_perimeter_composition_retains_unrelated_assets(gallery, tmp
     report = json.loads((work / "render-report.json").read_text())
     assert len(report["updated_keys"]) == 60
     assert "not a full-gallery rerender" in (tmp_path / "docs/attachments.md").read_text()
+
+
+def test_selected_update_supports_multiple_overviews_in_documented_order(
+    gallery, tmp_path, monkeypatch
+):
+    import copy
+    import shutil
+
+    shutil.copytree(ROOT / "docs/images", tmp_path / "docs/images")
+    path = tmp_path / "docs/images/attachments/manifest.json"
+    baseline = json.loads(path.read_text())
+    provenance = {
+        "generator_commit": "1" * 40,
+        "generator_tree": "2" * 40,
+        "workbench_commit": "3" * 40,
+        "recipe_sha256": "4" * 64,
+    }
+    monkeypatch.setattr(gallery, "ROOT", tmp_path)
+    monkeypatch.setattr(gallery, "verify_geometry_source", lambda revision: None)
+    monkeypatch.setattr(gallery, "verify_assets", lambda: {})
+    monkeypatch.setattr(gallery, "write_gallery", lambda *args, **kwargs: None)
+
+    def thumbnails(work, supplied, *, families, write_manifest):
+        assert families == {"plate"} and not write_manifest
+        rows = copy.deepcopy([entry for entry in baseline["items"] if entry["family"] == "plate"])
+        for row in rows:
+            row["provenance"] = supplied
+        return rows
+
+    calls = []
+
+    def overview(name):
+        def build(work):
+            calls.append(name)
+            return {"items": [name]}
+
+        return build
+
+    monkeypatch.setattr(gallery, "thumbnail_entries", thumbnails)
+    work = tmp_path / "outputs/multi-overview"
+    work.mkdir(parents=True)
+    gallery._compose_selected_update(
+        work,
+        provenance,
+        families={"plate"},
+        scope="test update",
+        overview_builders={
+            "x-attachments.png": overview("x-attachments"),
+            "hero.png": overview("hero"),
+        },
+    )
+    assert calls == ["x-attachments", "hero"]
+    updated = json.loads(path.read_text())
+    assert [entry["file"] for entry in updated["overview_images"]] == [
+        f"images/{name}" for name in gallery.IMAGE_NAMES
+    ]
+    assert updated["overview_images"][0]["items"] == ["hero"]
+    assert updated["overview_images"][1]["items"] == ["x-attachments"]
 
 
 def test_incremental_corner_half_composition_updates_only_12_assets(

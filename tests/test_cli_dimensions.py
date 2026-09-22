@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from build123d import import_step
 
+from cargo_grid.catalogue import H2D_DEFAULT_PART_CLEARANCE_MM
 from cargo_grid.cli import LEGACY_OPTION_REPLACEMENTS, main, parser
 
 OPTIONS = ("--build-width-mm", "--build-depth-mm", "--build-height-mm")
@@ -101,6 +102,29 @@ def test_brace_bore_help_describes_standard_not_trial_variants(capsys):
     assert "standard/default 10 mm" in description
     assert "diametral" in description
     assert "10.2" not in description and "10.4" not in description
+
+
+def test_packing_gap_help_uses_the_h2d_default_constant(capsys):
+    with pytest.raises(SystemExit) as error:
+        parser().parse_args(["catalogue", "--help"])
+    assert error.value.code == 0
+    help_text = " ".join(capsys.readouterr().out.split())
+    assert f"default 2, or {H2D_DEFAULT_PART_CLEARANCE_MM:g} with --h2d-dual-safe" in help_text
+
+
+def test_h2d_option_help_uses_the_h2d_default_constant(capsys):
+    with pytest.raises(SystemExit) as error:
+        parser().parse_args(["catalogue", "--help"])
+    assert error.value.code == 0
+    match = re.search(
+        r"^\s+--h2d-dual-safe\s+(.*?)(?=\n\s+--|\Z)",
+        capsys.readouterr().out,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert match is not None
+    description = " ".join(match.group(1).split())
+    assert f"{H2D_DEFAULT_PART_CLEARANCE_MM:g} mm actual-part XY clearance" in description
+    assert "10 mm model gaps" not in description
 
 
 def test_named_dimensions_generate_the_same_two_by_one_contract(tmp_path):
