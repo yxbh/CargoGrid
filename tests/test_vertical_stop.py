@@ -8,11 +8,11 @@ from zipfile import ZipFile
 import pytest
 from build123d import Axis, GeomType, Location, Part, Solid, Vector, export_step, import_step
 from OCP.BRep import BRep_Tool
+from OCP.collections import IndexedDataMap_TopoDS_Shape_List_TopoDS_Shape_TopTools_ShapeMapHasher
 from OCP.Precision import Precision
 from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE
 from OCP.TopExp import TopExp
 from OCP.TopoDS import TopoDS
-from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape
 
 from cargo_grid import BuildVolume
 from cargo_grid.accessories import (
@@ -53,7 +53,7 @@ def symmetric_difference(a, b) -> float:
 
 
 def edge_continuities(shape) -> list[str]:
-    ancestors = TopTools_IndexedDataMapOfShapeListOfShape()
+    ancestors = IndexedDataMap_TopoDS_Shape_List_TopoDS_Shape_TopTools_ShapeMapHasher()
     TopExp.MapShapesAndAncestors_s(shape.wrapped, TopAbs_EDGE, TopAbs_FACE, ancestors)
     result = []
     for edge in shape.edges():
@@ -63,8 +63,8 @@ def edge_continuities(shape) -> list[str]:
             str(
                 BRep_Tool.Continuity_s(
                     edge.wrapped,
-                    TopoDS.Face_s(faces[0]),
-                    TopoDS.Face_s(faces[1]),
+                    TopoDS.Face(faces[0]),
+                    TopoDS.Face(faces[1]),
                 )
             ).rsplit(".", 1)[-1]
         )
