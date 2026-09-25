@@ -52,6 +52,29 @@ def _intersection_volume(first, second):
     return 0 if intersection is None else sum(solid.volume for solid in intersection.solids())
 
 
+def _witness_intersection_volume(placed, bore):
+    witness = bore.bounding_box()
+    candidates = []
+    for shape in placed:
+        bounds = shape.bounding_box()
+        if (
+            bounds.min.X <= witness.max.X
+            and bounds.max.X >= witness.min.X
+            and bounds.min.Y <= witness.max.Y
+            and bounds.max.Y >= witness.min.Y
+            and bounds.min.Z <= witness.max.Z
+            and bounds.max.Z >= witness.min.Z
+        ):
+            candidates.append(shape)
+    return sum(
+        solid.volume
+        for shape in candidates
+        for intersection in [shape.intersect(bore)]
+        if intersection is not None
+        for solid in intersection.solids()
+    )
+
+
 @pytest.fixture(scope="module")
 def review_job():
     return rear_review_job()
@@ -525,31 +548,11 @@ def test_side_caps_have_grid_sockets_and_completed_boundary_holes(review_job):
     for side_x in (-540, 540):
         for y in range(60, 301, 30):
             bore = Solid.make_cylinder(4.99, 13).moved(Location((side_x, y, 0)))
-            candidates = [
-                shape
-                for shape in placed
-                if shape.bounding_box().min.X <= side_x + 5
-                and shape.bounding_box().max.X >= side_x - 5
-                and shape.bounding_box().min.Y <= y + 5
-                and shape.bounding_box().max.Y >= y - 5
-            ]
-            intersections = [shape.intersect(bore) for shape in candidates]
-            assert sum(
-                solid.volume
-                for intersection in intersections
-                if intersection is not None
-                for solid in intersection.solids()
-            ) == pytest.approx(0, abs=1e-8)
+            assert _witness_intersection_volume(placed, bore) == pytest.approx(0, abs=1e-8)
     for side_x in (-570, 570):
         for y in range(60, 301, 60):
             bore = Solid.make_cylinder(4.99, 13).moved(Location((side_x, y, 0)))
-            assert sum(
-                solid.volume
-                for shape in placed
-                for intersection in [shape.intersect(bore)]
-                if intersection is not None
-                for solid in intersection.solids()
-            ) == pytest.approx(0, abs=1e-8)
+            assert _witness_intersection_volume(placed, bore) == pytest.approx(0, abs=1e-8)
 
 
 def test_side_caps_have_exact_mirrored_pen_corrected_r6_4_north_corners(
@@ -628,13 +631,7 @@ def test_south_ramps_complete_every_tile_boundary_hole_through_tabs_and_shelf(
     placed = [design.shape.moved(Location(design.assembly_frames[0])) for design in job.designs]
     for x, y in expected_global:
         bore = Solid.make_cylinder(4.99, 13).moved(Location((x, y, 0)))
-        assert sum(
-            solid.volume
-            for shape in placed
-            for intersection in [shape.intersect(bore)]
-            if intersection is not None
-            for solid in intersection.solids()
-        ) == pytest.approx(0, abs=1e-8)
+        assert _witness_intersection_volume(placed, bore) == pytest.approx(0, abs=1e-8)
 
     north_centers = {
         (
@@ -648,13 +645,7 @@ def test_south_ramps_complete_every_tile_boundary_hole_through_tabs_and_shelf(
     assert north_centers == {(float(x), 300.0) for x in range(-540, 541, 30)}
     for x, y in north_centers:
         bore = Solid.make_cylinder(4.99, 13).moved(Location((x, y, 0)))
-        assert sum(
-            solid.volume
-            for shape in placed
-            for intersection in [shape.intersect(bore)]
-            if intersection is not None
-            for solid in intersection.solids()
-        ) == pytest.approx(0, abs=1e-8)
+        assert _witness_intersection_volume(placed, bore) == pytest.approx(0, abs=1e-8)
 
 
 def test_south_modules_share_reviewed_endpoints_and_plan_tangents(review_job):
