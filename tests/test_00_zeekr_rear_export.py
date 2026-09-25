@@ -8,6 +8,8 @@ from build123d import import_step
 
 from cargo_grid.vehicles.zeekr_7x_rear_review import export_rear_review
 
+pytestmark = pytest.mark.slow
+
 
 def test_review_export_writes_unsliced_bambu_project_steps_manifest_and_preview(tmp_path):
     output = tmp_path / "review"

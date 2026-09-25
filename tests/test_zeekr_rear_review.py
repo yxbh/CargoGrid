@@ -5,14 +5,17 @@ import os
 from collections import defaultdict
 from math import hypot
 from pathlib import Path
+from zipfile import ZipFile
 
 import pytest
-from build123d import Axis, GeomType, Location, Solid
+from build123d import Axis, Box, GeomType, Location, Solid
 from OCP.BRepAdaptor import BRepAdaptor_Surface
 
 from cargo_grid import cli
 from cargo_grid.cli import main
+from cargo_grid.export import BambuSettings, Material, export_job
 from cargo_grid.interfaces import make_plug
+from cargo_grid.jobs import Design
 from cargo_grid.meshes import checked_mesh
 from cargo_grid.parameters import BuildVolume, Exclusion, Tile
 from cargo_grid.tiles import make_tile
@@ -31,6 +34,8 @@ from cargo_grid.vehicles.zeekr_7x_rear_review import (
     _crown_coefficients,
     _merged_taper_stations,
     _north_corner_geometry,
+    _side_design,
+    _south_design,
     _tail_slope_dy_dx,
     _taper_interpolators,
     inspect_scan_obj,
@@ -82,6 +87,65 @@ def review_job():
 
 @pytest.fixture(scope="module")
 def product_job():
+    return rear_panel_job(
+        BuildVolume(350, 320, 325),
+        placement_build=BuildVolume(
+            350,
+            320,
+            320,
+            margin=5,
+            exclusions=(
+                Exclusion(0, 0, 30, 320),
+                Exclusion(320, 0, 30, 320),
+            ),
+        ),
+    )
+
+
+def _planned_product_job(monkeypatch):
+    def side_design(side, segment, parameters):
+        return Design(
+            f"planned_{side}_{segment}_cap",
+            Box(60, 120, 13),
+            {
+                "family": "zeekr-rear-contour-side",
+                "side": side,
+                "segment": segment,
+                "interface": {
+                    "pitch": parameters.interface.pitch,
+                    "height": parameters.interface.height,
+                    "fit_offset": parameters.interface.fit_offset,
+                    "joint_style": parameters.interface.joint_style,
+                },
+            },
+            display_name=f"{side.title()} contour cap - {segment}",
+        )
+
+    def south_design(cells, index, x, parameters):
+        return Design(
+            f"planned_south_ramp_{index + 1}",
+            Box(cells * parameters.interface.pitch, 50, 13),
+            {
+                "family": "zeekr-rear-contour-ramp",
+                "width_cells": cells,
+                "interface": {
+                    "pitch": parameters.interface.pitch,
+                    "height": parameters.interface.height,
+                    "fit_offset": parameters.interface.fit_offset,
+                    "joint_style": parameters.interface.joint_style,
+                },
+            },
+            display_name=f"South contour ramp {index + 1}",
+        )
+
+    monkeypatch.setattr(
+        "cargo_grid.vehicles.zeekr_7x_rear_review._side_design",
+        side_design,
+    )
+    monkeypatch.setattr(
+        "cargo_grid.vehicles.zeekr_7x_rear_review._south_design",
+        south_design,
+    )
     return rear_panel_job(
         BuildVolume(350, 320, 325),
         placement_build=BuildVolume(
@@ -190,6 +254,7 @@ def test_measured_outline_uses_exact_mirrored_pchip_and_named_inset():
     }
 
 
+@pytest.mark.slow
 def test_review_inventory_frames_connector_sexes_and_actual_h2d_packing(review_job):
     job = review_job
     assert len(job.designs) == 19
@@ -282,6 +347,7 @@ def test_review_inventory_frames_connector_sexes_and_actual_h2d_packing(review_j
                 assert hypot(dx, dy) >= H2D_REVIEW_GAP_MM - 1e-5
 
 
+@pytest.mark.slow
 def test_product_recipe_contains_only_nine_contour_pieces_with_clean_metadata(
     product_job,
 ):
@@ -333,8 +399,8 @@ def test_product_recipe_contains_only_nine_contour_pieces_with_clean_metadata(
 def test_cli_routes_rear_panel_recipe_with_ten_mm_default_gap(
     tmp_path,
     monkeypatch,
-    product_job,
 ):
+    product_plan = _planned_product_job(monkeypatch)
     captured = []
 
     def capture(job, output, **settings):
@@ -345,7 +411,7 @@ def test_cli_routes_rear_panel_recipe_with_ten_mm_default_gap(
     monkeypatch.setattr(
         cli.zeekr_7x_rear_review,
         "rear_panel_job",
-        lambda *args, **kwargs: product_job,
+        lambda *args, **kwargs: product_plan,
     )
     assert (
         main(
@@ -401,6 +467,101 @@ def test_cli_routes_rear_panel_recipe_with_ten_mm_default_gap(
     assert caught.value.code == 2
 
 
+def test_product_recipe_export_smoke_has_nine_clean_named_objects(
+    tmp_path,
+    monkeypatch,
+):
+    job = _planned_product_job(monkeypatch)
+    output = tmp_path / "product"
+    manifest_path = export_job(
+        job,
+        output,
+        stl=False,
+        bambu=BambuSettings(
+            (
+                Material(
+                    "Bambu PETG Basic @BBL H2D 0.8 nozzle",
+                    "PETG",
+                    "#637b70",
+                ),
+            ),
+            nozzle=0.8,
+            layer_height=0.32,
+            printer_settings_id="Bambu Lab H2D 0.8 nozzle",
+            print_settings_id="0.32mm Balanced Strength @BBL H2D 0.8 nozzle",
+            bed_type="Textured PEI Plate",
+            machine_nozzle_count=2,
+            printer_model="Bambu Lab H2D",
+        ),
+    )
+    manifest = json.loads(manifest_path.read_text())
+    assert manifest["kind"] == "zeekr-7x-rear-panel"
+    assert len(manifest["designs"]) == 9
+    assert len(manifest["export"]["plates"]) == 2
+    assert "side caps" in job.plate_names[0].lower()
+    assert "south contour ramps" in job.plate_names[1].lower()
+    assert sum(len(plate["items"]) for plate in manifest["export"]["plates"]) == 9
+    assert manifest["export"]["sliced"] is False
+    serialized = json.dumps(manifest)
+    assert "/Users/" not in serialized
+    assert "session-state" not in serialized
+    assert "photogrammetry" not in serialized.lower()
+    with ZipFile(output / "job.3mf") as archive:
+        assert archive.testzip() is None
+        assert not any("slice" in name.lower() for name in archive.namelist())
+
+
+def test_representative_real_contour_holes_connectors_contacts_and_meshes():
+    parameters = RearReviewParameters()
+    west_north = _side_design("west", "north", parameters)
+    west_south = _side_design("west", "south", parameters)
+    east_north = _side_design("east", "north", parameters)
+    west_ramp = _south_design(4, 0, -540, parameters)
+    east_ramp = _south_design(4, 4, 300, parameters)
+
+    for design in (west_north, west_south, east_north, west_ramp, east_ramp):
+        assert design.shape.is_valid
+        assert len(design.shape.solids()) == 1
+        assert design.shape.volume > 0
+    for design in (west_south, west_ramp):
+        _, _, report = checked_mesh(design.shape)
+        assert report["closed_oriented_manifold"]
+
+    assert {join["sex"] for join in west_north.mating_datums["joins"]} == {"male"}
+    assert {join["sex"] for join in east_north.mating_datums["joins"]} == {"female"}
+    assert {join["sex"] for join in west_ramp.mating_datums["joins"]} == {"male"}
+    assert {
+        center[1]
+        for center in west_north.mating_datums["accessory_socket_centers"]
+        + west_south.mating_datums["accessory_socket_centers"]
+    } == {150, 210, 270}
+
+    for design, centers in (
+        (west_ramp, ((0, 0), (30, 0), (60, 0), (240, 0))),
+        (east_ramp, ((240, 0),)),
+        (west_south, ((-30, 60), (-30, 180))),
+        (west_north, ((-30, 180), (-30, 300))),
+    ):
+        for center in centers:
+            bore = Solid.make_cylinder(4.99, 13).moved(Location((*center, 0)))
+            assert _intersection_volume(design.shape, bore) == pytest.approx(0, abs=1e-8)
+
+    tile = make_tile(Tile(4, 4))
+    placed_tile_west = tile.moved(Location((-540, 60, 0)))
+    placed_tile_east = tile.moved(Location((300, 60, 0)))
+    contacts = (
+        (placed_tile_west, _placed(west_north)),
+        (placed_tile_west, _placed(west_south)),
+        (placed_tile_west, _placed(west_ramp)),
+        (placed_tile_east, _placed(east_north)),
+        (_placed(west_north), _placed(west_south)),
+    )
+    for first, second in contacts:
+        assert first.distance_to(second) < 1e-6
+        assert _intersection_volume(first, second) < 1e-7
+
+
+@pytest.mark.slow
 def test_side_caps_have_grid_sockets_and_completed_boundary_holes(review_job):
     job = review_job
     caps = [
@@ -555,6 +716,7 @@ def test_side_caps_have_grid_sockets_and_completed_boundary_holes(review_job):
             assert _witness_intersection_volume(placed, bore) == pytest.approx(0, abs=1e-8)
 
 
+@pytest.mark.slow
 def test_side_caps_have_exact_mirrored_pen_corrected_r6_4_north_corners(
     review_job,
 ):
@@ -583,6 +745,7 @@ def test_side_caps_have_exact_mirrored_pen_corrected_r6_4_north_corners(
         assert abs(cylinder.Axis().Direction().Z()) == pytest.approx(1)
 
 
+@pytest.mark.slow
 def test_south_ramps_complete_every_tile_boundary_hole_through_tabs_and_shelf(
     review_job,
 ):
@@ -648,6 +811,7 @@ def test_south_ramps_complete_every_tile_boundary_hole_through_tabs_and_shelf(
         assert _witness_intersection_volume(placed, bore) == pytest.approx(0, abs=1e-8)
 
 
+@pytest.mark.slow
 def test_south_modules_share_reviewed_endpoints_and_plan_tangents(review_job):
     job = review_job
     parameters = RearReviewParameters()
@@ -668,6 +832,7 @@ def test_south_modules_share_reviewed_endpoints_and_plan_tangents(review_job):
         assert second_slope == pytest.approx(expected_slope, abs=1e-9)
 
 
+@pytest.mark.slow
 def test_custom_solids_mesh_and_assembly_contacts_have_no_nominal_gap_or_overlap(
     review_job,
 ):
