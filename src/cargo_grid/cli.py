@@ -9,7 +9,6 @@ from pathlib import Path
 from cargo_grid._version import __version__
 from cargo_grid.accessories import (
     EDGE_FAMILIES,
-    EDGE_OUTWARD_OPTIONS_MM,
     FAMILIES,
     STRAIGHT_EDGE_OUTWARD_OPTIONS_MM,
     Accessory,
@@ -36,7 +35,7 @@ from cargo_grid.parameters import (
 from cargo_grid.rods import ROD_FAMILIES, Rod, RodBrace
 from cargo_grid.roof_support import RoofSupportSettings
 from cargo_grid.stacking import StackSettings
-from cargo_grid.vehicles import zeekr_7x
+from cargo_grid.vehicles import zeekr_7x, zeekr_7x_rear_review
 
 
 def _positive_mm(value: str) -> float:
@@ -313,8 +312,11 @@ def parser() -> argparse.ArgumentParser:
         if command == "extras":
             p.add_argument(
                 "vehicle",
-                choices=("zeekr-7x",),
-                help="personal collection name, not a measured vehicle-fit claim",
+                choices=("zeekr-7x", "zeekr-7x-rear-panel"),
+                help=(
+                    "Zeekr recipe: 40 mm straight edges, or measured rear-panel "
+                    "contour pieces with a user-reviewed test fit"
+                ),
             )
         for axis, meaning in (
             ("width", "X: build-plate left-right"),
@@ -343,7 +345,8 @@ def parser() -> argparse.ArgumentParser:
             metavar="MM",
             help=(
                 "minimum packed-part separation in mm; default 2, "
-                f"or {H2D_DEFAULT_PART_CLEARANCE_MM:g} with --h2d-dual-safe"
+                f"{H2D_DEFAULT_PART_CLEARANCE_MM:g} for ordinary H2D dual-safe jobs, "
+                "or 10 for the rear-panel recipe"
             ),
         )
         for axis, meaning in (
@@ -806,11 +809,12 @@ def main(argv: list[str] | None = None) -> int:
             job = layout_job(layout, build)
         else:
             requested_gap = getattr(args, "packing_gap_mm", None)
-            packing_gap = (
-                (H2D_DEFAULT_PART_CLEARANCE_MM if args.h2d_dual_safe else 2)
-                if requested_gap is None
-                else requested_gap
+            default_gap = (
+                zeekr_7x_rear_review.H2D_REVIEW_GAP_MM
+                if args.command == "extras" and args.vehicle == "zeekr-7x-rear-panel"
+                else (H2D_DEFAULT_PART_CLEARANCE_MM if args.h2d_dual_safe else 2)
             )
+            packing_gap = default_gap if requested_gap is None else requested_gap
             if args.h2d_dual_safe:
                 if not bambu:
                     raise ValueError("--h2d-dual-safe requires --bambu")
@@ -833,14 +837,27 @@ def main(argv: list[str] | None = None) -> int:
                     )
                 positive("H2D packing gap", packing_gap)
             if args.command == "extras":
-                job = zeekr_7x.extras_job(
-                    build,
-                    interface=interface,
-                    hole_diameter=hole_diameter,
-                    hole_scope=args.hole_scope,
-                    placement_build=h2d_common_build() if args.h2d_dual_safe else None,
-                    part_gap=packing_gap,
-                )
+                if args.vehicle == "zeekr-7x-rear-panel":
+                    if hole_diameter != DEFAULT_HOLE_DIAMETER_MM or args.hole_scope != "full":
+                        raise ValueError(
+                            "Zeekr rear-panel contour pieces require the standard "
+                            "full-scope 10 mm hole pattern"
+                        )
+                    job = zeekr_7x_rear_review.rear_panel_job(
+                        build,
+                        interface=interface,
+                        placement_build=(h2d_common_build() if args.h2d_dual_safe else None),
+                        part_gap=packing_gap,
+                    )
+                else:
+                    job = zeekr_7x.extras_job(
+                        build,
+                        interface=interface,
+                        hole_diameter=hole_diameter,
+                        hole_scope=args.hole_scope,
+                        placement_build=(h2d_common_build() if args.h2d_dual_safe else None),
+                        part_gap=packing_gap,
+                    )
                 if args.h2d_dual_safe:
                     job.placement_policy.update(
                         name="H2D dual-nozzle safe",

@@ -98,7 +98,7 @@ The project names the H2D 0.8 nozzle, 0.32 mm Balanced Strength process, Texture
 
 ## Make the separate Zeekr 7X extras
 
-`extras zeekr-7x` makes only 40 mm straight male and female edges, not the standard catalogue with extras appended. Zeekr 7X is the name of this collection, not a claim of measured vehicle fit or manufacturer approval. There are no matching 40 mm corners.
+The Zeekr extras provide two separate recipes. `extras zeekr-7x` keeps the original set of 40 mm straight male and female edges unchanged; these generic strips are not a measured vehicle outline and there are no matching 40 mm corners. `extras zeekr-7x-rear-panel` uses the measured rear lift-out-panel outline described below.
 
 ```bash
 uv run cargo-grid extras zeekr-7x --h2d-dual-safe --build-width-mm 350 --build-depth-mm 320 --build-height-mm 325 --bambu --material "Bambu PETG Basic @BBL H2D 0.8 nozzle" PETG "#637b70" --nozzle-diameter-mm 0.8 --layer-height-mm 0.32 --no-stl --output outputs/zeekr-7x-extras
@@ -111,6 +111,27 @@ The default parts complete accepted 10 mm boundary openings on matching tiles. A
 For another build envelope, omit `--h2d-dual-safe` and supply its dimensions; the catalogue retains only lengths that actually fit. A single strip uses `part --family edge-x --length-cells 4 --edge-outward-mm 40` (or `edge-y` for female) with the usual build and output options. The normal `catalogue` command still uses only its existing 10/20/30 mm perimeter choices.
 
 The 3MF is an unsliced project. Open it as a project, then slice and inspect every plate you plan to print.
+
+### Rear lift-out-panel contour pieces
+
+`extras zeekr-7x-rear-panel` makes only the nine Zeekr-specific perimeter pieces: west male and east female contour caps split into north and south segments, plus five south male ramps aligned to the 4x4 + 4x4 + 2x4 + 4x4 + 4x4 tile modules. It does not duplicate the standard tiles or north edges.
+
+```bash
+uv run cargo-grid extras zeekr-7x-rear-panel --h2d-dual-safe --build-width-mm 350 --build-depth-mm 320 --build-height-mm 325 --bambu --material "Bambu PETG Basic @BBL H2D 0.8 nozzle" PETG "#637b70" --nozzle-diameter-mm 0.8 --layer-height-mm 0.32 --no-stl --output outputs/zeekr-7x-rear-panel
+```
+
+Print the matching standard parts separately with these commands:
+
+```bash
+uv run cargo-grid part --family tile --width-cells 4 --depth-cells 4 --copy-count 4 --build-width-mm 350 --build-depth-mm 320 --build-height-mm 325 --bambu --material "Bambu PETG Basic @BBL H2D 0.8 nozzle" PETG "#637b70" --nozzle-diameter-mm 0.8 --layer-height-mm 0.32 --no-stl --output outputs/zeekr-7x-rear-panel-4x4-tiles
+uv run cargo-grid part --family tile --width-cells 2 --depth-cells 4 --build-width-mm 350 --build-depth-mm 320 --build-height-mm 325 --bambu --material "Bambu PETG Basic @BBL H2D 0.8 nozzle" PETG "#637b70" --nozzle-diameter-mm 0.8 --layer-height-mm 0.32 --no-stl --output outputs/zeekr-7x-rear-panel-2x4-tile
+uv run cargo-grid part --family edge-y --length-cells 4 --edge-outward-mm 30 --copy-count 4 --build-width-mm 350 --build-depth-mm 320 --build-height-mm 325 --bambu --material "Bambu PETG Basic @BBL H2D 0.8 nozzle" PETG "#637b70" --nozzle-diameter-mm 0.8 --layer-height-mm 0.32 --no-stl --output outputs/zeekr-7x-rear-panel-4cell-north-edges
+uv run cargo-grid part --family edge-y --length-cells 2 --edge-outward-mm 30 --build-width-mm 350 --build-depth-mm 320 --build-height-mm 325 --bambu --material "Bambu PETG Basic @BBL H2D 0.8 nozzle" PETG "#637b70" --nozzle-diameter-mm 0.8 --layer-height-mm 0.32 --no-stl --output outputs/zeekr-7x-rear-panel-2cell-north-edge
+```
+
+Assemble the tile row west to east as 4x4, 4x4, 2x4, 4x4, 4x4, with tile male edges pointing north and east. The 30 mm standard female edges finish the north side. The custom west cap is male, the east cap is female, and the south ramps are male. Completed 10 mm openings continue through the north edges, south ramps, tile/cap boundary and the cap column between X sockets.
+
+The outline uses the corrected measured parameters in source: `pen_offset_mm=5`, `east_edge_x_mm=602.5`, `centre_depth_mm=365`, a true R6.4 north corner derived from the R11.4 pen trace, the corrected side stations and the C1 south crown. It comes from tape measurements plus corrected pen traces. One physical test fit was judged good enough for now by the user, but that is not a general vehicle-fit guarantee; check your own panel, slicer setup and printed parts before making a full set.
 
 ## Round-hole rods and upper braces
 

@@ -1,4 +1,4 @@
-"""A personal extras collection, not measured or manufacturer-approved vehicle geometry."""
+"""Zeekr 7X extras recipes built from shared CargoGrid geometry."""
 
 from math import floor
 from typing import Literal
