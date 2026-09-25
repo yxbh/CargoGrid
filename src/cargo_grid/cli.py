@@ -344,9 +344,9 @@ def parser() -> argparse.ArgumentParser:
             default=argparse.SUPPRESS,
             metavar="MM",
             help=(
-                "minimum packed-part separation in mm; default 2, "
-                f"{H2D_DEFAULT_PART_CLEARANCE_MM:g} for ordinary H2D dual-safe jobs, "
-                "or 10 for the rear-panel recipe"
+                "minimum packed-part separation in mm; default 2, or "
+                f"{H2D_DEFAULT_PART_CLEARANCE_MM:g} with --h2d-dual-safe; "
+                "the rear-panel recipe defaults to 10"
             ),
         )
         for axis, meaning in (
