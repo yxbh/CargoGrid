@@ -54,6 +54,28 @@ def _intersection_volume(first, second):
     return 0 if intersection is None else sum(solid.volume for solid in intersection.solids())
 
 
+@pytest.fixture(scope="module")
+def review_job():
+    return rear_review_job()
+
+
+@pytest.fixture(scope="module")
+def product_job():
+    return rear_panel_job(
+        BuildVolume(350, 320, 325),
+        placement_build=BuildVolume(
+            350,
+            320,
+            320,
+            margin=5,
+            exclusions=(
+                Exclusion(0, 0, 30, 320),
+                Exclusion(320, 0, 30, 320),
+            ),
+        ),
+    )
+
+
 def test_measured_outline_uses_exact_mirrored_pchip_and_named_inset():
     parameters = RearReviewParameters()
     stations = _merged_taper_stations(
@@ -147,8 +169,8 @@ def test_measured_outline_uses_exact_mirrored_pchip_and_named_inset():
     }
 
 
-def test_review_inventory_frames_connector_sexes_and_actual_h2d_packing():
-    job = rear_review_job()
+def test_review_inventory_frames_connector_sexes_and_actual_h2d_packing(review_job):
+    job = review_job
     assert len(job.designs) == 19
     assert job.kind == "zeekr-7x-rear-review"
     assert job.part_gap == H2D_REVIEW_GAP_MM
@@ -239,21 +261,10 @@ def test_review_inventory_frames_connector_sexes_and_actual_h2d_packing():
                 assert hypot(dx, dy) >= H2D_REVIEW_GAP_MM - 1e-5
 
 
-def test_product_recipe_contains_only_nine_contour_pieces_with_clean_metadata():
-    build = BuildVolume(350, 320, 325)
-    job = rear_panel_job(
-        build,
-        placement_build=BuildVolume(
-            350,
-            320,
-            320,
-            margin=5,
-            exclusions=(
-                Exclusion(0, 0, 30, 320),
-                Exclusion(320, 0, 30, 320),
-            ),
-        ),
-    )
+def test_product_recipe_contains_only_nine_contour_pieces_with_clean_metadata(
+    product_job,
+):
+    job = product_job
     assert job.kind == "zeekr-7x-rear-panel"
     assert len(job.designs) == 9
     assert [design.parameters["family"] for design in job.designs] == [
@@ -301,6 +312,7 @@ def test_product_recipe_contains_only_nine_contour_pieces_with_clean_metadata():
 def test_cli_routes_rear_panel_recipe_with_ten_mm_default_gap(
     tmp_path,
     monkeypatch,
+    product_job,
 ):
     captured = []
 
@@ -309,6 +321,11 @@ def test_cli_routes_rear_panel_recipe_with_ten_mm_default_gap(
         return output / "manifest.json"
 
     monkeypatch.setattr(cli, "export_job", capture)
+    monkeypatch.setattr(
+        cli.zeekr_7x_rear_review,
+        "rear_panel_job",
+        lambda *args, **kwargs: product_job,
+    )
     assert (
         main(
             [
@@ -363,8 +380,8 @@ def test_cli_routes_rear_panel_recipe_with_ten_mm_default_gap(
     assert caught.value.code == 2
 
 
-def test_side_caps_have_grid_sockets_and_completed_boundary_holes():
-    job = rear_review_job()
+def test_side_caps_have_grid_sockets_and_completed_boundary_holes(review_job):
+    job = review_job
     caps = [
         design
         for design in job.designs
@@ -537,10 +554,12 @@ def test_side_caps_have_grid_sockets_and_completed_boundary_holes():
             ) == pytest.approx(0, abs=1e-8)
 
 
-def test_side_caps_have_exact_mirrored_pen_corrected_r6_4_north_corners():
+def test_side_caps_have_exact_mirrored_pen_corrected_r6_4_north_corners(
+    review_job,
+):
     caps = [
         design
-        for design in rear_review_job().designs
+        for design in review_job.designs
         if design.parameters.get("family") == "zeekr-rear-contour-side"
         and design.parameters["segment"] == "north"
     ]
@@ -563,8 +582,10 @@ def test_side_caps_have_exact_mirrored_pen_corrected_r6_4_north_corners():
         assert abs(cylinder.Axis().Direction().Z()) == pytest.approx(1)
 
 
-def test_south_ramps_complete_every_tile_boundary_hole_through_tabs_and_shelf():
-    job = rear_review_job()
+def test_south_ramps_complete_every_tile_boundary_hole_through_tabs_and_shelf(
+    review_job,
+):
+    job = review_job
     ramps = [
         design
         for design in job.designs
@@ -638,8 +659,8 @@ def test_south_ramps_complete_every_tile_boundary_hole_through_tabs_and_shelf():
         ) == pytest.approx(0, abs=1e-8)
 
 
-def test_south_modules_share_reviewed_endpoints_and_plan_tangents():
-    job = rear_review_job()
+def test_south_modules_share_reviewed_endpoints_and_plan_tangents(review_job):
+    job = review_job
     parameters = RearReviewParameters()
     south = job.designs[10:15]
     seams = (-300, -60, 60, 300)
@@ -658,8 +679,10 @@ def test_south_modules_share_reviewed_endpoints_and_plan_tangents():
         assert second_slope == pytest.approx(expected_slope, abs=1e-9)
 
 
-def test_custom_solids_mesh_and_assembly_contacts_have_no_nominal_gap_or_overlap():
-    job = rear_review_job()
+def test_custom_solids_mesh_and_assembly_contacts_have_no_nominal_gap_or_overlap(
+    review_job,
+):
+    job = review_job
     designs = {design.name: design for design in job.designs}
     for design in job.designs[10:]:
         assert design.shape.is_valid
