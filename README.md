@@ -64,7 +64,7 @@ Generate one accessory with `part`:
 uv run cargo-grid part --family plate --width-cells 1 --depth-cells 1 --build-width-mm 150 --build-depth-mm 150 --build-height-mm 80 --output outputs/x-plate
 ```
 
-For a wider finishing strip, select its total outward projection. A 20 or 30 mm standalone part follows the normal full 10 mm-hole tile pattern unless `--plain-edge` is given. `--complete-edge-holes` makes that choice explicit, and `--hole-diameter-mm` changes the matching tile and perimeter opening together:
+For a finishing strip, select its outward body width, excluding the male tabs. A standalone part follows the normal full 10 mm-hole tile pattern unless `--plain-edge` is given. `--complete-edge-holes` makes that choice explicit, and `--hole-diameter-mm` changes the matching tile and perimeter opening together:
 
 ```sh
 uv run cargo-grid part --family edge-y --length-cells 2 --edge-outward-mm 30 --complete-edge-holes --build-width-mm 150 --build-depth-mm 150 --build-height-mm 50 --output outputs/wide-edge
@@ -96,7 +96,42 @@ Open `outputs/full-catalogue/job.3mf` as a project. Common plates keep model bou
 
 The project names the H2D 0.8 nozzle, 0.32 mm Balanced Strength process, Textured PEI plate and Bambu PETG Basic profile. Confirm those profiles and your loaded filament before slicing. The catalogue does not add PLA roof interfaces to tiles; the PETG/PLA roof-support job below remains a separate tile-only workflow.
 
+## Make the separate Zeekr 7X extras
+
+The Zeekr extras provide two separate recipes. `extras zeekr-7x` keeps the original set of 40 mm straight male and female edges unchanged; these generic strips are not a measured vehicle outline and there are no matching 40 mm corners. `extras zeekr-7x-rear-panel` uses the measured rear lift-out-panel outline described below.
+
+```bash
+uv run cargo-grid extras zeekr-7x --h2d-dual-safe --build-width-mm 350 --build-depth-mm 320 --build-height-mm 325 --bambu --material "Bambu PETG Basic @BBL H2D 0.8 nozzle" PETG "#637b70" --nozzle-diameter-mm 0.8 --layer-height-mm 0.32 --no-stl --output outputs/zeekr-7x-extras
+```
+
+At standard 60/13 settings this produces ten parts: one of each 1, 2, 3, 4 and 5-cell length (60 through 300 mm). Packing uses the shared H2D common-reach inset and 4 mm default part clearance; `--packing-gap-mm` requests a different clearance. The manifest records the resulting plates, with automatic filament matching. The body extends 40 mm outward from the tile edge; male tabs add another 6 mm toward the tile, making the male part's overall cross-edge size 46 mm. Female parts measure 40 mm across.
+
+The default parts complete accepted 10 mm boundary openings on matching tiles. At an exposed strip end, the remaining corner quarter still needs adjacent perimeter material; this collection does not close a whole floor outline. `--no-holes` or `--hole-scope interior` selects only plain strips, while `--hole-diameter-mm` follows the same accepted-site policy as the tiles. Original roofed joints are required. Roof support stays off: inspect the female pocket bridges in your slicer and test physical fit and flatness before making a full set.
+
+For another build envelope, omit `--h2d-dual-safe` and supply its dimensions; the catalogue retains only lengths that actually fit. A single strip uses `part --family edge-x --length-cells 4 --edge-outward-mm 40` (or `edge-y` for female) with the usual build and output options. The normal `catalogue` command still uses only its existing 10/20/30 mm perimeter choices.
+
 The 3MF is an unsliced project. Open it as a project, then slice and inspect every plate you plan to print.
+
+### Rear lift-out-panel contour pieces
+
+`extras zeekr-7x-rear-panel` makes only the nine Zeekr-specific perimeter pieces: west male and east female contour caps split into north and south segments, plus five south male ramps aligned to the 4x4 + 4x4 + 2x4 + 4x4 + 4x4 tile modules. It does not duplicate the standard tiles or north edges.
+
+```bash
+uv run cargo-grid extras zeekr-7x-rear-panel --h2d-dual-safe --build-width-mm 350 --build-depth-mm 320 --build-height-mm 325 --bambu --material "Bambu PETG Basic @BBL H2D 0.8 nozzle" PETG "#637b70" --nozzle-diameter-mm 0.8 --layer-height-mm 0.32 --no-stl --output outputs/zeekr-7x-rear-panel
+```
+
+Print the matching standard parts separately with these commands:
+
+```bash
+uv run cargo-grid part --family tile --width-cells 4 --depth-cells 4 --copy-count 4 --build-width-mm 350 --build-depth-mm 320 --build-height-mm 325 --bambu --material "Bambu PETG Basic @BBL H2D 0.8 nozzle" PETG "#637b70" --nozzle-diameter-mm 0.8 --layer-height-mm 0.32 --no-stl --output outputs/zeekr-7x-rear-panel-4x4-tiles
+uv run cargo-grid part --family tile --width-cells 2 --depth-cells 4 --build-width-mm 350 --build-depth-mm 320 --build-height-mm 325 --bambu --material "Bambu PETG Basic @BBL H2D 0.8 nozzle" PETG "#637b70" --nozzle-diameter-mm 0.8 --layer-height-mm 0.32 --no-stl --output outputs/zeekr-7x-rear-panel-2x4-tile
+uv run cargo-grid part --family edge-y --length-cells 4 --edge-outward-mm 30 --copy-count 4 --build-width-mm 350 --build-depth-mm 320 --build-height-mm 325 --bambu --material "Bambu PETG Basic @BBL H2D 0.8 nozzle" PETG "#637b70" --nozzle-diameter-mm 0.8 --layer-height-mm 0.32 --no-stl --output outputs/zeekr-7x-rear-panel-4cell-north-edges
+uv run cargo-grid part --family edge-y --length-cells 2 --edge-outward-mm 30 --build-width-mm 350 --build-depth-mm 320 --build-height-mm 325 --bambu --material "Bambu PETG Basic @BBL H2D 0.8 nozzle" PETG "#637b70" --nozzle-diameter-mm 0.8 --layer-height-mm 0.32 --no-stl --output outputs/zeekr-7x-rear-panel-2cell-north-edge
+```
+
+Assemble the tile row west to east as 4x4, 4x4, 2x4, 4x4, 4x4, with tile male edges pointing north and east. The 30 mm standard female edges finish the north side. The custom west cap is male, the east cap is female, and the south ramps are male. Completed 10 mm openings continue through the north edges, south ramps, tile/cap boundary and the cap column between X sockets.
+
+The outline uses the corrected measured parameters in source: `pen_offset_mm=5`, `east_edge_x_mm=602.5`, `centre_depth_mm=365`, a true R6.4 north corner derived from the R11.4 pen trace, the corrected side stations and the C1 south crown. It comes from tape measurements plus corrected pen traces. One physical test fit was judged good enough for now by the user, but that is not a general vehicle-fit guarantee; check your own panel, slicer setup and printed parts before making a full set.
 
 ## Round-hole rods and upper braces
 
@@ -214,7 +249,7 @@ uv run cargo-grid layout --help
 uv run cargo-grid catalogue --help
 ```
 
-`part` makes one design, `layout` fills a requested rectangle and `catalogue` lists the supported designs that fit. Normal generation doesn't need a downloaded reference model.
+`part` makes one design, `layout` fills a requested rectangle, `catalogue` lists the supported standard designs that fit, and `extras zeekr-7x` makes only that named recipe. Normal generation doesn't need a downloaded reference model.
 
 Common options:
 
@@ -224,9 +259,9 @@ Common options:
 - `--width-cells`, `--depth-cells`: one tile or two-axis accessory;
 - `--panel-height-cells`: bracket wall rows, separate from floor depth;
 - `--length-cells`: edge strips and support rails;
-- `--edge-outward-mm`: 10, 20 or 30 mm horizontal projection for edge/corner parts;
-- `--complete-edge-holes`: explicitly continue matching accepted tile-boundary sites through a 10, 20 or 30 mm edge/corner;
-- `--plain-edge`: keep a 10, 20 or 30 mm standalone edge/corner plain instead of using automatic tile-pattern matching;
+- `--edge-outward-mm`: 10, 20 or 30 mm outward body width for edge/corner parts, or 40 mm for original-style straight edges only, excluding male tabs;
+- `--complete-edge-holes`: explicitly continue matching accepted tile-boundary sites through an edge/corner;
+- `--plain-edge`: keep a standalone edge/corner plain instead of using automatic tile-pattern matching;
 - `--rod-height-mm`, `--peg-diameter-mm`: rod height above the mat and round insertion peg;
 - `--brace-spacing-mm`, `--bore-diameter-mm`: physical brace centre spacing and bore diameter;
 - `--copy-count`: repeated copies of one design;

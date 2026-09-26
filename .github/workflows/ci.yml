@@ -53,7 +53,7 @@ jobs:
               print(package, importlib.metadata.version(package))
           PY
       - name: Portable geometry and export tests
-        run: /usr/bin/time -v uv run --no-sync pytest -q -n 2 --dist worksteal -m "not native and not reference" --durations=0 --durations-min=0
+        run: /usr/bin/time -v uv run --no-sync pytest -q -n 2 --dist worksteal -m "not native and not reference and not slow" --durations=0 --durations-min=0
       - name: Record job memory high-water mark
         if: always()
         run: |

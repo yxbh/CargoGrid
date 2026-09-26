@@ -2,6 +2,7 @@
 
 import json
 from dataclasses import asdict
+from functools import partial
 from hashlib import sha256
 from math import floor
 from typing import Literal
@@ -15,18 +16,17 @@ from cargo_grid.accessories import (
     accessory_datums,
     bambu_print_rotation,
     bambu_print_rotation_y,
-    edge_hole_completion_supported,
     make_accessory,
     required_bambu_object_settings,
+    tile_matched_perimeter,
 )
 from cargo_grid.footprints import pack_projected_footprints, projected_mesh_footprint
 from cargo_grid.jobs import Design, Job, tile_design
 from cargo_grid.meshes import checked_mesh
-from cargo_grid.packing import PrintPlacement, pack_sizes
+from cargo_grid.packing import PrintPlacement, h2d_common_build, pack_sizes
 from cargo_grid.parameters import (
     DEFAULT_HOLE_DIAMETER_MM,
     BuildVolume,
-    Exclusion,
     Interface,
     Tile,
     positive,
@@ -127,35 +127,12 @@ def accessory_variants(
 ) -> list[Accessory | Rod | RodBrace]:
     nmax = max(1, floor(max(build.usable[:2]) / interface.pitch))
     result = []
-
-    def perimeter_spec(
-        family: str,
-        *,
-        nx: int = 1,
-        variant: int = 1,
-        outward: float,
-    ) -> Accessory:
-        complete = (
-            hole_diameter is not None
-            and hole_scope == "full"
-            and edge_hole_completion_supported(
-                family,
-                nx,
-                variant,
-                interface,
-                hole_diameter,
-            )
-        )
-        return Accessory(
-            family,
-            nx=nx,
-            variant=variant,
-            interface=interface,
-            edge_outward=outward,
-            complete_edge_holes=complete,
-            edge_hole_diameter=hole_diameter if complete else None,
-        )
-
+    perimeter_spec = partial(
+        tile_matched_perimeter,
+        interface=interface,
+        hole_diameter=hole_diameter,
+        hole_scope=hole_scope,
+    )
     for n in range(1, nmax + 1):
         result.extend(
             perimeter_spec(
@@ -395,16 +372,7 @@ def h2d_dual_safe_catalogue_job(
         )
     )
     groups.append(("Rods and upper braces", family_members({"rod", "rod-brace"})))
-    common_build = BuildVolume(
-        350,
-        320,
-        320,
-        margin=5,
-        exclusions=(
-            Exclusion(0, 0, 30, 320),
-            Exclusion(320, 0, 30, 320),
-        ),
-    )
+    common_build = h2d_common_build()
     designs = []
     placements = []
     footprints = []

@@ -23,6 +23,7 @@ class Design:
     quantity: int = 1
     assembly_frames: list[tuple[float, float, float]] = field(default_factory=list)
     holes: list[dict] = field(default_factory=list)
+    mating_datums: dict = field(default_factory=dict)
     recommended_print_rotation_x: float | None = None
     recommended_print_rotation_y: float | None = None
     apply_orientation_to_bambu: bool = False
@@ -90,6 +91,7 @@ class Job:
     projected_footprints: list[ProjectedFootprint | None] | None = None
     projected_footprint_clearances: dict[int, float] = field(default_factory=dict)
     plate_builds: dict[int, BuildVolume] = field(default_factory=dict)
+    manifest_metadata: dict = field(default_factory=dict)
 
     def __post_init__(self):
         if not self.designs:

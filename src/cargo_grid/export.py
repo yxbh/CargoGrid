@@ -957,13 +957,17 @@ def export_job(
         compatibility = Interface(**interface_data).compatibility() if interface_data else None
         if compatibility is not None:
             family = design.parameters.get("family", "tile")
-            edge_present = family in (
-                "tile",
-                "edge-x",
-                "edge-y",
-                "corner-in",
-                "corner-out",
-                "ramp",
+            edge_present = design.parameters.get(
+                "tile_edge_interface_present",
+                family
+                in (
+                    "tile",
+                    "edge-x",
+                    "edge-y",
+                    "corner-in",
+                    "corner-out",
+                    "ramp",
+                ),
             )
             compatibility["tile_edge_interface_present"] = edge_present
             if not edge_present:
@@ -971,12 +975,16 @@ def export_job(
                 compatibility["edge_note"] = (
                     "No tile-edge dovetails on this part; physical support-rail joints are a separate unchanged interface."
                 )
-            compatibility["x_attachment_interface_present"] = family in (
-                "tile",
-                "plate",
-                "vertical-tile-bracket",
-                "lock-45",
-                "vertical-stop",
+            compatibility["x_attachment_interface_present"] = design.parameters.get(
+                "x_attachment_interface_present",
+                family
+                in (
+                    "tile",
+                    "plate",
+                    "vertical-tile-bracket",
+                    "lock-45",
+                    "vertical-stop",
+                ),
             )
             if family != "tile":
                 compatibility["geometry_warning"] = None
@@ -1019,7 +1027,9 @@ def export_job(
                 "compatibility": compatibility,
             }
         )
-        if design.parameters.get("family") == "ramp":
+        if design.mating_datums:
+            entries[-1]["mating_datums"] = design.mating_datums
+        elif design.parameters.get("family") == "ramp":
             entries[-1]["mating_datums"] = accessory_datums(
                 Accessory(
                     **{
@@ -1096,6 +1106,7 @@ def export_job(
         "build": asdict(job.build),
         "footprint_mm": job.footprint,
         "placement_policy": job.placement_policy or None,
+        "job_metadata": job.manifest_metadata or None,
         "designs": entries,
         "omitted": job.omitted,
         "export": project,
