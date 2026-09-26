@@ -6,9 +6,13 @@ on:
       - main
   pull_request:
   workflow_dispatch:
+    inputs:
+      workers:
+        description: "TEMPORARY trial: pytest-xdist workers"
+        default: "4"
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ inputs.workers }}
   cancel-in-progress: true
 
 permissions:
@@ -53,7 +57,9 @@ jobs:
               print(package, importlib.metadata.version(package))
           PY
       - name: Portable geometry and export tests
-        run: /usr/bin/time -v uv run --no-sync pytest -q -n 2 --dist worksteal -m "not native and not reference and not slow" --durations=0 --durations-min=0
+        env:
+          WORKERS: ${{ inputs.workers || '4' }}
+        run: uv run --no-sync python tools/ci_memory_sampler.py -- /usr/bin/time -v uv run --no-sync pytest -q -n "$WORKERS" --dist worksteal -m "not native and not reference and not slow" --durations=0 --durations-min=0
       - name: Record job memory high-water mark
         if: always()
         run: |
