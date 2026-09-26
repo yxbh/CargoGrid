@@ -30,7 +30,7 @@ Install the wheel into a clean Python 3.12 environment outside the source path. 
 
 ## What CI checks
 
-CI runs for pull requests, pushes to `main` and manual dispatches. It does not run a second copy for every push to a PR branch. A concurrency group cancels older runs when a newer commit reaches the same PR. A nightly schedule, or a manual dispatch with `tier: slow`, runs the slow tier instead of the portable job.
+CI runs for pull requests, pushes to `main` and manual dispatches. It does not run a second copy for every push to a PR branch. A concurrency group cancels older runs when a newer commit reaches the same PR. A weekly schedule, or a manual dispatch with `tier: slow`, runs the slow tier instead of the portable job.
 
 The Linux job installs the CAD runtime libraries, runs Ruff, runs the portable tests with four process workers, builds both distributions and installs the wheel into a clean environment. Its smoke commands generate a tile, bracket, normal stop and ramp, then check their manifest dimensions, orientations and support settings with named assertion messages. Resource logs report the CPU model, available CPUs, affinity, hyperthread siblings, cgroup limits and memory where the runner exposes them. `tools/ci_memory_sampler.py` wraps the test command, samples the whole process tree once a second and reports the lowest `MemAvailable` and the peak combined RSS and PSS of pytest and its workers; GNU time's maximum RSS is only the largest single process.
 

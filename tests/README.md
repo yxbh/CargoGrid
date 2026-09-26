@@ -1,6 +1,6 @@
 # Writing tests
 
-Portable CI runs every test not marked `native`, `reference` or `slow` with four workers on a shared hosted runner, where a test takes roughly five times as long as it does alone on a fast workstation. `tools/check_test_durations.py` fails the job when one test's setup, call and teardown exceed its budget, and warns when the whole pytest session runs past its target. The `slow` tier runs nightly and on a manual CI dispatch with `tier: slow`.
+Portable CI runs every test not marked `native`, `reference` or `slow` with four workers on a shared hosted runner, where a test takes roughly five times as long as it does alone on a fast workstation. `tools/check_test_durations.py` fails the job when one test's setup, call and teardown exceed its budget, and warns when the whole pytest session runs past its target. The `slow` tier runs weekly and on a manual CI dispatch with `tier: slow`.
 
 - Check representative sites. Keep at least one portable case for each connector sex, joint style, family variant and recorded pose, plus the largest size. Mark the other values of a sweep with `pytest.param(..., marks=pytest.mark.slow)` so their test IDs stay the same.
 - Query geometry near the feature. Clip shapes to a small box around a hole before classifying points (`_local_assembly_contains` in `test_edge_variants.py`), and use `local_geometry.bounded_distance` for contact checks. Skip shapes whose bounding boxes can't reach the region. Point queries and distances against a whole tile can take seconds each.
