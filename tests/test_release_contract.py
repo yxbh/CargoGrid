@@ -292,6 +292,7 @@ def _junit_report(path, cases, session=100.0):
         (61.0, {"tests/test_ramp.py::test_x[1]": (90.0, "reviewed")}, 0, "[allowlisted]"),
         (91.0, {"tests/test_ramp.py::test_x[1]": (90.0, "reviewed")}, 1, "over its 90 s limit"),
     ],
+    ids=["under-budget", "over-budget", "allowlisted", "over-allowlist-limit"],
 )
 def test_duration_budget_uses_node_ids_and_reviewed_limits(
     seconds, allowlist, status, message, tmp_path, monkeypatch, capsys
