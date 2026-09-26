@@ -263,3 +263,70 @@ def test_distribution_gate_rejects_stale_module_bytes(tmp_path):
         archive.writestr(prefix + "licenses/LICENSE", (module.ROOT / "LICENSE").read_bytes())
     with pytest.raises(ValueError, match="module contents differ"):
         module.check_wheel(path, __version__)
+
+
+def duration_checker():
+    source = Path(__file__).resolve().parents[1] / "tools/check_test_durations.py"
+    spec = importlib.util.spec_from_file_location("duration_check", source)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _junit_report(path, cases, session=100.0):
+    suite = ET.Element("testsuite", time=str(session))
+    for classname, name, seconds, skipped in cases:
+        case = ET.SubElement(suite, "testcase", classname=classname, name=name, time=str(seconds))
+        if skipped:
+            ET.SubElement(case, "skipped")
+    suites = ET.Element("testsuites")
+    suites.append(suite)
+    ET.ElementTree(suites).write(path)
+
+
+@pytest.mark.parametrize(
+    "seconds,allowlist,status,message",
+    [
+        (59.0, {}, 0, None),
+        (61.0, {}, 1, "::error title=Test over duration budget::tests/test_ramp.py::test_x[1]"),
+        (61.0, {"tests/test_ramp.py::test_x[1]": (90.0, "reviewed")}, 0, "[allowlisted]"),
+        (91.0, {"tests/test_ramp.py::test_x[1]": (90.0, "reviewed")}, 1, "over its 90 s limit"),
+    ],
+    ids=["under-budget", "over-budget", "allowlisted", "over-allowlist-limit"],
+)
+def test_duration_budget_uses_node_ids_and_reviewed_limits(
+    seconds, allowlist, status, message, tmp_path, monkeypatch, capsys
+):
+    module = duration_checker()
+    report = tmp_path / "junit.xml"
+    _junit_report(
+        report,
+        [
+            ("tests.test_ramp", "test_x[1]@shared-plan", seconds, False),
+            ("tests.test_ramp", "test_skipped", 500.0, True),
+        ],
+    )
+    monkeypatch.setattr(module, "ALLOWLIST", allowlist)
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    root = Path(__file__).resolve().parents[1]
+    monkeypatch.setattr(
+        sys, "argv", ["check", str(report), "--root", str(root), "--budget-seconds", "60"]
+    )
+    assert module.main() == status
+    output = capsys.readouterr().out
+    assert "test_skipped" not in output
+    if message:
+        assert message in output
+
+
+def test_duration_budget_warns_for_long_sessions_and_stale_allowlist(tmp_path, monkeypatch, capsys):
+    module = duration_checker()
+    report = tmp_path / "junit.xml"
+    _junit_report(report, [("tests.test_ramp", "test_x", 1.0, False)], session=900.0)
+    monkeypatch.setattr(module, "ALLOWLIST", {"tests/test_ramp.py::gone": (90.0, "reviewed")})
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    monkeypatch.setattr(sys, "argv", ["check", str(report), "--target-seconds", "780"])
+    assert module.main() == 0
+    output = capsys.readouterr().out
+    assert "::warning title=Portable test time::pytest session took 900 s" in output
+    assert "::warning title=Stale duration allowlist entry::tests/test_ramp.py::gone" in output

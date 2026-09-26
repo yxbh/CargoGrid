@@ -37,7 +37,11 @@ def volume(shape) -> float:
     return sum(solid.volume for solid in shape.solids()) if shape else 0
 
 
-@pytest.mark.parametrize("cells", range(1, 6))
+# Bodies and joins repeat once per cell; portable runs keep one cell and the largest width.
+RAMP_JOIN_CELLS = [1, *(pytest.param(cells, marks=pytest.mark.slow) for cells in (2, 3, 4)), 5]
+
+
+@pytest.mark.parametrize("cells", RAMP_JOIN_CELLS)
 @pytest.mark.parametrize("ramp_join", ["female", "male"])
 def test_ramp_width_run_rise_rounding_step_and_mesh(cells, ramp_join, tmp_path):
     spec = Accessory("ramp", nx=cells, ramp_join=ramp_join)
@@ -65,7 +69,7 @@ def test_ramp_width_run_rise_rounding_step_and_mesh(cells, ramp_join, tmp_path):
     assert mesh["closed_oriented_manifold"] and mesh["mesh_volume_mm3"] > 0
 
 
-@pytest.mark.parametrize("cells", range(1, 6))
+@pytest.mark.parametrize("cells", RAMP_JOIN_CELLS)
 def test_ramp_uses_exact_existing_female_join_and_mates_north_tile_edge(cells):
     interface = Interface()
     spec = Accessory("ramp", nx=cells, interface=interface)
@@ -92,7 +96,7 @@ def test_ramp_uses_exact_existing_female_join_and_mates_north_tile_edge(cells):
     assert ramp.bounding_box().max.Z == pytest.approx(tile.bounding_box().max.Z)
 
 
-@pytest.mark.parametrize("cells", range(1, 6))
+@pytest.mark.parametrize("cells", RAMP_JOIN_CELLS)
 def test_male_ramp_repeats_exact_shared_tabs_and_mates_both_female_tile_sides(cells):
     interface = Interface()
     spec = Accessory("ramp", nx=cells, ramp_join="male")
@@ -134,10 +138,27 @@ def test_male_ramp_repeats_exact_shared_tabs_and_mates_both_female_tile_sides(ce
     assert {join["height"] for join in datums["joins"]} == {10}
 
 
-@pytest.mark.parametrize("ramp_join", ["female", "male"])
+# Portable runs keep every scaled interface once with alternating joins; the slow tier runs
+# the other join for each interface.
+PORTABLE_SCALED_RAMPS = {
+    (30, 6, 0, "female"),
+    (30, 13, -0.2, "male"),
+    (60, 8, 0.2, "female"),
+    (90, 18, 0, "male"),
+    (60, 60, 0, "female"),
+}
+
+
 @pytest.mark.parametrize(
-    "unit,thickness,fit",
-    [(30, 6, 0), (30, 13, -0.2), (60, 8, 0.2), (90, 18, 0), (60, 60, 0)],
+    "unit,thickness,fit,ramp_join",
+    [
+        case if case in PORTABLE_SCALED_RAMPS else pytest.param(*case, marks=pytest.mark.slow)
+        for case in (
+            (*interface, ramp_join)
+            for ramp_join in ("female", "male")
+            for interface in ((30, 6, 0), (30, 13, -0.2), (60, 8, 0.2), (90, 18, 0), (60, 60, 0))
+        )
+    ],
 )
 def test_scaled_ramps_match_real_tiles_keep_run_and_export(
     ramp_join, unit, thickness, fit, tmp_path

@@ -31,34 +31,48 @@ from cargo_grid.parameters import Exclusion
 BAMBU = BambuSettings((Material("Diagnostic PETG", "PETG", "#789784"),), 0.4, 0.2)
 
 
+BED_CONTACT_CASES = [
+    *(
+        (
+            "vertical-tile-bracket",
+            x,
+            y,
+            50,
+            bambu_print_rotation(Accessory("vertical-tile-bracket", nx=x, ny=y)),
+        )
+        for x, y in VERTICAL_BRACKET_CELLS
+    ),
+    *(
+        (
+            "vertical-stop",
+            x,
+            y,
+            height,
+            vertical_stop_print_rotation(Accessory("vertical-stop", nx=x, ny=y, height=height)),
+        )
+        for x, y in VERTICAL_STOP_CELLS
+        for height in VERTICAL_STOP_HEIGHTS_MM
+    ),
+    ("lock-45", 1, 1, 50, -135),
+    ("lock-45", 2, 2, 50, -135),
+    ("plate", 1, 1, 50, 180),
+]
+
+
+def _portable_bed_contact_cases(cases):
+    """Keep each family's largest case for every distinct recorded rotation."""
+    kept, seen = set(), set()
+    for case in sorted(cases, key=lambda case: -case[1] * case[2]):
+        family, _, _, _, angle = case
+        if (family, round(angle, 9)) not in seen:
+            seen.add((family, round(angle, 9)))
+            kept.add(case)
+    return [case if case in kept else pytest.param(*case, marks=pytest.mark.slow) for case in cases]
+
+
 @pytest.mark.parametrize(
     "family,nx,ny,height,angle",
-    [
-        *(
-            (
-                "vertical-tile-bracket",
-                x,
-                y,
-                50,
-                bambu_print_rotation(Accessory("vertical-tile-bracket", nx=x, ny=y)),
-            )
-            for x, y in VERTICAL_BRACKET_CELLS
-        ),
-        *(
-            (
-                "vertical-stop",
-                x,
-                y,
-                height,
-                vertical_stop_print_rotation(Accessory("vertical-stop", nx=x, ny=y, height=height)),
-            )
-            for x, y in VERTICAL_STOP_CELLS
-            for height in VERTICAL_STOP_HEIGHTS_MM
-        ),
-        ("lock-45", 1, 1, 50, -135),
-        ("lock-45", 2, 2, 50, -135),
-        ("plate", 1, 1, 50, 180),
-    ],
+    _portable_bed_contact_cases(BED_CONTACT_CASES),
 )
 def test_bambu_mesh_has_broad_bed_contact_and_recorded_transform(
     family, nx, ny, height, angle, tmp_path

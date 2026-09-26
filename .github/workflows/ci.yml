@@ -5,10 +5,21 @@ on:
     branches:
       - main
   pull_request:
+  schedule:
+    # Weekly slow tier (Saturday 17:23 UTC): exhaustive sweeps and review-package exports left out of portable CI.
+    - cron: "23 17 * * 6"
   workflow_dispatch:
+    inputs:
+      tier:
+        description: Test tier to run
+        type: choice
+        options:
+          - portable
+          - slow
+        default: portable
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name }}-${{ inputs.tier }}
   cancel-in-progress: true
 
 permissions:
@@ -16,6 +27,7 @@ permissions:
 
 jobs:
   portable:
+    if: github.event_name != 'schedule' && inputs.tier != 'slow'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -42,8 +54,11 @@ jobs:
           from pathlib import Path
 
           print("Platform:", platform.platform())
+          print("CPU:", next((line.split(":", 1)[1].strip() for line in Path("/proc/cpuinfo").read_text().splitlines() if line.startswith("model name")), "unknown"))
           print("Logical CPUs:", os.cpu_count())
           print("Allowed CPUs:", sorted(os.sched_getaffinity(0)))
+          siblings = Path("/sys/devices/system/cpu/cpu0/topology/thread_siblings_list")
+          print("CPU 0 thread siblings:", siblings.read_text().strip() if siblings.exists() else "unavailable")
           print("Load:", os.getloadavg())
           print("\n".join(line for line in Path("/proc/meminfo").read_text().splitlines() if line.startswith(("MemTotal:", "MemAvailable:"))))
           for name in ("cpu.max", "memory.max", "memory.current"):
@@ -53,16 +68,10 @@ jobs:
               print(package, importlib.metadata.version(package))
           PY
       - name: Portable geometry and export tests
-        run: /usr/bin/time -v uv run --no-sync pytest -q -n 2 --dist worksteal -m "not native and not reference and not slow" --durations=0 --durations-min=0
-      - name: Record job memory high-water mark
-        if: always()
-        run: |
-          if [ -r /sys/fs/cgroup/memory.peak ]; then
-            printf 'Cgroup memory.peak (whole job, bytes): '
-            cat /sys/fs/cgroup/memory.peak
-          else
-            echo 'Cgroup memory.peak unavailable; GNU time reports maximum individual process RSS, not combined worker RSS.'
-          fi
+        run: uv run --no-sync python tools/ci_memory_sampler.py -- /usr/bin/time -v uv run --no-sync pytest -q -n 4 --dist worksteal -m "not native and not reference and not slow" --durations=0 --durations-min=0 --junitxml=.local/portable-junit.xml
+      - name: Check portable test durations
+        if: ${{ !cancelled() && hashFiles('.local/portable-junit.xml') != '' }}
+        run: uv run --no-sync python tools/check_test_durations.py .local/portable-junit.xml
       - name: Build and inspect distributions
         run: |
           uv build
@@ -90,3 +99,36 @@ jobs:
           env -u PYTHONPATH wheel-smoke/bin/python -c 'import json; p=json.load(open("wheel-rod/manifest.json")); d=p["designs"][0]; i=p["export"]["plates"][0]["items"][0]; assert d["parameters"]["above_mat_height_mm"] == 240 and d["mating_datums"]["insertion_depth_mm"] == 12; assert i["source_to_project_transform"]["rotation_y_degrees"] == 90; assert i["object_settings"] == {"enable_support":"1","support_type":"normal(auto)"}; assert d["fit_evidence"]["status"] == "user-reported-fit"'
           env -u PYTHONPATH wheel-smoke/bin/cargo-grid part --family rod-brace --brace-spacing-mm 120 --build-width-mm 150 --build-depth-mm 30 --build-height-mm 10 --no-stl --output wheel-rod-brace
           env -u PYTHONPATH wheel-smoke/bin/python -c 'import json; d=json.load(open("wheel-rod-brace/manifest.json"))["designs"][0]; assert d["parameters"]["bore_diameter_mm"] == 10; assert d["mating_datums"]["center_spacing_mm"] == 120; assert abs(d["mating_datums"]["straight_bore_length_mm"] - 5.6) < 1e-9; e=d["fit_evidence"]; assert e["status"] == "user-reported-fit" and e["scope"] == "bore-to-shaft fit only"; assert e["physical_test_pending"] is False and e["tested_center_spacings_mm"] is None and e["spacing_specific_fit_verified"] is False'
+
+  slow:
+    if: github.event_name == 'schedule' || inputs.tier == 'slow'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
+        with:
+          python-version: "3.12"
+      - name: Install CAD runtime libraries
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install --no-install-recommends -y libgl1 libglu1-mesa
+      - name: Install dependencies
+        run: uv sync --group dev
+      - name: Record runner resources
+        run: |
+          uv run --no-sync python - <<'PY'
+          import importlib.metadata
+          import os
+          import platform
+          from pathlib import Path
+
+          print("Platform:", platform.platform())
+          print("CPU:", next((line.split(":", 1)[1].strip() for line in Path("/proc/cpuinfo").read_text().splitlines() if line.startswith("model name")), "unknown"))
+          print("Logical CPUs:", os.cpu_count())
+          print("\n".join(line for line in Path("/proc/meminfo").read_text().splitlines() if line.startswith(("MemTotal:", "MemAvailable:"))))
+          for package in ("build123d", "cadquery-ocp-novtk", "numpy", "scipy", "pytest", "pytest-xdist"):
+              print(package, importlib.metadata.version(package))
+          PY
+      - name: Slow geometry and export tests
+        run: uv run --no-sync python tools/ci_memory_sampler.py -- /usr/bin/time -v uv run --no-sync pytest -q -n 4 --dist loadgroup -m "slow and not native and not reference" --durations=0 --durations-min=0

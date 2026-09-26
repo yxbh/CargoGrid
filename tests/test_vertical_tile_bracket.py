@@ -235,9 +235,21 @@ def test_accepted_bidirectional_panel_post_preserves_tip_and_nominal_interferenc
     )
 
 
-@pytest.mark.parametrize("nx,ny", VERTICAL_BRACKET_CELLS)
-@pytest.mark.parametrize("holes", [False, True])
-def test_separate_tile_insertion_bearing_and_solid_backing(nx, ny, holes):
+# Portable runs cover every bracket and both hole modes, with the default holes on the largest.
+PORTABLE_INSERTION_CASES = {(True, 2, 2), (False, 1, 2), (True, 2, 1)}
+
+
+@pytest.mark.parametrize(
+    "holes,nx,ny",
+    [
+        (holes, nx, ny)
+        if (holes, nx, ny) in PORTABLE_INSERTION_CASES
+        else pytest.param(holes, nx, ny, marks=pytest.mark.slow)
+        for nx, ny in VERTICAL_BRACKET_CELLS
+        for holes in (False, True)
+    ],
+)
+def test_separate_tile_insertion_bearing_and_solid_backing(holes, nx, ny):
     spec = Accessory("vertical-tile-bracket", nx=nx, ny=ny)
     part = make_accessory(spec)
     core = _vertical_bracket(spec, round_lip=False)
