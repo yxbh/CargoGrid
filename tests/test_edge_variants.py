@@ -20,6 +20,11 @@ from cargo_grid.meshes import checked_mesh
 from cargo_grid.tiles import hole_placements
 
 _POINT_CLASSIFIER_TOLERANCE = 1e-6
+# Hole checks sample radii up to 5.01 mm; the clip keeps every sample well inside its box.
+_LOCAL_CLIP_HALF_WIDTH = 8
+_LOCAL_CLIP_MARGIN = 0.5
+# Portable runs keep the narrowest and widest standard projections; the slow tier adds 20 mm.
+_OUTWARD_WIDTHS = [10, pytest.param(20, marks=pytest.mark.slow), 30]
 
 
 @lru_cache(maxsize=128)
@@ -80,6 +85,43 @@ def _prepared_assembly_contains(shapes):
         return False
 
     return contains
+
+
+def _local_assembly_contains(shapes, center, height, half_width=_LOCAL_CLIP_HALF_WIDTH):
+    """Classify points near one hole against the shapes clipped to a small box around it.
+
+    A point strictly inside the clip box is inside a shape exactly when it is inside the shape's
+    clipped part, so this answers the whole-solid question without testing every distant face.
+    Queries outside the box are rejected rather than answered.
+    """
+    lower = (center[0] - half_width, center[1] - half_width, -1)
+    upper = (center[0] + half_width, center[1] + half_width, height + 1)
+    clip = Box(2 * half_width, 2 * half_width, height + 2).moved(
+        Location((center[0], center[1], height / 2))
+    )
+    pieces = []
+    for shape in shapes:
+        bounds = shape.bounding_box()
+        if any(
+            maximum < low or minimum > high
+            for minimum, maximum, low, high in zip(bounds.min, bounds.max, lower, upper)
+        ):
+            continue
+        common = shape.intersect(clip)
+        if common:
+            pieces.extend(common.solids())
+    assert all(piece.is_valid and piece.volume > 0 for piece in pieces)
+    contains = _prepared_assembly_contains(pieces)
+
+    def local_contains(point):
+        coordinates = tuple(Vector(point))
+        assert all(
+            low + _LOCAL_CLIP_MARGIN < value < high - _LOCAL_CLIP_MARGIN
+            for value, low, high in zip(coordinates, lower, upper)
+        ), f"query {coordinates} is outside the local clip around {center}"
+        return contains(point)
+
+    return local_contains
 
 
 def _solid_intersection_volume(first, second):
@@ -168,12 +210,18 @@ def _corner_half_pairs(outward, complete, interface=Interface()):
     )
 
 
+def _whole_assembly_contains(shapes):
+    shapes_and_bounds = tuple((shape, shape.bounding_box()) for shape in shapes)
+
+    def contains(point):
+        return _assembly_contains(shapes_and_bounds, point)
+
+    return contains
+
+
 def _assert_completed_circle(shapes, center, height, minimum_ring_samples=62, *, contains=None):
     if contains is None:
-        shapes_and_bounds = tuple((shape, shape.bounding_box()) for shape in shapes)
-
-        def contains(point):
-            return _assembly_contains(shapes_and_bounds, point)
+        contains = _local_assembly_contains(shapes, center, height)
 
     for z in (1, height / 2, height - 1):
         for index in range(64):
@@ -257,7 +305,7 @@ def test_straight_edge_projection_and_hole_mode(family, outward, complete):
 
 
 @pytest.mark.parametrize("style", ["original", "full-height"])
-@pytest.mark.parametrize("outward", [10, 20, 30])
+@pytest.mark.parametrize("outward", _OUTWARD_WIDTHS)
 @pytest.mark.parametrize("complete", [False, True])
 def test_corner_variants_remain_single_valid_solids(style, outward, complete):
     interface = Interface(joint_style=style)
@@ -299,7 +347,7 @@ def test_corner_variants_remain_single_valid_solids(style, outward, complete):
         ("corner-out", range(1, 7)),
     ],
 )
-@pytest.mark.parametrize("outward", [10, 20, 30])
+@pytest.mark.parametrize("outward", _OUTWARD_WIDTHS)
 def test_every_perimeter_join_completes_assembled_ten_mm_holes(family, variants, outward):
     for variant in variants:
         spec = Accessory(
@@ -313,7 +361,7 @@ def test_every_perimeter_join_completes_assembled_ten_mm_holes(family, variants,
             _assert_completed_circle(shapes, join["position"], spec.interface.height)
 
 
-@pytest.mark.parametrize("outward", [10, 20, 30])
+@pytest.mark.parametrize("outward", _OUTWARD_WIDTHS)
 @pytest.mark.parametrize("variant,center", [(3, (60, 60)), (6, (0, 0))])
 def test_completed_one_piece_outer_corner_makes_full_ten_mm_hole(outward, variant, center):
     tile = _tile_shape(Tile())
@@ -348,7 +396,14 @@ def test_completed_miter_terminations_cut_the_tile_corner_site(outward):
 
 @pytest.mark.parametrize(
     "outward,complete",
-    [(10, False), (10, True), (20, False), (20, True), (30, False), (30, True)],
+    [
+        (10, False),
+        (10, True),
+        pytest.param(20, False, marks=pytest.mark.slow),
+        pytest.param(20, True, marks=pytest.mark.slow),
+        (30, False),
+        (30, True),
+    ],
 )
 def test_outer_corner_half_pairs_close_without_overlap(outward, complete):
     pitch = 60
@@ -456,51 +511,64 @@ def test_outer_corner_pairs_match_whole_l_exterior_sections(
             assert _pair_target_symmetric_difference(parts, target, section) / 0.02 < 1e-6
 
 
-def test_outer_corner_halves_and_whole_corners_close_a_real_perimeter():
-    outward = 30
-    assembly = _three_by_three_perimeter(outward, True)
-    neighbors = [
-        ("v6", "south"),
-        ("south", "v5"),
-        ("v5", "v4"),
-        ("v4", "east"),
-        ("east", "v3"),
-        ("v3", "north"),
-        ("north", "v2"),
-        ("v2", "v1"),
-        ("v1", "west"),
-        ("west", "v6"),
-    ]
-    for first, second in neighbors:
-        assert assembly[first].distance_to(assembly[second]) < 1e-6
-        assert _solid_intersection_volume(assembly[first], assembly[second]) < 1e-7
+_REAL_PERIMETER_OUTWARD = 30
+_REAL_PERIMETER_NEIGHBORS = [
+    ("v6", "south"),
+    ("south", "v5"),
+    ("v5", "v4"),
+    ("v4", "east"),
+    ("east", "v3"),
+    ("v3", "north"),
+    ("north", "v2"),
+    ("v2", "v1"),
+    ("v1", "west"),
+    ("west", "v6"),
+]
+_REAL_PERIMETER_CORNERS = {
+    "v1": (1, (0, 120)),
+    "v2": (2, (0, 180)),
+    "v3": (3, (120, 120)),
+    "v4": (4, (180, 0)),
+    "v5": (5, (120, 0)),
+    "v6": (6, (0, 0)),
+}
 
-    pitch = 60
-    corner_specs = {
-        "v1": (1, (0, 2 * pitch)),
-        "v2": (2, (0, 3 * pitch)),
-        "v3": (3, (2 * pitch, 2 * pitch)),
-        "v4": (4, (3 * pitch, 0)),
-        "v5": (5, (2 * pitch, 0)),
-        "v6": (6, (0, 0)),
-    }
-    for name, (variant, (offset_x, offset_y)) in corner_specs.items():
-        for join in accessory_datums(
-            Accessory(
-                "corner-out",
-                variant=variant,
-                edge_outward=outward,
-                complete_edge_holes=True,
-            )
-        )["joins"]:
-            x = join["position"][0] + offset_x
-            y = join["position"][1] + offset_y
-            tile_sex = "female" if x == 0 or y == 0 else "male"
-            assert x in (0, 180) or y in (0, 180)
-            assert join["sex"] != tile_sex
-            assert assembly[name].distance_to(assembly["tile"]) < 1e-6
 
-    shapes = tuple(assembly.values())
+@pytest.mark.parametrize(
+    "first,second",
+    _REAL_PERIMETER_NEIGHBORS,
+    ids=[f"{first}-{second}" for first, second in _REAL_PERIMETER_NEIGHBORS],
+)
+def test_outer_corner_halves_and_whole_corners_close_a_real_perimeter(first, second):
+    assembly = _three_by_three_perimeter(_REAL_PERIMETER_OUTWARD, True)
+    assert assembly[first].distance_to(assembly[second]) < 1e-6
+    assert _solid_intersection_volume(assembly[first], assembly[second]) < 1e-7
+
+
+@pytest.mark.parametrize("name", sorted(_REAL_PERIMETER_CORNERS))
+def test_real_perimeter_corners_join_the_opposite_tile_sex(name):
+    assembly = _three_by_three_perimeter(_REAL_PERIMETER_OUTWARD, True)
+    variant, (offset_x, offset_y) = _REAL_PERIMETER_CORNERS[name]
+    joins = accessory_datums(
+        Accessory(
+            "corner-out",
+            variant=variant,
+            edge_outward=_REAL_PERIMETER_OUTWARD,
+            complete_edge_holes=True,
+        )
+    )["joins"]
+    assert joins
+    for join in joins:
+        x = join["position"][0] + offset_x
+        y = join["position"][1] + offset_y
+        tile_sex = "female" if x == 0 or y == 0 else "male"
+        assert x in (0, 180) or y in (0, 180)
+        assert join["sex"] != tile_sex
+    assert assembly[name].distance_to(assembly["tile"]) < 1e-6
+
+
+def test_real_perimeter_completes_representative_boundary_holes():
+    shapes = tuple(_three_by_three_perimeter(_REAL_PERIMETER_OUTWARD, True).values())
     boundary_holes = [
         (hole.x, hole.y)
         for hole in hole_placements(Tile(3, 3))
@@ -787,7 +855,7 @@ def test_replacing_interface_preserves_edge_options():
 
 
 @pytest.mark.parametrize("family", ["edge-x", "edge-y"])
-@pytest.mark.parametrize("cells", [1, 4, 5])
+@pytest.mark.parametrize("cells", [1, pytest.param(4, marks=pytest.mark.slow), 5])
 def test_forty_mm_straights_keep_tile_interfaces_and_complete_middle_holes(family, cells):
     spec = Accessory(family, nx=cells, edge_outward=40)
     shape = _accessory_shape(spec)
@@ -807,11 +875,10 @@ def test_forty_mm_straights_keep_tile_interfaces_and_complete_middle_holes(famil
     if family == "edge-y":
         tile = tile.moved(Location((0, -60, 0)))
     shapes = (shape, tile)
-    contains = _prepared_assembly_contains(shapes)
     datums = accessory_datums(spec)
     assert datums["edge_hole_centers"] == [(x, 0) for x in range(0, cells * 60 + 1, 30)]
     for x in range(30, cells * 60, 30):
-        _assert_completed_circle(shapes, (x, 0), 13, minimum_ring_samples=59, contains=contains)
+        _assert_completed_circle(shapes, (x, 0), 13, minimum_ring_samples=59)
     # End holes still need the neighboring perimeter's quarter; no 40 mm corners are supplied.
     outside_y = -3.6 if family == "edge-x" else 3.6
     assert not any(part.is_inside(Vector(-3.6, outside_y, 6.5)) for part in shapes)
@@ -904,16 +971,48 @@ def test_prepared_circle_check_still_rejects_filled_or_wrong_radius_holes(diamet
         edge_hole_diameter=diameter,
     )
     shapes = (_accessory_shape(spec), _tile_shape(Tile()))
-    with pytest.raises(AssertionError):
-        _assert_completed_circle(shapes, (30, 0), 13, minimum_ring_samples=59)
-    with pytest.raises(AssertionError):
-        _assert_completed_circle(
-            shapes,
-            (30, 0),
-            13,
-            minimum_ring_samples=59,
-            contains=_prepared_assembly_contains(shapes),
-        )
+    for contains in (
+        None,
+        _prepared_assembly_contains(shapes),
+        _whole_assembly_contains(shapes),
+    ):
+        with pytest.raises(AssertionError):
+            _assert_completed_circle(
+                shapes,
+                (30, 0),
+                13,
+                minimum_ring_samples=59,
+                contains=contains,
+            )
+
+
+@pytest.mark.parametrize(
+    "spec,tile_origin,center",
+    [
+        (Accessory("edge-x", edge_outward=40), (0, 0), (30, 0)),
+        (Accessory("edge-y", edge_outward=40), (0, -60), (30, 0)),
+        (Accessory("edge-y", edge_outward=40), (0, -60), (0, 0)),
+        (Accessory("corner-out", variant=3, complete_edge_holes=True), (0, 0), (60, 60)),
+        (Accessory("corner-out", variant=6, complete_edge_holes=True), (0, 0), (0, 0)),
+    ],
+    ids=["edge-x-middle", "edge-y-middle", "edge-y-end", "corner-out-v3", "corner-out-v6"],
+)
+def test_local_hole_queries_match_whole_solid_classification(spec, tile_origin, center):
+    shapes = (_accessory_shape(spec), _tile_shape(Tile()).moved(Location((*tile_origin, 0))))
+    points = [
+        Vector(center[0] + radius * cos(angle), center[1] + radius * sin(angle), z)
+        for radius in (0, 4.99, 5, 5.01, 6, 7)
+        for angle in (index * pi / 8 for index in range(16))
+        for z in (0, 1, 6.5, 12, 13)
+    ]
+    # Prepared whole-solid queries are checked against the legacy classifier above.
+    reference = _prepared_assembly_contains(shapes)
+    expected = [reference(point) for point in points]
+    assert any(expected) and not all(expected)
+    contains = _local_assembly_contains(shapes, center, 13)
+    assert [contains(point) for point in points] == expected
+    with pytest.raises(AssertionError, match="outside the local clip"):
+        contains(Vector(center[0] + 7.6, center[1], 6.5))
 
 
 def test_prepared_queries_are_case_local_and_preserve_pristine_templates(monkeypatch):

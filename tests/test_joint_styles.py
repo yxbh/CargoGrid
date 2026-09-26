@@ -168,7 +168,15 @@ def test_open_pockets_reduce_plate_bearing_land_without_changing_seating_datum()
     assert areas["full-height"] < areas["original"]
 
 
-@pytest.mark.parametrize("nx,ny", [(x, y) for x in range(1, 6) for y in range(1, 6)])
+@pytest.mark.parametrize(
+    "nx,ny",
+    [
+        # Portable runs keep the smallest, largest and both extreme aspect ratios.
+        (x, y) if {x, y} <= {1, 5} else pytest.param(x, y, marks=pytest.mark.slow)
+        for x in range(1, 6)
+        for y in range(1, 6)
+    ],
+)
 def test_all_full_height_ordered_sizes_through_five_cells(nx, ny):
     tile = make_tile(Tile(nx, ny, Interface(joint_style="full-height"), hole_diameter=None))
     assert tile.is_valid and len(tile.solids()) == 1

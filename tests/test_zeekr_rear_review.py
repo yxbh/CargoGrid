@@ -511,54 +511,73 @@ def test_product_recipe_export_smoke_has_nine_clean_named_objects(
         assert not any("slice" in name.lower() for name in archive.namelist())
 
 
-def test_representative_real_contour_holes_connectors_contacts_and_meshes():
+def _assert_valid_single_solid(design):
+    assert design.shape.is_valid
+    assert len(design.shape.solids()) == 1
+    assert design.shape.volume > 0
+
+
+def _assert_bores_clear(design, centers):
+    for center in centers:
+        bore = Solid.make_cylinder(4.99, 13).moved(Location((*center, 0)))
+        assert _intersection_volume(design.shape, bore) == pytest.approx(0, abs=1e-8)
+
+
+def _assert_contact_without_overlap(first, second):
+    assert first.distance_to(second) < 1e-6
+    assert _intersection_volume(first, second) < 1e-7
+
+
+def _representative_tile(x):
+    return make_tile(Tile(4, 4)).moved(Location((x, 60, 0)))
+
+
+def test_representative_real_contour_west_side_caps_holes_sockets_and_contacts():
     parameters = RearReviewParameters()
     west_north = _side_design("west", "north", parameters)
     west_south = _side_design("west", "south", parameters)
-    east_north = _side_design("east", "north", parameters)
-    west_ramp = _south_design(4, 0, -540, parameters)
-    east_ramp = _south_design(4, 4, 300, parameters)
-
-    for design in (west_north, west_south, east_north, west_ramp, east_ramp):
-        assert design.shape.is_valid
-        assert len(design.shape.solids()) == 1
-        assert design.shape.volume > 0
-    for design in (west_south, west_ramp):
-        _, _, report = checked_mesh(design.shape)
-        assert report["closed_oriented_manifold"]
-
+    for design in (west_north, west_south):
+        _assert_valid_single_solid(design)
+    _, _, report = checked_mesh(west_south.shape)
+    assert report["closed_oriented_manifold"]
     assert {join["sex"] for join in west_north.mating_datums["joins"]} == {"male"}
-    assert {join["sex"] for join in east_north.mating_datums["joins"]} == {"female"}
-    assert {join["sex"] for join in west_ramp.mating_datums["joins"]} == {"male"}
     assert {
         center[1]
         for center in west_north.mating_datums["accessory_socket_centers"]
         + west_south.mating_datums["accessory_socket_centers"]
     } == {150, 210, 270}
-
-    for design, centers in (
-        (west_ramp, ((0, 0), (30, 0), (60, 0), (240, 0))),
-        (east_ramp, ((240, 0),)),
-        (west_south, ((-30, 60), (-30, 180))),
-        (west_north, ((-30, 180), (-30, 300))),
-    ):
-        for center in centers:
-            bore = Solid.make_cylinder(4.99, 13).moved(Location((*center, 0)))
-            assert _intersection_volume(design.shape, bore) == pytest.approx(0, abs=1e-8)
-
-    tile = make_tile(Tile(4, 4))
-    placed_tile_west = tile.moved(Location((-540, 60, 0)))
-    placed_tile_east = tile.moved(Location((300, 60, 0)))
-    contacts = (
+    _assert_bores_clear(west_south, ((-30, 60), (-30, 180)))
+    _assert_bores_clear(west_north, ((-30, 180), (-30, 300)))
+    placed_tile_west = _representative_tile(-540)
+    for first, second in (
         (placed_tile_west, _placed(west_north)),
         (placed_tile_west, _placed(west_south)),
-        (placed_tile_west, _placed(west_ramp)),
-        (placed_tile_east, _placed(east_north)),
         (_placed(west_north), _placed(west_south)),
-    )
-    for first, second in contacts:
-        assert first.distance_to(second) < 1e-6
-        assert _intersection_volume(first, second) < 1e-7
+    ):
+        _assert_contact_without_overlap(first, second)
+
+
+def test_representative_real_contour_east_side_cap_is_female_and_meets_its_tile():
+    east_north = _side_design("east", "north", RearReviewParameters())
+    _assert_valid_single_solid(east_north)
+    assert {join["sex"] for join in east_north.mating_datums["joins"]} == {"female"}
+    _assert_contact_without_overlap(_representative_tile(300), _placed(east_north))
+
+
+def test_representative_real_contour_west_ramp_holes_joins_mesh_and_contact():
+    west_ramp = _south_design(4, 0, -540, RearReviewParameters())
+    _assert_valid_single_solid(west_ramp)
+    _, _, report = checked_mesh(west_ramp.shape)
+    assert report["closed_oriented_manifold"]
+    assert {join["sex"] for join in west_ramp.mating_datums["joins"]} == {"male"}
+    _assert_bores_clear(west_ramp, ((0, 0), (30, 0), (60, 0), (240, 0)))
+    _assert_contact_without_overlap(_representative_tile(-540), _placed(west_ramp))
+
+
+def test_representative_real_contour_east_ramp_keeps_its_boundary_hole():
+    east_ramp = _south_design(4, 4, 300, RearReviewParameters())
+    _assert_valid_single_solid(east_ramp)
+    _assert_bores_clear(east_ramp, ((240, 0),))
 
 
 @pytest.mark.slow
