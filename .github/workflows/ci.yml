@@ -10,9 +10,12 @@ on:
       workers:
         description: "TEMPORARY trial: pytest-xdist workers"
         default: "4"
+      dist:
+        description: "TEMPORARY trial: pytest-xdist distribution"
+        default: "loadgroup"
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ inputs.workers }}
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || '' }}
   cancel-in-progress: true
 
 permissions:
@@ -59,16 +62,11 @@ jobs:
       - name: Portable geometry and export tests
         env:
           WORKERS: ${{ inputs.workers || '4' }}
-        run: uv run --no-sync python tools/ci_memory_sampler.py -- /usr/bin/time -v uv run --no-sync pytest -q -n "$WORKERS" --dist worksteal -m "not native and not reference and not slow" --durations=0 --durations-min=0
-      - name: Record job memory high-water mark
-        if: always()
-        run: |
-          if [ -r /sys/fs/cgroup/memory.peak ]; then
-            printf 'Cgroup memory.peak (whole job, bytes): '
-            cat /sys/fs/cgroup/memory.peak
-          else
-            echo 'Cgroup memory.peak unavailable; GNU time reports maximum individual process RSS, not combined worker RSS.'
-          fi
+          DIST: ${{ inputs.dist || 'loadgroup' }}
+        run: uv run --no-sync python tools/ci_memory_sampler.py -- /usr/bin/time -v uv run --no-sync pytest -q -n "$WORKERS" --dist "$DIST" -m "not native and not reference and not slow" --durations=0 --durations-min=0 --junitxml=.local/portable-junit.xml
+      - name: Check portable test durations
+        if: ${{ !cancelled() && hashFiles('.local/portable-junit.xml') != '' }}
+        run: uv run --no-sync python tools/check_test_durations.py .local/portable-junit.xml
       - name: Build and inspect distributions
         run: |
           uv build

@@ -222,7 +222,28 @@ PLATE_GROUPS = {
 }
 
 
-def test_h2d_dual_safe_plan_keeps_full_family_inventory_and_hardware_zones(monkeypatch):
+PERIMETER_FAMILIES = {"edge-x", "edge-y", "corner-in", "corner-out"}
+EXCEPTION_PLATE_NAME = "5x5 TILE - SINGLE NOZZLE ONLY - LEFT"
+EXPECTED_GROUP_ORDER = [
+    "Tiles",
+    "Female ramps",
+    "Male ramps",
+    "Normal stops",
+    "Tile brackets - deep and shallow",
+    "Angled stops",
+    "Attachment plates",
+    "10mm edges and corners - complete holes",
+    "20mm edges and corners - complete holes",
+    "30mm edges and corners - complete holes",
+    "Rails and connectors",
+    "Rods and upper braces",
+]
+NESTED_GROUP = "20mm edges and corners - complete holes"
+
+
+@pytest.fixture(scope="module")
+def h2d_plan():
+    """Build the unpatched whole-catalogue plan once per worker; the tests only read it."""
     original_size = Design.bambu_size
     measured = Counter()
 
@@ -230,9 +251,86 @@ def test_h2d_dual_safe_plan_keeps_full_family_inventory_and_hardware_zones(monke
         measured[id(design)] += 1
         return original_size.fget(design)
 
-    monkeypatch.setattr(Design, "bambu_size", property(counted_size))
-    job = h2d_dual_safe_catalogue_job(hole_diameter=10, hole_scope="full")
-    assert measured == Counter(id(design) for design in job.designs)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(Design, "bambu_size", property(counted_size))
+        job = h2d_dual_safe_catalogue_job(hole_diameter=10, hole_scope="full")
+    return SimpleNamespace(job=job, measured=measured, layout=_plan_layout(job))
+
+
+def _design_group(design):
+    """Return a planned design's expected plate group and perimeter connector kind."""
+    family = design.parameters.get("family", "tile")
+    if family == "ramp":
+        return f"{design.parameters.get('ramp_join', 'female').title()} ramps", None
+    if family not in PERIMETER_FAMILIES:
+        return PLATE_GROUPS[family], None
+    outward = design.parameters.get("edge_outward", 10.0)
+    complete = design.parameters.get("complete_edge_holes", False)
+    spec = Accessory(
+        family,
+        nx=design.parameters["nx"],
+        variant=design.parameters["variant"],
+        edge_outward=outward,
+        complete_edge_holes=complete,
+        edge_hole_diameter=design.parameters.get("edge_hole_diameter"),
+    )
+    sexes = sorted(join["sex"] for join in accessory_datums(spec)["joins"])
+    if family in {"edge-x", "edge-y"}:
+        assert len(set(sexes)) == 1
+        connector = sexes[0]
+    else:
+        connector = (
+            sexes[0]
+            if len(sexes) == 1
+            else f"all-{sexes[0]}"
+            if sexes[0] == sexes[1]
+            else "male-female"
+        )
+    mode = "complete holes" if complete else "plain"
+    return f"{outward:g}mm edges and corners - {mode}", connector
+
+
+def _plan_layout(job):
+    exception_plate = job.print_placements[-1].plate
+    layout = SimpleNamespace(
+        exception_plate=exception_plate,
+        plate_count=max(placement.plate for placement in job.print_placements) + 1,
+        groups=[],
+        plate_groups=defaultdict(set),
+        group_plates=defaultdict(set),
+        ramp_joins=set(),
+        ramp_members=defaultdict(set),
+        perimeter_sets={},
+    )
+    for design, placement in zip(job.designs, job.print_placements):
+        group, connector = _design_group(design)
+        if design.parameters.get("family") == "ramp":
+            join = design.parameters.get("ramp_join", "female")
+            layout.ramp_joins.add((design.parameters["nx"], join))
+            layout.ramp_members[join].add((design.parameters["nx"], design.quantity))
+        elif connector is not None:
+            perimeter_set = layout.perimeter_sets.setdefault(
+                (
+                    design.parameters.get("edge_outward", 10.0),
+                    design.parameters.get("complete_edge_holes", False),
+                ),
+                {"plates": set(), "names": [], "connectors": set()},
+            )
+            perimeter_set["plates"].add(placement.plate)
+            perimeter_set["names"].append(design.name)
+            perimeter_set["connectors"].add(connector)
+        if placement.plate == exception_plate:
+            layout.groups.append(EXCEPTION_PLATE_NAME)
+        else:
+            layout.groups.append(group)
+            layout.plate_groups[placement.plate].add(group)
+            layout.group_plates[group].add(placement.plate)
+    return layout
+
+
+def test_h2d_dual_safe_plan_keeps_full_family_inventory_and_hardware_zones(h2d_plan):
+    job = h2d_plan.job
+    assert h2d_plan.measured == Counter(id(design) for design in job.designs)
     required_tiles = {(x, y) for x in range(1, 6) for y in range(1, 6)}
     assert Counter(tile_sizes(BuildVolume(350, 320, 325))) == Counter(required_tiles)
     expected = Counter(
@@ -248,7 +346,17 @@ def test_h2d_dual_safe_plan_keeps_full_family_inventory_and_hardware_zones(monke
     assert len({design.name for design in job.designs}) == len(job.designs)
     assert len(job.designs) == len(job.print_placements)
     assert all(design.quantity == 1 for design in job.designs)
-    plate_count = max(placement.plate for placement in job.print_placements) + 1
+    exception = job.designs[-1]
+    assert "family" not in exception.parameters
+    assert (exception.parameters["nx"], exception.parameters["ny"]) == (5, 5)
+    assert exception.parameters["hole_diameter"] == 10
+    assert exception.parameters["hole_scope"] == "full"
+
+
+def test_h2d_dual_safe_plan_keeps_common_reach_and_a_left_nozzle_exception_plate(h2d_plan):
+    job = h2d_plan.job
+    plate_count = h2d_plan.layout.plate_count
+    exception_plate = h2d_plan.layout.exception_plate
     assert (
         set(job.plate_names) == {p.plate for p in job.print_placements} == set(range(plate_count))
     )
@@ -261,8 +369,7 @@ def test_h2d_dual_safe_plan_keeps_full_family_inventory_and_hardware_zones(monke
         "max_y": 320,
         "max_z": 320,
     }
-    exception_plate = job.print_placements[-1].plate
-    assert job.plate_names[exception_plate] == "5x5 TILE - SINGLE NOZZLE ONLY - LEFT"
+    assert job.plate_names[exception_plate] == EXCEPTION_PLATE_NAME
     assert exception_plate == plate_count - 1
     assert set(job.plate_builds) == set(range(plate_count))
     assert job.plate_builds[exception_plate] == BuildVolume(325, 320, 320, margin=5)
@@ -287,78 +394,18 @@ def test_h2d_dual_safe_plan_keeps_full_family_inventory_and_hardware_zones(monke
             "filament_volume_maps": "0",
         }
     }
-    exception = job.designs[-1]
-    assert "family" not in exception.parameters
-    assert (exception.parameters["nx"], exception.parameters["ny"]) == (5, 5)
-    assert exception.parameters["hole_diameter"] == 10
-    assert exception.parameters["hole_scope"] == "full"
-    by_plate = {}
-    ramp_joins = set()
-    plate_groups = defaultdict(set)
-    group_plates = defaultdict(set)
-    ramp_members = defaultdict(set)
-    perimeter_sets = {}
-    for design, placement in zip(job.designs, job.print_placements):
-        family = design.parameters.get("family", "tile")
-        if family == "ramp":
-            join = design.parameters.get("ramp_join", "female")
-            group = f"{join.title()} ramps"
-            ramp_joins.add((design.parameters["nx"], join))
-            ramp_members[join].add((design.parameters["nx"], design.quantity))
-        elif family in {"edge-x", "edge-y", "corner-in", "corner-out"}:
-            outward = design.parameters.get("edge_outward", 10.0)
-            complete = design.parameters.get("complete_edge_holes", False)
-            spec = Accessory(
-                family,
-                nx=design.parameters["nx"],
-                variant=design.parameters["variant"],
-                edge_outward=outward,
-                complete_edge_holes=complete,
-                edge_hole_diameter=design.parameters.get("edge_hole_diameter"),
-            )
-            sexes = sorted(join["sex"] for join in accessory_datums(spec)["joins"])
-            if family in {"edge-x", "edge-y"}:
-                assert len(set(sexes)) == 1
-                connector = sexes[0]
-            else:
-                connector = (
-                    sexes[0]
-                    if len(sexes) == 1
-                    else f"all-{sexes[0]}"
-                    if sexes[0] == sexes[1]
-                    else "male-female"
-                )
-            mode = "complete holes" if complete else "plain"
-            group = f"{outward:g}mm edges and corners - {mode}"
-            perimeter_set = perimeter_sets.setdefault(
-                (outward, complete),
-                {"plates": set(), "names": [], "connectors": set()},
-            )
-            perimeter_set["plates"].add(placement.plate)
-            perimeter_set["names"].append(design.name)
-            perimeter_set["connectors"].add(connector)
-        else:
-            group = PLATE_GROUPS[family]
-        if placement.plate != exception_plate:
-            plate_groups[placement.plate].add(group)
-            group_plates[group].add(placement.plate)
-        assert design.shape.is_valid and len(design.shape.solids()) == 1
-        assert design.shape.volume > 0
-        # Measure the real posed solid independently of the size used by packing.
-        width, depth, height = design.bambu_shape.bounding_box().size
-        if placement.rotation == 90:
-            width, depth = depth, width
-        bounds = (placement.x, placement.x + width, placement.y, placement.y + depth, height)
-        assert bounds[4] <= 320 + 1e-6
-        by_plate.setdefault(placement.plate, []).append(bounds)
-        if placement.plate == exception_plate:
-            assert bounds[0] >= 5 - 1e-6 and bounds[1] <= 320 + 1e-6
-            assert bounds[2] >= 5 - 1e-6 and bounds[3] <= 315 + 1e-6
-        else:
-            assert bounds[0] >= 30 - 1e-6 and bounds[1] <= 320 + 1e-6
-            assert bounds[2] >= 5 - 1e-6 and bounds[3] <= 315 + 1e-6
-    assert ramp_joins == {(width, join) for width in range(1, 6) for join in ("female", "male")}
-    assert ramp_members == {
+    assert job.placement_policy["minimum_model_gap_mm"] == 4
+    assert job.placement_policy["minimum_actual_part_xy_clearance_mm"] == 4
+
+
+def test_h2d_dual_safe_plan_groups_families_on_named_plates(h2d_plan):
+    job = h2d_plan.job
+    layout = h2d_plan.layout
+    group_plates = layout.group_plates
+    assert layout.ramp_joins == {
+        (width, join) for width in range(1, 6) for join in ("female", "male")
+    }
+    assert layout.ramp_members == {
         join: {(width, 1) for width in range(1, 6)} for join in ("female", "male")
     }
     expected_groups = {
@@ -370,7 +417,7 @@ def test_h2d_dual_safe_plan_keeps_full_family_inventory_and_hardware_zones(monke
         "30mm edges and corners - complete holes",
     }
     assert set(group_plates) == expected_groups
-    assert all(len(groups) == 1 for groups in plate_groups.values())
+    assert all(len(groups) == 1 for groups in layout.plate_groups.values())
     for group, plates in group_plates.items():
         assert {job.plate_names[index] for index in plates} == (
             {group} if len(plates) == 1 else {f"{group} {n}" for n in range(1, len(plates) + 1)}
@@ -382,35 +429,67 @@ def test_h2d_dual_safe_plan_keeps_full_family_inventory_and_hardware_zones(monke
     assert len(group_plates["10mm edges and corners - complete holes"]) == 1
     assert len(group_plates["20mm edges and corners - complete holes"]) == 1
     assert len(group_plates["30mm edges and corners - complete holes"]) <= 2
+    perimeter_sets = layout.perimeter_sets
     assert set(perimeter_sets) == {(10, True), (20, True), (30, True)}
     assert all(len(group["names"]) == 20 for group in perimeter_sets.values())
     assert all(
         group["connectors"] == {"female", "male", "all-female", "male-female", "all-male"}
         for group in perimeter_sets.values()
     )
-    expected_group_order = [
-        "Tiles",
-        "Female ramps",
-        "Male ramps",
-        "Normal stops",
-        "Tile brackets - deep and shallow",
-        "Angled stops",
-        "Attachment plates",
-        "10mm edges and corners - complete holes",
-        "20mm edges and corners - complete holes",
-        "30mm edges and corners - complete holes",
-        "Rails and connectors",
-        "Rods and upper braces",
-    ]
     actual_group_order = []
-    for plate in range(exception_plate):
-        group = next(iter(plate_groups[plate]))
+    for plate in range(layout.exception_plate):
+        group = next(iter(layout.plate_groups[plate]))
         if not actual_group_order or actual_group_order[-1] != group:
             actual_group_order.append(group)
-    assert actual_group_order == expected_group_order
+    assert actual_group_order == EXPECTED_GROUP_ORDER
     assert job.placement_policy["perimeter_grouping"] == "outward width and boundary-hole mode"
-    assert job.placement_policy["minimum_model_gap_mm"] == 4
-    assert job.placement_policy["minimum_actual_part_xy_clearance_mm"] == 4
+
+
+@pytest.mark.parametrize("group", [*EXPECTED_GROUP_ORDER, EXCEPTION_PLATE_NAME])
+def test_h2d_dual_safe_posed_solids_stay_in_reach_with_rectangle_gaps(h2d_plan, group):
+    job = h2d_plan.job
+    layout = h2d_plan.layout
+    exception_plate = layout.exception_plate
+    plates = {
+        placement.plate
+        for placement, member_group in zip(job.print_placements, layout.groups)
+        if member_group == group
+    }
+    assert plates
+    nested_plate = next(iter(layout.group_plates[NESTED_GROUP]))
+    by_plate = defaultdict(list)
+    for design, placement in zip(job.designs, job.print_placements):
+        if placement.plate not in plates:
+            continue
+        assert design.shape.is_valid and len(design.shape.solids()) == 1
+        assert design.shape.volume > 0
+        # Measure the real posed solid independently of the size used by packing.
+        width, depth, height = design.bambu_shape.bounding_box().size
+        if placement.rotation == 90:
+            width, depth = depth, width
+        bounds = (placement.x, placement.x + width, placement.y, placement.y + depth, height)
+        assert bounds[4] <= 320 + 1e-6
+        by_plate[placement.plate].append(bounds)
+        if placement.plate == exception_plate:
+            assert bounds[0] >= 5 - 1e-6 and bounds[1] <= 320 + 1e-6
+            assert bounds[2] >= 5 - 1e-6 and bounds[3] <= 315 + 1e-6
+        else:
+            assert bounds[0] >= 30 - 1e-6 and bounds[1] <= 320 + 1e-6
+            assert bounds[2] >= 5 - 1e-6 and bounds[3] <= 315 + 1e-6
+    if exception_plate in plates:
+        assert len(by_plate[exception_plate]) == 1
+    for plate, rectangles in by_plate.items():
+        if plate == nested_plate:
+            continue
+        for index, first in enumerate(rectangles):
+            for second in rectangles[index + 1 :]:
+                dx = max(0, first[0] - second[1], second[0] - first[1])
+                dy = max(0, first[2] - second[3], second[2] - first[3])
+                assert hypot(dx, dy) >= 4 - 1e-5
+
+
+def test_h2d_dual_safe_plan_nests_one_perimeter_group_by_projected_footprint(h2d_plan):
+    job = h2d_plan.job
     packing = job.placement_policy["projected_footprint_packing"]
     assert set(packing) == {
         "10mm edges and corners - complete holes",
@@ -418,8 +497,7 @@ def test_h2d_dual_safe_plan_keeps_full_family_inventory_and_hardware_zones(monke
         "30mm edges and corners - complete holes",
     }
     assert packing["10mm edges and corners - complete holes"]["status"] == "rectangle retained"
-    nested_title = "20mm edges and corners - complete holes"
-    assert packing[nested_title] == {
+    assert packing[NESTED_GROUP] == {
         "status": "applied",
         "minimum_projected_gap_mm": 4,
         "search_gap_mm": 3.25,
@@ -428,9 +506,9 @@ def test_h2d_dual_safe_plan_keeps_full_family_inventory_and_hardware_zones(monke
         "maximum_order_attempts": 8,
     }
     assert packing["30mm edges and corners - complete holes"]["status"] == "rectangle fallback"
-    nested_plate = next(iter(group_plates[nested_title]))
+    nested_plate = next(iter(h2d_plan.layout.group_plates[NESTED_GROUP]))
     assert job.projected_footprint_clearances == {nested_plate: 4}
-    assert job.placement_policy["projected_footprint_gap_overrides_mm"] == {nested_title: 4}
+    assert job.placement_policy["projected_footprint_gap_overrides_mm"] == {NESTED_GROUP: 4}
     nested_footprints = []
     nested_placements = []
     for footprint, placement in zip(job.projected_footprints, job.print_placements):
@@ -447,6 +525,10 @@ def test_h2d_dual_safe_plan_keeps_full_family_inventory_and_hardware_zones(monke
         nested_placements,
         plate=0,
     ) == pytest.approx(4, abs=1e-6)
+
+
+def test_h2d_dual_safe_prepared_project_keeps_the_planned_plates(h2d_plan):
+    job = h2d_plan.job
     prepared = _PreparedProject(
         job,
         BambuSettings((Material("PETG", "PETG", "#637b70"),), 0.8, 0.32),
@@ -454,16 +536,11 @@ def test_h2d_dual_safe_plan_keeps_full_family_inventory_and_hardware_zones(monke
         catalogue=True,
     )
     assert prepared.placements == job.print_placements
-    assert prepared.plate_count == plate_count
-    assert len(by_plate[exception_plate]) == 1
-    for plate, rectangles in by_plate.items():
-        if plate == nested_plate:
-            continue
-        for index, first in enumerate(rectangles):
-            for second in rectangles[index + 1 :]:
-                dx = max(0, first[0] - second[1], second[0] - first[1])
-                dy = max(0, first[2] - second[3], second[2] - first[3])
-                assert hypot(dx, dy) >= 4 - 1e-5
+    assert prepared.plate_count == h2d_plan.layout.plate_count
+
+
+def test_h2d_dual_safe_plan_requests_support_only_for_supported_families(h2d_plan):
+    job = h2d_plan.job
     assert all(
         design.bambu_object_settings["support_type"] == "normal(auto)"
         for design in job.designs

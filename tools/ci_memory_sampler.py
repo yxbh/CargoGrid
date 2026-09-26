@@ -59,15 +59,17 @@ def process_memory_kib(pid: int) -> tuple[int, int | None]:
             if line.startswith("VmRSS:"):
                 rss = int(line.split()[1])
                 break
+        text = (PROC / str(pid) / "smaps_rollup").read_text()
+    except PermissionError:
+        return rss, None
     except OSError:
+        # The process exited between listing and reading.
         return 0, 0
-    try:
-        for line in (PROC / str(pid) / "smaps_rollup").read_text().splitlines():
-            if line.startswith("Pss:"):
-                return rss, int(line.split()[1])
-    except OSError:
-        pass
-    return rss, None
+    for line in text.splitlines():
+        if line.startswith("Pss:"):
+            return rss, int(line.split()[1])
+    # Exiting and zombie processes have no resident memory or PSS line.
+    return rss, None if rss else 0
 
 
 class Sampler:
