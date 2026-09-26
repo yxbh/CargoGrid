@@ -16,6 +16,7 @@ on:
         options:
           - portable
           - slow
+          - compare
         default: portable
 
 concurrency:
@@ -132,3 +133,39 @@ jobs:
           PY
       - name: Slow geometry and export tests
         run: uv run --no-sync python tools/ci_memory_sampler.py -- /usr/bin/time -v uv run --no-sync pytest -q -n 4 --dist loadgroup -m "slow and not native and not reference" --durations=0 --durations-min=0
+
+  compare:
+    # TEMPORARY: baseline main and this branch on the same runner.
+    if: inputs.tier == 'compare'
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: 9e5268326e0cf92ce23680c78726d5aee6848ce0
+          path: baseline
+      - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
+        with:
+          python-version: "3.12"
+      - name: Install CAD runtime libraries
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install --no-install-recommends -y libgl1 libglu1-mesa
+      - name: Install dependencies
+        run: uv sync --group dev
+      - name: Record runner CPU
+        run: grep -m1 "model name" /proc/cpuinfo; nproc; cat /sys/devices/system/cpu/cpu0/topology/thread_siblings_list
+      - name: Baseline main portable tests
+        working-directory: baseline
+        run: ../.venv/bin/python ../tools/ci_memory_sampler.py -- /usr/bin/time -v ../.venv/bin/python -m pytest -q -p no:cacheprovider -n 4 --dist worksteal -m "not native and not reference and not slow" --durations=0 --durations-min=0 --junitxml=../.local/baseline-junit.xml
+      - name: Baseline duration check
+        if: ${{ !cancelled() }}
+        working-directory: baseline
+        run: ../.venv/bin/python tools/check_test_durations.py ../.local/baseline-junit.xml
+      - name: Branch portable tests
+        if: ${{ !cancelled() }}
+        run: uv run --no-sync python tools/ci_memory_sampler.py -- /usr/bin/time -v uv run --no-sync pytest -q -n 4 --dist worksteal -m "not native and not reference and not slow" --durations=0 --durations-min=0 --junitxml=.local/portable-junit.xml
+      - name: Branch duration check
+        if: ${{ !cancelled() }}
+        run: uv run --no-sync python tools/check_test_durations.py .local/portable-junit.xml
