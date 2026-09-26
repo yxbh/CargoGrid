@@ -4,6 +4,7 @@ The lower-left body corner is the tile datum. Socket centres are half a pitch
 from it. Z=0 is the underside; the attachment shoulder seats at tile height.
 """
 
+from copy import deepcopy
 from functools import lru_cache
 from math import sqrt
 
@@ -160,6 +161,12 @@ def tile_join_tool(
     """Consistent tile/edging join: original roof or full-height open pocket."""
     if depth is None:
         depth = interface.male_join_depth if male else interface.female_join_depth
+    # Every caller cuts, fuses or moves its tool, so each gets an independent copy.
+    return deepcopy(_tile_join_template(interface, depth, male))
+
+
+@lru_cache(maxsize=64)
+def _tile_join_template(interface: Interface, depth: float, male: bool) -> Part:
     if interface.joint_style == "original":
         return joining_tool(
             interface,
