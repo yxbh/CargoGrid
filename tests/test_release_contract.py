@@ -56,7 +56,7 @@ def test_version_and_module_entrypoint(tmp_path):
     )
     assert all(
         command in help_result.stdout
-        for command in ("part", "layout", "catalogue", "compare-reference")
+        for command in ("part", "layout", "catalogue", "compare-reference", "trunk-blocker")
     )
     normalized_help = " ".join(help_result.stdout.split())
     assert "full 10 mm round-hole tiles are the defaults" in normalized_help

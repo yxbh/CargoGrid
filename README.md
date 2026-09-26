@@ -84,6 +84,26 @@ uv run cargo-grid catalogue --build-width-mm 350 --build-depth-mm 320 --build-he
 
 The manifest lists anything omitted because it did not fit.
 
+## Generate the experimental trunk blocker
+
+The trunk blocker is an explicit native-CAD workflow, not a member of the standard accessory catalogue. It has exactly three manufactured parts: a 132x60 mm fixed base with twin racks, two plain 2.3 mm centre-guide walls from Y=4 to 45 mm, three lower bearing lands, four locally reinforced blind screw pilots and two identical underside X anchors at 60 mm pitch; a moving 120x60x8 mm cargo wall with three 124 mm fingers; and an 18 mm screwed keeper with a flat underside. The 10.3 mm centre channel leaves 0.15 mm nominal clearance on each side of the 10 mm centre finger. The fingers run from Z=5.35 to 16.70 mm between lower lands at Z=5.20 and the keeper underside at Z=16.85, leaving 0.15 mm nominal clearance above and below. These small CAD clearances are provisional print-test values, not measured manufacturing allowances.
+
+The outer-finger centres are at X=+/-15.8 mm, each carries three 8 mm-pitch teeth on a local 14 mm-high carrier and ends in a 24 mm-high full-width squeeze pad. The fixed and moving teeth have 2 mm flat tips and share a 53.1301-degree ramp angle; they leave 0.2 mm axial backlash before backload contact and provide 3 mm nominal radial engagement. The larger teeth give seven lock positions and 48 mm travel; the default 24 mm pose remains a lock station. The two front posts reuse the same bidirectional native connector as the vertical tile brackets at 60 mm pitch, so an ordinary wall tile can face either way. No external reference asset is needed:
+
+```sh
+uv run cargo-grid trunk-blocker --extension-mm 24 --output outputs/trunk-blocker
+```
+
+`outputs/trunk-blocker/trunk_blocker.step` is the primary complete three-solid CAD assembly. Three checked STL files and `trunk_blocker.3mf` are derived from the same native BREP parts. `provenance.json` records the shared connector functions, rigid transforms, BREP comparisons, STEP round-trip and mesh reports; `manifest.json` records the mechanism, part topology, intersections and evidence limits. The command refuses to overwrite a non-empty output directory.
+
+Free exterior base, wall and reinforcement-ridge edges use 2 mm radii; finger, squeeze-pad, reinforcement-transition and feasible keeper edges use 1 mm radii. Both underside anchors retain the same R2 tip and root treatment. Native X, ratchet, tooth-carrier stop, guide, bearing, anchor and screw working geometry stays sharp where rounding would alter the interface. The keeper's two top side edges remain sharp to retain the 1.3 mm land beside each provisional 7 mm countersink mouth, and six wall-root side transitions remain sharp because the coupled BREP fillet does not construct there even at 0.05 mm. These exceptions preserve the existing load path and require visual and physical review rather than implying all edges are rounded.
+
+The front posts are independently authored Cargo-Grid BREP geometry rather than literal copied facets from the earlier external 3MF workflow. Their 0.08 mm inset straight stems, 0.1 mm transitions and unchanged R2 tips match the vertical tile brackets. No vertex, topology or digest equality to the earlier mesh is claimed. The original two-opening tile remains a separate accessory and is not included in this output.
+
+This source export is not a Bambu project, does not select a print orientation or process preset, and is excluded from the 81-design catalogue. The released-finger option and the one-pitch collision screen are prescribed rigid geometry, not an elastic or force simulation. The 3.7 mm release stroke leaves 0.7 mm nominal radial tip clearance after disengagement; the larger stroke keeps the 9x11.35 mm flexible outer beams and their 72 mm modeled transition unchanged but increases required deflection relative to the preceding print. Physical mat/tile fit, the provisional 0.15 mm running clearances, screw engagement, support removal, click and squeeze force, automatic ratcheting, creep, fatigue and load capacity remain unverified, and this organizer is not a rated cargo restraint.
+
+The keeper is one 61.6x18 mm block from its Z=16.85 mm seat to its Z=26 mm top. The four screw axes, 3.4 mm bores, 2.7 mm base pilots and M3x16 recommendation stay fixed; the provisional 7 mm 90-degree mouths are 1.8 mm deep and retain 1.3 mm of side land. R3.35 local bosses around the R1.35 pilots leave 2 mm nominal radial ligament without changing their axes or depth. The pusher remains clear throughout the 0..48 mm adjustment range, including the prescribed two-finger release pose. After the last lock at 48 mm, the larger tooth carriers permit 4 mm controlled overtravel and contact the solid keeper at 52 mm; 52 mm is a stop, not another lock. Do not force the pusher beyond that contact: remove the four keeper screws and lift off the keeper first, squeeze both pads through the 3.7 mm release travel, then withdraw the pusher.
+
 ## Make the full H2D catalogue
 
 This standard-only command creates the documented H2D project: 25 tile sizes with the full 10 mm hole pattern and all 105 accessories. It packs them onto named, family-grouped plates, including `Rods and upper braces`; the manifest records the plate count. It requires 60 mm units, 13 mm thickness and zero fit offset. Perimeter parts are grouped by outward projection and their selected hole mode, while individual object names retain their edge direction, corner variant and connector sex.
@@ -333,6 +353,18 @@ from cargo_grid.accessories import Accessory
 from cargo_grid.catalogue import accessory_design
 
 bracket = accessory_design(Accessory("vertical-tile-bracket", nx=1, ny=1, panel_height_cells=2))
+```
+
+Experimental native-CAD blocker example:
+
+```python
+from pathlib import Path
+from cargo_grid import TrunkBlockerSpec, export_trunk_blocker
+
+export_trunk_blocker(
+    Path("outputs/trunk-blocker"),
+    TrunkBlockerSpec(extension_mm=24),
+)
 ```
 
 Contributor checks and release steps are in the [release checklist](docs/release-checklist.md). The accessory page has separate [gallery reproduction instructions](docs/attachments.md#reproduce-the-images).
