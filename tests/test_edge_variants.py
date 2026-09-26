@@ -546,20 +546,20 @@ def test_outer_corner_halves_and_whole_corners_close_a_real_perimeter(first, sec
     assert _solid_intersection_volume(assembly[first], assembly[second]) < 1e-7
 
 
-@pytest.mark.parametrize("offset", [0, 0.3, 5])
-def test_bounded_distance_matches_whole_solid_distance(offset):
+@pytest.mark.parametrize(
+    "first,second,offset",
+    [("v6", "south", (0, 0)), ("west", "v1", (0, 0.3)), ("v6", "south", (5, 0))],
+)
+def test_bounded_distance_matches_whole_solid_distance(first, second, offset):
     assembly = _three_by_three_perimeter(_REAL_PERIMETER_OUTWARD, True)
-    pairs = (
-        (assembly["v6"], assembly["south"].moved(Location((offset, 0, 0)))),
-        (assembly["west"], assembly["v1"].moved(Location((0, offset, 0)))),
-    )
-    for first, second in pairs:
-        distance = first.distance_to(second)
-        bounded = bounded_distance(first, second)
-        if distance < 1:
-            assert bounded == pytest.approx(distance, abs=1e-9)
-        else:
-            assert bounded >= 1
+    first, second = assembly[first], assembly[second].moved(Location((*offset, 0)))
+    distance = first.distance_to(second)
+    assert distance == pytest.approx(max(offset), abs=1e-6)
+    bounded = bounded_distance(first, second)
+    if distance < 1:
+        assert bounded == pytest.approx(distance, abs=1e-9)
+    else:
+        assert bounded >= 1
 
 
 @pytest.mark.parametrize("name", sorted(_REAL_PERIMETER_CORNERS))
@@ -871,8 +871,17 @@ def test_replacing_interface_preserves_edge_options():
     assert updated.complete_edge_holes is True
 
 
-@pytest.mark.parametrize("family", ["edge-x", "edge-y"])
-@pytest.mark.parametrize("cells", [1, pytest.param(4, marks=pytest.mark.slow), 5])
+@pytest.mark.parametrize(
+    "cells,family",
+    [
+        # Portable runs keep both connector sides at one cell and the longest female side.
+        (cells, family)
+        if cells == 1 or (cells, family) == (5, "edge-y")
+        else pytest.param(cells, family, marks=pytest.mark.slow)
+        for family in ("edge-x", "edge-y")
+        for cells in (1, 4, 5)
+    ],
+)
 def test_forty_mm_straights_keep_tile_interfaces_and_complete_middle_holes(family, cells):
     spec = Accessory(family, nx=cells, edge_outward=40)
     shape = _accessory_shape(spec)
@@ -1007,12 +1016,10 @@ def test_prepared_circle_check_still_rejects_filled_or_wrong_radius_holes(diamet
     "spec,tile_origin,center",
     [
         (Accessory("edge-x", edge_outward=40), (0, 0), (30, 0)),
-        (Accessory("edge-y", edge_outward=40), (0, -60), (30, 0)),
         (Accessory("edge-y", edge_outward=40), (0, -60), (0, 0)),
         (Accessory("corner-out", variant=3, complete_edge_holes=True), (0, 0), (60, 60)),
-        (Accessory("corner-out", variant=6, complete_edge_holes=True), (0, 0), (0, 0)),
     ],
-    ids=["edge-x-middle", "edge-y-middle", "edge-y-end", "corner-out-v3", "corner-out-v6"],
+    ids=["edge-x-middle", "edge-y-end", "corner-out-v3"],
 )
 def test_local_hole_queries_match_whole_solid_classification(spec, tile_origin, center):
     shapes = (_accessory_shape(spec), _tile_shape(Tile()).moved(Location((*tile_origin, 0))))

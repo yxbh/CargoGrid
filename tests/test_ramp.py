@@ -138,15 +138,14 @@ def test_male_ramp_repeats_exact_shared_tabs_and_mates_both_female_tile_sides(ce
     assert {join["height"] for join in datums["joins"]} == {10}
 
 
-# Portable runs keep every scaled interface once, alternating joins, and the thick radius cap
-# with both joins; the slow tier runs the remaining join for each interface.
+# Portable runs keep every scaled interface once with alternating joins; the slow tier runs
+# the other join for each interface.
 PORTABLE_SCALED_RAMPS = {
     (30, 6, 0, "female"),
     (30, 13, -0.2, "male"),
     (60, 8, 0.2, "female"),
     (90, 18, 0, "male"),
     (60, 60, 0, "female"),
-    (60, 60, 0, "male"),
 }
 
 
