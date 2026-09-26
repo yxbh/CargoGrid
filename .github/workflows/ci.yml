@@ -5,8 +5,18 @@ on:
     branches:
       - main
   pull_request:
+  schedule:
+    # Nightly slow tier: exhaustive sweeps and review-package exports left out of portable CI.
+    - cron: "23 17 * * *"
   workflow_dispatch:
     inputs:
+      tier:
+        description: Test tier to run
+        type: choice
+        options:
+          - portable
+          - slow
+        default: portable
       workers:
         description: "TEMPORARY trial: pytest-xdist workers"
         default: "4"
@@ -15,7 +25,7 @@ on:
         default: "loadgroup"
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || '' }}
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name }}-${{ inputs.tier }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || '' }}
   cancel-in-progress: true
 
 permissions:
@@ -23,6 +33,7 @@ permissions:
 
 jobs:
   portable:
+    if: github.event_name != 'schedule' && inputs.tier != 'slow'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -94,3 +105,38 @@ jobs:
           env -u PYTHONPATH wheel-smoke/bin/python -c 'import json; p=json.load(open("wheel-rod/manifest.json")); d=p["designs"][0]; i=p["export"]["plates"][0]["items"][0]; assert d["parameters"]["above_mat_height_mm"] == 240 and d["mating_datums"]["insertion_depth_mm"] == 12; assert i["source_to_project_transform"]["rotation_y_degrees"] == 90; assert i["object_settings"] == {"enable_support":"1","support_type":"normal(auto)"}; assert d["fit_evidence"]["status"] == "user-reported-fit"'
           env -u PYTHONPATH wheel-smoke/bin/cargo-grid part --family rod-brace --brace-spacing-mm 120 --build-width-mm 150 --build-depth-mm 30 --build-height-mm 10 --no-stl --output wheel-rod-brace
           env -u PYTHONPATH wheel-smoke/bin/python -c 'import json; d=json.load(open("wheel-rod-brace/manifest.json"))["designs"][0]; assert d["parameters"]["bore_diameter_mm"] == 10; assert d["mating_datums"]["center_spacing_mm"] == 120; assert abs(d["mating_datums"]["straight_bore_length_mm"] - 5.6) < 1e-9; e=d["fit_evidence"]; assert e["status"] == "user-reported-fit" and e["scope"] == "bore-to-shaft fit only"; assert e["physical_test_pending"] is False and e["tested_center_spacings_mm"] is None and e["spacing_specific_fit_verified"] is False'
+
+  slow:
+    if: github.event_name == 'schedule' || inputs.tier == 'slow'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
+        with:
+          python-version: "3.12"
+      - name: Install CAD runtime libraries
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install --no-install-recommends -y libgl1 libglu1-mesa
+      - name: Install dependencies
+        run: uv sync --group dev
+      - name: Record runner resources
+        run: |
+          uv run --no-sync python - <<'PY'
+          import importlib.metadata
+          import os
+          import platform
+          from pathlib import Path
+
+          print("Platform:", platform.platform())
+          print("Logical CPUs:", os.cpu_count())
+          print("\n".join(line for line in Path("/proc/meminfo").read_text().splitlines() if line.startswith(("MemTotal:", "MemAvailable:"))))
+          for package in ("build123d", "cadquery-ocp-novtk", "numpy", "scipy", "pytest", "pytest-xdist"):
+              print(package, importlib.metadata.version(package))
+          PY
+      - name: Slow geometry and export tests
+        env:
+          WORKERS: ${{ inputs.workers || '4' }}
+          DIST: ${{ inputs.dist || 'loadgroup' }}
+        run: uv run --no-sync python tools/ci_memory_sampler.py -- /usr/bin/time -v uv run --no-sync pytest -q -n "$WORKERS" --dist "$DIST" -m "slow and not native and not reference" --durations=0 --durations-min=0
