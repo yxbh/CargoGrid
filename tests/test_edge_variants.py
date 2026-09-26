@@ -6,6 +6,7 @@ from math import cos, pi, sin, sqrt
 
 import pytest
 from build123d import Axis, Box, GeomType, Location, Part, Vector
+from local_geometry import bounded_distance
 from OCP.BRepAdaptor import BRepAdaptor_Surface
 from OCP.BRepClass3d import BRepClass3d_SolidClassifier
 from OCP.gp import gp_Pnt
@@ -541,8 +542,24 @@ _REAL_PERIMETER_CORNERS = {
 )
 def test_outer_corner_halves_and_whole_corners_close_a_real_perimeter(first, second):
     assembly = _three_by_three_perimeter(_REAL_PERIMETER_OUTWARD, True)
-    assert assembly[first].distance_to(assembly[second]) < 1e-6
+    assert bounded_distance(assembly[first], assembly[second]) < 1e-6
     assert _solid_intersection_volume(assembly[first], assembly[second]) < 1e-7
+
+
+@pytest.mark.parametrize("offset", [0, 0.3, 5])
+def test_bounded_distance_matches_whole_solid_distance(offset):
+    assembly = _three_by_three_perimeter(_REAL_PERIMETER_OUTWARD, True)
+    pairs = (
+        (assembly["v6"], assembly["south"].moved(Location((offset, 0, 0)))),
+        (assembly["west"], assembly["v1"].moved(Location((0, offset, 0)))),
+    )
+    for first, second in pairs:
+        distance = first.distance_to(second)
+        bounded = bounded_distance(first, second)
+        if distance < 1:
+            assert bounded == pytest.approx(distance, abs=1e-9)
+        else:
+            assert bounded >= 1
 
 
 @pytest.mark.parametrize("name", sorted(_REAL_PERIMETER_CORNERS))
@@ -564,7 +581,7 @@ def test_real_perimeter_corners_join_the_opposite_tile_sex(name):
         tile_sex = "female" if x == 0 or y == 0 else "male"
         assert x in (0, 180) or y in (0, 180)
         assert join["sex"] != tile_sex
-    assert assembly[name].distance_to(assembly["tile"]) < 1e-6
+    assert bounded_distance(assembly[name], assembly["tile"]) < 1e-6
 
 
 def test_real_perimeter_completes_representative_boundary_holes():

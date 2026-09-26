@@ -41,6 +41,8 @@ include = [
     "/examples",
     "/docs",
     "/tools/check_distributions.py",
+    "/tools/check_test_durations.py",
+    "/tools/ci_memory_sampler.py",
     "/tools/render_docs.py",
     "/.github/workflows/ci.yml",
     "/.gitignore",

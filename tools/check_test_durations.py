@@ -13,11 +13,26 @@ import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-DEFAULT_BUDGET_SECONDS = 60.0
+# Four workers share the hosted runner's cores, so a test there takes about five times as long
+# as the same test alone on a fast workstation, and runners differ by up to about 1.4x between
+# runs. The slowest representative checks that cannot be split further build one real contour
+# ramp or whole catalogue group in roughly 50-90 s, so a lower budget would fail on slow
+# runners. New exhaustive sweeps and multi-part exports take several minutes and still fail.
+DEFAULT_BUDGET_SECONDS = 120.0
 DEFAULT_TARGET_SECONDS = 780.0
 
+H2D = "tests/test_h2d_catalogue.py::"
 # Reviewed exceptions: node id -> (limit in seconds, reason).
-ALLOWLIST: dict[str, tuple[float, str]] = {}
+ALLOWLIST: dict[str, tuple[float, str]] = {
+    H2D + "test_h2d_dual_safe_plan_keeps_full_family_inventory_and_hardware_zones": (
+        600.0,
+        "first user of the shared H2D plan fixture, which builds and packs the whole catalogue",
+    ),
+    H2D + "test_h2d_dual_safe_prepared_project_keeps_the_planned_plates": (
+        240.0,
+        "replans every catalogue design through the export snapshot",
+    ),
+}
 
 
 def node_id(case: ET.Element, root: Path) -> str:

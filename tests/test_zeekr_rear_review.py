@@ -9,6 +9,7 @@ from zipfile import ZipFile
 
 import pytest
 from build123d import Axis, Box, GeomType, Location, Solid
+from local_geometry import bounded_distance
 from OCP.BRepAdaptor import BRepAdaptor_Surface
 
 from cargo_grid import cli
@@ -524,7 +525,7 @@ def _assert_bores_clear(design, centers):
 
 
 def _assert_contact_without_overlap(first, second):
-    assert first.distance_to(second) < 1e-6
+    assert bounded_distance(first, second) < 1e-6
     assert _intersection_volume(first, second) < 1e-7
 
 

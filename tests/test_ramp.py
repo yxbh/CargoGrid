@@ -37,7 +37,11 @@ def volume(shape) -> float:
     return sum(solid.volume for solid in shape.solids()) if shape else 0
 
 
-@pytest.mark.parametrize("cells", range(1, 6))
+# Bodies and joins repeat once per cell; portable runs keep one cell and the largest width.
+RAMP_JOIN_CELLS = [1, *(pytest.param(cells, marks=pytest.mark.slow) for cells in (2, 3, 4)), 5]
+
+
+@pytest.mark.parametrize("cells", RAMP_JOIN_CELLS)
 @pytest.mark.parametrize("ramp_join", ["female", "male"])
 def test_ramp_width_run_rise_rounding_step_and_mesh(cells, ramp_join, tmp_path):
     spec = Accessory("ramp", nx=cells, ramp_join=ramp_join)
@@ -63,10 +67,6 @@ def test_ramp_width_run_rise_rounding_step_and_mesh(cells, ramp_join, tmp_path):
     assert tuple(restored.bounding_box().size) == pytest.approx(tuple(shape.bounding_box().size))
     _, _, mesh = checked_mesh(shape)
     assert mesh["closed_oriented_manifold"] and mesh["mesh_volume_mm3"] > 0
-
-
-# Joins repeat once per cell; portable runs keep one cell and the largest five-cell width.
-RAMP_JOIN_CELLS = [1, *(pytest.param(cells, marks=pytest.mark.slow) for cells in (2, 3, 4)), 5]
 
 
 @pytest.mark.parametrize("cells", RAMP_JOIN_CELLS)

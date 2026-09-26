@@ -18,6 +18,8 @@ ROOT_FILES = {
     "PKG-INFO",
     ".github/workflows/ci.yml",
     "tools/check_distributions.py",
+    "tools/check_test_durations.py",
+    "tools/ci_memory_sampler.py",
     "tools/render_docs.py",
     "AGENTS.md",
     "docs/images/attachments/manifest.json",

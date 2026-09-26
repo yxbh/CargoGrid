@@ -308,7 +308,9 @@ def test_duration_budget_uses_node_ids_and_reviewed_limits(
     monkeypatch.setattr(module, "ALLOWLIST", allowlist)
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
     root = Path(__file__).resolve().parents[1]
-    monkeypatch.setattr(sys, "argv", ["check", str(report), "--root", str(root)])
+    monkeypatch.setattr(
+        sys, "argv", ["check", str(report), "--root", str(root), "--budget-seconds", "60"]
+    )
     assert module.main() == status
     output = capsys.readouterr().out
     assert "test_skipped" not in output
