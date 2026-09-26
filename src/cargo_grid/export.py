@@ -2,7 +2,8 @@
 
 import json
 from copy import deepcopy
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
+from functools import cached_property
 from math import ceil, isfinite, sqrt
 from pathlib import Path
 from shutil import copyfileobj
@@ -12,7 +13,7 @@ from xml.etree import ElementTree as ET
 from xml.sax.saxutils import quoteattr
 from zipfile import ZIP_DEFLATED, ZipFile
 
-from build123d import PrecisionMode, export_step, import_step
+from build123d import PrecisionMode, Shape, export_step, import_step
 from OCP.BRepGProp import BRepGProp
 from OCP.GProp import GProp_GProps
 from OCP.Precision import Precision
@@ -193,19 +194,24 @@ def _adaptive_volume(shape) -> float:
 
 @dataclass(frozen=True)
 class _StepSource:
+    shape: Shape = field(repr=False, compare=False)
     bounds: Bounds
-    volume: float
     adaptive_volume: float
     volume_budget: float
 
     @classmethod
     def measure(cls, shape, bounds: Bounds | None = None) -> "_StepSource":
         return cls(
+            shape,
             bounds if bounds is not None else Bounds.measure(shape),
-            shape.volume,
             _adaptive_volume(shape),
             max(1e-6, shape.area * Precision.Confusion_s()),
         )
+
+    @cached_property
+    def volume(self) -> float:
+        """Default-integration volume; it only explains a rejected reimport."""
+        return self.shape.volume
 
 
 def _checked_step_roundtrip(shape, path: Path, *, _source: _StepSource | None = None) -> tuple:
@@ -223,7 +229,6 @@ def _checked_step_roundtrip(shape, path: Path, *, _source: _StepSource | None = 
         if not export_step(shape, path, precision_mode=mode):
             raise ValueError(f"STEP export failed: {path}")
         restored = import_step(path)
-        default_volume_delta = abs(restored.volume - source.volume)
         adaptive_delta = abs(_adaptive_volume(restored) - source.adaptive_volume)
         restored_bounds = restored.bounding_box()
         bounds_delta = max(
@@ -233,6 +238,8 @@ def _checked_step_roundtrip(shape, path: Path, *, _source: _StepSource | None = 
                 (*restored_bounds.min, *restored_bounds.max),
             )
         )
+        valid = restored.is_valid
+        solids = len(restored.solids())
         last = (
             restored,
             precision_mode,
@@ -240,18 +247,15 @@ def _checked_step_roundtrip(shape, path: Path, *, _source: _StepSource | None = 
             volume_budget,
             bounds_delta,
         )
+        if valid and solids == 1 and adaptive_delta <= volume_budget and bounds_delta <= 1e-5:
+            return last
+        # The default-integration volumes are diagnostics for rejected attempts only.
+        default_volume_delta = abs(restored.volume - source.volume)
         failures.append(
-            f"{precision_mode}:valid={restored.is_valid},"
-            f"solids={len(restored.solids())},default_volume={default_volume_delta:.9g},"
+            f"{precision_mode}:valid={valid},"
+            f"solids={solids},default_volume={default_volume_delta:.9g},"
             f"adaptive={adaptive_delta:.9g},bounds={bounds_delta:.9g}"
         )
-        if (
-            restored.is_valid
-            and len(restored.solids()) == 1
-            and adaptive_delta <= volume_budget
-            and bounds_delta <= 1e-5
-        ):
-            return last
     raise ValueError(
         f"STEP roundtrip failed: {path.stem}; budget={volume_budget:.9g}; "
         f"attempts=[{'; '.join(failures)}]"
@@ -654,11 +658,12 @@ def _write_3mf(
                     f'<object id="{ident}" type="model" name={quoteattr(volume.name)}>'
                     "<mesh><vertices>".encode()
                 )
+                # Python floats and ints format exactly like their NumPy scalars, only faster.
                 for start in range(0, len(points), 8192):
                     mesh_buffer.write(
                         "".join(
-                            f'<vertex x="{p[0]:.9g}" y="{p[1]:.9g}" z="{p[2]:.9g}"/>'
-                            for p in points[start : start + 8192]
+                            f'<vertex x="{x:.9g}" y="{y:.9g}" z="{z:.9g}"/>'
+                            for x, y, z in points[start : start + 8192].tolist()
                         ).encode()
                     )
                 mesh_buffer.write(b"</vertices><triangles>")
@@ -666,7 +671,7 @@ def _write_3mf(
                     mesh_buffer.write(
                         "".join(
                             f'<triangle v1="{a}" v2="{b}" v3="{c}"/>'
-                            for a, b, c in faces[start : start + 8192]
+                            for a, b, c in faces[start : start + 8192].tolist()
                         ).encode()
                     )
                 mesh_buffer.write(b"</triangles></mesh></object>")
