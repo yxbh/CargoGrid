@@ -173,6 +173,10 @@ class TrunkBlockerDimensions:
         return self.pusher_z + self.finger_bottom
 
     @property
+    def pusher_bed_bottom(self) -> float:
+        return self.finger_bottom
+
+    @property
     def finger_top_z(self) -> float:
         return self.pusher_z + self.finger_top
 
@@ -373,8 +377,8 @@ def _moving_tooth(
             (tip, lock_y),
             (root, lock_y),
         ],
-        0,
-        d.tooth_height,
+        d.pusher_bed_bottom,
+        d.tooth_height - d.pusher_bed_bottom,
     )
 
 
@@ -570,7 +574,7 @@ def _make_pusher_body(
         d.width / 2,
         -d.wall_thickness,
         0,
-        0,
+        d.pusher_bed_bottom,
         d.wall_height,
     )
     centre_finger = _block(
@@ -609,7 +613,7 @@ def _make_pusher_body(
             x1,
             d.moving_carrier_start,
             d.moving_carrier_end,
-            0,
+            d.pusher_bed_bottom,
             d.tooth_height,
         )
         pusher += carrier
@@ -627,8 +631,8 @@ def _make_pusher_body(
         (d.outer_centre, d.outer_width),
     ):
         profile = Plane.YZ.offset(x - width / 2) * Polygon(
-            (-0.5, 0),
-            (d.reinforcement_length, 0),
+            (-0.5, d.pusher_bed_bottom),
+            (d.reinforcement_length, d.pusher_bed_bottom),
             (d.reinforcement_length, d.reinforcement_finger_join_top),
             (0, d.reinforcement_height),
             (-0.5, d.reinforcement_height),

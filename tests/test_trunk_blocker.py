@@ -24,6 +24,7 @@ from cargo_grid.trunk_blocker import (
 from cargo_grid.trunk_blocker_export import (
     _disassembly_proofs,
     _guide_proofs,
+    _pusher_bed_proofs,
     _ratchet_proofs,
     _rounding_proofs,
     export_trunk_blocker,
@@ -180,7 +181,7 @@ def test_matched_ratchet_ramps_contact_and_clear_through_one_pitch():
     assert [row["extension_mm"] for row in positions] == pytest.approx([0, 8, 16, 24, 32, 40, 48])
     assert all(row["backlash_before_contact_mm"] == pytest.approx(0.2) for row in positions)
     assert all(row["contact_distance_mm"] < 1e-9 for row in positions)
-    assert all(row["contact_area_per_tooth_mm2"] == pytest.approx(42.0) for row in positions)
+    assert all(row["contact_area_per_tooth_mm2"] == pytest.approx(42.75) for row in positions)
     assert all(row["exact_contact_overlap_volume_mm3"] < 1e-6 for row in positions)
     assert all(row["overlap_after_additional_0p001_mm_backload_mm3"] > 0.1 for row in positions)
     sweep = proof["one_pitch_geometric_sweep"]
@@ -271,6 +272,32 @@ def test_plain_front_centre_guides_bound_rigid_yaw_without_preloading_fingers():
     assert proof["minimum_continuous_centre_overlap_mm"] == pytest.approx(41)
     assert proof["rigid_centre_finger_guide_only_yaw_limit_degrees"] < 0.5
     assert all(row["missing_from_base_mm3"] < 1e-6 for row in proof["walls"])
+
+
+@pytest.mark.parametrize("released", [False, True])
+def test_pusher_bed_facing_underside_is_coplanar_with_fingers(released):
+    spec = TrunkBlockerSpec(released_illustration=released)
+    parts = make_trunk_blocker_parts(spec)
+    proof = _pusher_bed_proofs(parts, spec)
+    assert DIMENSIONS.pusher_bed_bottom == DIMENSIONS.finger_bottom == pytest.approx(-0.25)
+    assert proof["named_local_datum_mm"] == pytest.approx(-0.25)
+    assert proof["world_bed_plane_z_mm"] == pytest.approx(5.1)
+    assert proof["downward_planar_face_count_within_0p5_mm"] == 1
+    face = proof["downward_planar_faces_within_0p5_mm"][0]
+    assert face["area_mm2"] > 3300
+    assert np.array(face["bounds_mm"])[:, 2] == pytest.approx([5.1, 5.1], abs=1e-6)
+    assert proof["minimum_vertical_gap_to_base_floor_mm"] == pytest.approx(0.1)
+    assert proof["minimum_vertical_gap_to_mat_z0_mm"] == pytest.approx(5.1)
+    assert proof["wall_bottom_below_upright_tile_mm"] == pytest.approx(0.25, abs=1e-6)
+    assert proof["upright_tile_overlap_volume_mm3"] < 1e-6
+    assert proof["upright_tile_surface_distance_mm"] < 1e-6
+    assert set(proof["coplanar_features"]) == {
+        "wall backing",
+        "finger undersides",
+        "reinforcement roots",
+        "moving tooth carriers",
+        "moving teeth",
+    }
 
 
 @pytest.mark.slow
@@ -480,6 +507,7 @@ def test_complete_export_is_native_step_first_and_refuses_overwrite(tmp_path: Pa
     assert manifest["parameters"]["base_passage_floor_top_z_mm"] == 5
     assert manifest["parameters"]["finger_bottom_z_mm"] == pytest.approx(5.1)
     assert manifest["parameters"]["finger_top_z_mm"] == pytest.approx(16.75)
+    assert manifest["parameters"]["pusher_bed_plane_z_mm"] == pytest.approx(5.1)
     assert manifest["parameters"]["push_pad_count"] == 3
     assert "lower_bearing_top_z_mm" not in manifest["parameters"]
     assert manifest["geometry"]["manufactured_parts"] == 3
@@ -490,6 +518,11 @@ def test_complete_export_is_native_step_first_and_refuses_overwrite(tmp_path: Pa
     assert anchors["pitch_mm"] == 60
     assert anchors["projection_below_base_mm"] == 12.8
     assert anchors["translated_brep_difference_mm3"] < 1e-6
+    pusher_bed = manifest["geometry"]["pusher_bed_facing_underside"]
+    assert pusher_bed["downward_planar_face_count_within_0p5_mm"] == 1
+    assert pusher_bed["world_bed_plane_z_mm"] == pytest.approx(5.1)
+    assert pusher_bed["minimum_vertical_gap_to_base_floor_mm"] == pytest.approx(0.1)
+    assert pusher_bed["upright_tile_overlap_volume_mm3"] < 1e-6
     assert all(
         part["valid"] and part["solids"] == 1
         for part in manifest["geometry"]["step_roundtrip_parts"].values()
