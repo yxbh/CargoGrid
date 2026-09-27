@@ -47,9 +47,11 @@ class TrunkBlockerDimensions:
     outer_width: float = 9.0
     outer_centre: float = 15.8
     centre_width: float = 10.0
-    finger_height: float = 11.35
+    finger_bottom: float = -0.25
+    finger_top: float = 11.4
     reinforcement_length: float = 24.0
     reinforcement_height: float = 34.0
+    reinforcement_finger_join_top: float = 11.35
     pitch: float = 8.0
     positions: int = 7
     rack_root: float = 25.0
@@ -83,13 +85,11 @@ class TrunkBlockerDimensions:
     pad_start: float = 113.0
     pad_length: float = 11.0
     pad_height: float = 24.0
-    guide_inner: float = 5.15
+    guide_inner: float = 5.1
     guide_outer: float = 7.45
     guide_start: float = 4.0
     guide_end: float = 45.0
     guide_top: float = 16.85
-    lower_bearing_top: float = 5.2
-    bearing_clearance: float = 0.15
     keeper_seat_z: float = 16.85
     keeper_width: float = 61.6
     screw_clearance: float = 3.4
@@ -165,8 +165,20 @@ class TrunkBlockerDimensions:
         return self.keeper_seat_z
 
     @property
+    def finger_height(self) -> float:
+        return self.finger_top - self.finger_bottom
+
+    @property
+    def finger_bottom_z(self) -> float:
+        return self.pusher_z + self.finger_bottom
+
+    @property
+    def finger_top_z(self) -> float:
+        return self.pusher_z + self.finger_top
+
+    @property
     def pad_above_finger(self) -> float:
-        return self.pad_height - self.finger_height
+        return self.pad_height - self.finger_top
 
     @property
     def pad_top(self) -> float:
@@ -381,29 +393,6 @@ def _guide_wall(
     )
 
 
-def _lower_bearing_lands(
-    d: TrunkBlockerDimensions = DIMENSIONS,
-) -> tuple[Part, Part, Part]:
-    relaxed_outer = d.outer_centre + d.outer_width / 2
-    released_inner = d.outer_centre - d.outer_width / 2 - d.release_stroke
-    ranges = (
-        (-relaxed_outer - d.bearing_clearance, -released_inner + d.bearing_clearance),
-        (-d.centre_width / 2 - d.bearing_clearance, d.centre_width / 2 + d.bearing_clearance),
-        (released_inner - d.bearing_clearance, relaxed_outer + d.bearing_clearance),
-    )
-    return tuple(
-        _block(
-            x0,
-            x1,
-            d.keeper_start,
-            d.keeper_start + d.keeper_length,
-            d.floor - 0.1,
-            d.lower_bearing_top,
-        )
-        for x0, x1 in ranges
-    )
-
-
 def _make_base(
     d: TrunkBlockerDimensions = DIMENSIONS,
     *,
@@ -478,8 +467,6 @@ def _make_base(
             expected=20,
             feature="fixed-base R2 outer perimeter",
         )
-    for bearing_land in _lower_bearing_lands(d):
-        base += bearing_land
     base.label = "fixed_base_analytic_anchor_candidate"
     base.color = Color(0.19, 0.39, 0.50)
     return base
@@ -504,8 +491,8 @@ def _outer_finger(side: int, released: bool, d: TrunkBlockerDimensions) -> Part:
             centre + d.outer_width / 2,
             -0.5,
             d.finger_length,
-            0,
-            d.finger_height,
+            d.finger_bottom,
+            d.finger_top,
         )
     ys = [
         d.reinforcement_length + index * (d.release_transition_end - d.reinforcement_length) / 12
@@ -537,7 +524,39 @@ def _outer_finger(side: int, released: bool, d: TrunkBlockerDimensions) -> Part:
         Line(start_b, start_a),
     ):
         edges.extend(edge.edges())
-    return extrude(Face(Wire(edges)), amount=d.finger_height, dir=(0, 0, 1))
+    return Pos(0, 0, d.finger_bottom) * extrude(
+        Face(Wire(edges)),
+        amount=d.finger_height,
+        dir=(0, 0, 1),
+    )
+
+
+def _squeeze_pad(
+    centre_x: float,
+    d: TrunkBlockerDimensions = DIMENSIONS,
+    *,
+    round_edges: bool = True,
+) -> Part:
+    width = d.pad_outer - d.pad_inner
+    pad = _block(
+        centre_x - width / 2,
+        centre_x + width / 2,
+        d.pad_start,
+        d.pad_start + d.pad_length,
+        0,
+        d.pad_height,
+    )
+    return (
+        _fillet_exact(
+            pad,
+            list(pad.edges()),
+            radius=DETAIL_EDGE_RADIUS_MM,
+            expected=12,
+            feature="squeeze-pad R1 free-edge",
+        )
+        if round_edges
+        else pad
+    )
 
 
 def _make_pusher_body(
@@ -559,8 +578,8 @@ def _make_pusher_body(
         d.centre_width / 2,
         -0.5,
         d.finger_length,
-        0,
-        d.finger_height,
+        d.finger_bottom,
+        d.finger_top,
     )
     pusher += (
         _round_finger(centre_finger, tip_y=d.finger_length, expected=8)
@@ -596,26 +615,12 @@ def _make_pusher_body(
         pusher += carrier
         for station in MOVING_TOOTH_STATIONS_MM:
             pusher += _moving_tooth(side, station, shift, d)
-        x0, x1 = sorted((side * d.pad_inner - shift, side * d.pad_outer - shift))
-        pad = _block(
-            x0,
-            x1,
-            d.pad_start,
-            d.pad_start + d.pad_length,
-            0,
-            d.pad_height,
+        pusher += _squeeze_pad(
+            side * d.outer_centre - shift,
+            d,
+            round_edges=round_edges,
         )
-        pusher += (
-            _fillet_exact(
-                pad,
-                list(pad.edges()),
-                radius=DETAIL_EDGE_RADIUS_MM,
-                expected=12,
-                feature="squeeze-pad R1 free-edge",
-            )
-            if round_edges
-            else pad
-        )
+    pusher += _squeeze_pad(0, d, round_edges=round_edges)
     for x, width in (
         (-d.outer_centre, d.outer_width),
         (0, d.centre_width),
@@ -624,7 +629,7 @@ def _make_pusher_body(
         profile = Plane.YZ.offset(x - width / 2) * Polygon(
             (-0.5, 0),
             (d.reinforcement_length, 0),
-            (d.reinforcement_length, d.finger_height),
+            (d.reinforcement_length, d.reinforcement_finger_join_top),
             (0, d.reinforcement_height),
             (-0.5, d.reinforcement_height),
             align=None,
@@ -670,8 +675,9 @@ def _make_pusher_body(
             and (
                 _lies_at(edge, "Y", 0)
                 and _lies_at(edge, "Z", d.reinforcement_height)
-                or _lies_at(edge, "Y", d.reinforcement_length)
-                and _lies_at(edge, "Z", d.finger_height)
+                or _lies_at(edge, "Z", d.finger_top)
+                and d.reinforcement_length - 1 < edge.center().Y < d.reinforcement_length
+                and _span(edge, "X") > 1
             )
         ]
         pusher = _fillet_exact(

@@ -53,7 +53,6 @@ from cargo_grid.trunk_blocker import (
     TrunkBlockerSpec,
     _block,
     _guide_wall,
-    _lower_bearing_lands,
     _make_base,
     _make_keeper,
     _make_pusher,
@@ -61,6 +60,7 @@ from cargo_grid.trunk_blocker import (
     _moving_tooth,
     _outer_finger,
     _rack_tooth,
+    _squeeze_pad,
     make_trunk_blocker_parts,
 )
 
@@ -778,16 +778,32 @@ def _guide_proofs(parts: tuple[Part, Part, Part]) -> dict:
                 "overlap_volume_mm3": overlap,
             }
         )
-    lower_lands = _lower_bearing_lands()
-    lower_missing = max(_shape_volume(land.cut(base)) for land in lower_lands)
-    if lower_missing >= VOLUME_TOLERANCE_MM3:
-        raise ValueError("base lost a low-play lower bearing land")
-    finger_top = DIMENSIONS.pusher_z + DIMENSIONS.finger_height
-    clearance_below = DIMENSIONS.pusher_z - DIMENSIONS.lower_bearing_top
+    floor_passages = (
+        (-DIMENSIONS.rack_tip, -DIMENSIONS.guide_outer),
+        (-DIMENSIONS.guide_inner, DIMENSIONS.guide_inner),
+        (DIMENSIONS.guide_outer, DIMENSIONS.rack_tip),
+    )
+    passage_probes = [
+        _block(
+            x0,
+            x1,
+            DIMENSIONS.keeper_start,
+            DIMENSIONS.keeper_start + DIMENSIONS.keeper_length,
+            DIMENSIONS.floor + CONNECTOR_PROOF_TOLERANCE_MM,
+            DIMENSIONS.guide_top,
+        )
+        for x0, x1 in floor_passages
+    ]
+    raised_floor_overlaps = [_shape_volume(base.intersect(probe)) for probe in passage_probes]
+    if max(raised_floor_overlaps) >= VOLUME_TOLERANCE_MM3:
+        raise ValueError("base passage no longer has a flat floor")
+    finger_bottom = DIMENSIONS.finger_bottom_z
+    finger_top = DIMENSIONS.finger_top_z
+    clearance_below = finger_bottom - DIMENSIONS.floor
     clearance_above = DIMENSIONS.keeper_seat - finger_top
     if (
-        abs(clearance_below - DIMENSIONS.bearing_clearance) > CONNECTOR_PROOF_TOLERANCE_MM
-        or abs(clearance_above - DIMENSIONS.bearing_clearance) > CONNECTOR_PROOF_TOLERANCE_MM
+        abs(clearance_below - 0.1) > CONNECTOR_PROOF_TOLERANCE_MM
+        or abs(clearance_above - 0.1) > CONNECTOR_PROOF_TOLERANCE_MM
         or _shape_volume(pusher.intersect(base)) >= VOLUME_TOLERANCE_MM3
         or _shape_volume(pusher.intersect(keeper)) >= VOLUME_TOLERANCE_MM3
     ):
@@ -817,14 +833,15 @@ def _guide_proofs(parts: tuple[Part, Part, Part]) -> dict:
             "checks": guide_contact_rows,
         },
         "low_play_vertical_passage": {
-            "lower_bearing_top_z_mm": DIMENSIONS.lower_bearing_top,
-            "finger_bottom_z_mm": DIMENSIONS.pusher_z,
+            "base_floor_top_z_mm": DIMENSIONS.floor,
+            "finger_bottom_z_mm": finger_bottom,
             "finger_top_z_mm": finger_top,
             "keeper_underside_z_mm": DIMENSIONS.keeper_seat,
             "clearance_below_mm": clearance_below,
             "clearance_above_mm": clearance_above,
             "total_nominal_clearance_mm": clearance_below + clearance_above,
-            "lower_bearing_land_missing_volume_mm3": lower_missing,
+            "former_pad_region_overlap_volumes_mm3": raised_floor_overlaps,
+            "flat_floor_passage_ranges_x_mm": [list(bounds) for bounds in floor_passages],
         },
         "selected_front_edge_y_mm": 2.5,
         "selected_front_edge_to_guide_start_land_mm": (DIMENSIONS.guide_start - 2.5),
@@ -876,6 +893,52 @@ def _disassembly_proofs(parts: tuple[Part, Part, Part]) -> dict:
     )
     if pad_to_keeper_y_gap <= 0:
         raise ValueError("normal-travel pad-to-keeper longitudinal gap changed")
+
+    middle_pad = _squeeze_pad(0)
+    translated_pad_difference = max(
+        _symmetric_difference_volume(
+            middle_pad.moved(Location((side * DIMENSIONS.outer_centre, 0, 0))),
+            _squeeze_pad(side * DIMENSIONS.outer_centre),
+        )
+        for side in (-1, 1)
+    )
+    middle_finger = _block(
+        -DIMENSIONS.centre_width / 2,
+        DIMENSIONS.centre_width / 2,
+        -0.5,
+        DIMENSIONS.finger_length,
+        DIMENSIONS.finger_bottom,
+        DIMENSIONS.finger_top,
+    )
+    middle_pad_root_overlap = _shape_volume(middle_pad.intersect(middle_finger))
+    middle_pad_missing_volume = _shape_volume(middle_pad.cut(_make_pusher_body(False)))
+    if (
+        translated_pad_difference > VOLUME_TOLERANCE_MM3
+        or middle_pad_root_overlap <= VOLUME_TOLERANCE_MM3
+        or middle_pad_missing_volume > VOLUME_TOLERANCE_MM3
+    ):
+        raise ValueError("middle squeeze pad is not fully rooted in the centre finger")
+
+    release_sweep = []
+    for index in range(38):
+        inward_displacement = index / 10
+        row = {
+            "inward_displacement_mm": inward_displacement,
+            "outer_pad_clearances_to_middle_mm": [],
+            "outer_pad_overlap_volumes_mm3": [],
+        }
+        for side in (-1, 1):
+            outer_pad = _squeeze_pad(side * (DIMENSIONS.outer_centre - inward_displacement))
+            overlap = _shape_volume(outer_pad.intersect(middle_pad))
+            clearance = outer_pad.distance_to(middle_pad)
+            if overlap > VOLUME_TOLERANCE_MM3 or clearance <= 0:
+                raise ValueError("an outer squeeze pad reaches the middle pad during release")
+            row["outer_pad_clearances_to_middle_mm"].append(clearance)
+            row["outer_pad_overlap_volumes_mm3"].append(overlap)
+        release_sweep.append(row)
+    minimum_pad_clearance = min(
+        clearance for row in release_sweep for clearance in row["outer_pad_clearances_to_middle_mm"]
+    )
 
     carrier_contact_overtravel = DIMENSIONS.moving_carrier_start - (
         DIMENSIONS.extension + DIMENSIONS.keeper_start + DIMENSIONS.keeper_length
@@ -929,13 +992,14 @@ def _disassembly_proofs(parts: tuple[Part, Part, Part]) -> dict:
     allowed_pad_top_regions = Compound(
         children=[
             _block(
-                *sorted((side * DIMENSIONS.pad_inner, side * DIMENSIONS.pad_outer)),
+                centre_x - (DIMENSIONS.pad_outer - DIMENSIONS.pad_inner) / 2,
+                centre_x + (DIMENSIONS.pad_outer - DIMENSIONS.pad_inner) / 2,
                 DIMENSIONS.pad_start - 24,
                 DIMENSIONS.pad_start + DIMENSIONS.pad_length - 24,
                 DIMENSIONS.pusher_z + short_pad_dimensions.pad_height - DETAIL_EDGE_RADIUS_MM,
                 DIMENSIONS.pad_top + 0.1,
             )
-            for side in (-1, 1)
+            for centre_x in (-DIMENSIONS.outer_centre, 0, DIMENSIONS.outer_centre)
         ]
     )
     protected_pusher_difference = _symmetric_difference_volume(
@@ -976,14 +1040,23 @@ def _disassembly_proofs(parts: tuple[Part, Part, Part]) -> dict:
             "final_y_clearance_mm": withdrawn_y_clearance,
         },
         "tall_pad_revision": {
+            "pad_count": 3,
             "pad_height_mm": DIMENSIONS.pad_height,
+            "pad_width_mm": DIMENSIONS.pad_outer - DIMENSIONS.pad_inner,
+            "pad_length_mm": DIMENSIONS.pad_length,
             "finger_height_mm": DIMENSIONS.finger_height,
+            "finger_top_above_pusher_floor_mm": DIMENSIONS.finger_top,
             "pad_above_finger_mm": DIMENSIONS.pad_above_finger,
             "pad_top_world_z_mm": DIMENSIONS.pad_top,
             "keeper_roof_bottom_z_mm": DIMENSIONS.keeper_roof_bottom,
             "base_brep_difference_from_short_pad_revision_mm3": base_difference,
             "pusher_brep_difference_outside_pad_top_regions_mm3": (protected_pusher_difference),
             "pad_top_edge_radius_mm": DETAIL_EDGE_RADIUS_MM,
+            "translated_pad_brep_difference_mm3": translated_pad_difference,
+            "middle_pad_root_overlap_mm3": middle_pad_root_overlap,
+            "middle_pad_missing_from_pusher_mm3": middle_pad_missing_volume,
+            "outer_pad_release_sweep": release_sweep,
+            "minimum_outer_to_middle_pad_clearance_mm": minimum_pad_clearance,
         },
         "solid_keeper_revision": {
             "bounds_mm": _bounds(keeper),
@@ -1519,7 +1592,9 @@ def export_trunk_blocker(
             "centre_guide_wall_width_mm": (DIMENSIONS.guide_outer - DIMENSIONS.guide_inner),
             "centre_guide_channel_width_mm": 2 * DIMENSIONS.guide_inner,
             "centre_guide_top_z_mm": DIMENSIONS.guide_top,
-            "lower_bearing_top_z_mm": DIMENSIONS.lower_bearing_top,
+            "base_passage_floor_top_z_mm": DIMENSIONS.floor,
+            "finger_bottom_z_mm": DIMENSIONS.finger_bottom_z,
+            "finger_top_z_mm": DIMENSIONS.finger_top_z,
             "keeper_underside_z_mm": DIMENSIONS.keeper_seat,
             "locking_teeth_per_outer_finger": len(MOVING_TOOTH_STATIONS_MM),
             "locking_pitch_mm": DIMENSIONS.pitch,
@@ -1532,6 +1607,7 @@ def export_trunk_blocker(
             "squeeze_pad_above_finger_mm": DIMENSIONS.pad_above_finger,
             "squeeze_pad_width_mm": DIMENSIONS.pad_outer - DIMENSIONS.pad_inner,
             "squeeze_pad_length_mm": DIMENSIONS.pad_length,
+            "push_pad_count": 3,
             "nominal_locking_stations": DIMENSIONS.positions,
             "nominal_travel_mm": DIMENSIONS.extension,
             "moving_tooth_carrier_y_mm": [
@@ -1617,9 +1693,10 @@ def export_trunk_blocker(
                 "remove the four keeper screws and keeper before withdrawing the released pusher."
             ),
             (
-                f"The test-v3 geometry uses {DIMENSIONS.pitch:g} mm locking increments, "
+                f"The current flat-floor geometry uses {DIMENSIONS.pitch:g} mm locking increments, "
                 f"{DIMENSIONS.positions} lock positions and {DIMENSIONS.extension:g} mm total "
-                "travel; it is approved for a test print but has not passed physical fit."
+                "travel; the taller fingers can change flex and feel, and this revision has "
+                "not passed physical fit."
             ),
             "No physical connector fit, screw torque, support removal, flatness or service suitability was verified.",
             "The STEP, STL and geometry-only 3MF contain no printer, filament or process preset.",
