@@ -56,9 +56,9 @@ def test_approved_parts_are_three_valid_native_solids():
         for part in (base, pusher, keeper)
     )
     assert DIMENSIONS.wall_thickness == 8
-    assert tuple(pusher.bounding_box().size) == pytest.approx((60, 144.8, 120))
+    assert tuple(pusher.bounding_box().size) == pytest.approx((60, 144.8, 120.25))
     assert pusher.bounding_box().min.Y == pytest.approx(-44.8)
-    assert pusher.bounding_box().min.Z == pytest.approx(5.35)
+    assert pusher.bounding_box().min.Z == pytest.approx(5.1)
     assert pusher.bounding_box().max.Z == pytest.approx(125.35)
     assert base.bounding_box().min.Z == pytest.approx(-12.8)
     assert tuple(base.bounding_box().size)[:2] == pytest.approx((60, 132))
@@ -155,6 +155,7 @@ def test_outer_fingers_have_three_equal_pitch_exposed_teeth():
         assert all(solid.bounding_box().size.Z == pytest.approx(14) for solid in exposed.solids())
 
 
+@pytest.mark.slow
 def test_matched_ratchet_ramps_contact_and_clear_through_one_pitch():
     parts = make_trunk_blocker_parts()
     proof = _ratchet_proofs(parts, TrunkBlockerSpec())
@@ -224,18 +225,19 @@ def test_approved_outer_assembly_shift_preserves_released_clearances():
 
 def test_plain_front_centre_guides_bound_rigid_yaw_without_preloading_fingers():
     parts = make_trunk_blocker_parts()
+    _, pusher, _ = parts
     proof = _guide_proofs(parts)
     assert DIMENSIONS.guide_start == 4
     assert DIMENSIONS.guide_end == 45
     assert proof["architecture"] == "two plain rectangular side walls"
     assert proof["span_y_mm"] == [4, 45]
-    assert proof["wall_width_mm"] == pytest.approx(2.3)
+    assert proof["wall_width_mm"] == pytest.approx(2.35)
     assert proof["wall_length_mm"] == pytest.approx(41)
     assert proof["exposed_height_mm"] == pytest.approx(11.85)
     assert proof["uniform_top_z_mm"] == pytest.approx(16.85)
     assert proof["inward_caps_or_overhangs"] is False
-    assert proof["centre_channel_width_mm"] == pytest.approx(10.3)
-    assert proof["centre_finger_clearance_each_side_mm"] == pytest.approx(0.15)
+    assert proof["centre_channel_width_mm"] == pytest.approx(10.2)
+    assert proof["centre_finger_clearance_each_side_mm"] == pytest.approx(0.1)
     assert proof["fully_released_outer_finger_clearance_mm"] == pytest.approx(0.15)
     seat = proof["guide_static_keeper_seat"]
     assert seat["keeper_underside_z_mm"] == pytest.approx(16.85)
@@ -243,33 +245,62 @@ def test_plain_front_centre_guides_bound_rigid_yaw_without_preloading_fingers():
     assert all(row["distance_to_static_keeper_mm"] < 1e-6 for row in seat["checks"])
     assert all(row["overlap_volume_mm3"] < 1e-6 for row in seat["checks"])
     vertical = proof["low_play_vertical_passage"]
-    assert vertical["lower_bearing_top_z_mm"] == pytest.approx(5.2)
-    assert vertical["finger_bottom_z_mm"] == pytest.approx(5.35)
-    assert vertical["finger_top_z_mm"] == pytest.approx(16.7)
+    assert vertical["base_floor_top_z_mm"] == pytest.approx(5)
+    assert vertical["finger_bottom_z_mm"] == pytest.approx(5.1)
+    assert vertical["finger_top_z_mm"] == pytest.approx(16.75)
     assert vertical["keeper_underside_z_mm"] == pytest.approx(16.85)
-    assert vertical["clearance_below_mm"] == pytest.approx(0.15)
-    assert vertical["clearance_above_mm"] == pytest.approx(0.15)
-    assert vertical["total_nominal_clearance_mm"] == pytest.approx(0.3)
-    assert vertical["lower_bearing_land_missing_volume_mm3"] < 1e-6
+    assert vertical["clearance_below_mm"] == pytest.approx(0.1)
+    assert vertical["clearance_above_mm"] == pytest.approx(0.1)
+    assert vertical["total_nominal_clearance_mm"] == pytest.approx(0.2)
+    assert all(overlap < 1e-6 for overlap in vertical["former_pad_region_overlap_volumes_mm3"])
+    assert np.array(vertical["flat_floor_passage_ranges_x_mm"]) == pytest.approx(
+        np.array([[-20.8, -7.45], [-5.1, 5.1], [7.45, 20.8]])
+    )
+    for x0, x1 in ((-20.3, -11.3), (-5, 5), (11.3, 20.3)):
+        probe = Location((x0, 25, 4)) * Box(
+            x1 - x0,
+            1,
+            14,
+            align=(Align.MIN, Align.MIN, Align.MIN),
+        )
+        section = Part(pusher.intersect(probe).solids())
+        assert section.bounding_box().min.Z == pytest.approx(5.1)
+        assert section.bounding_box().max.Z == pytest.approx(16.75)
+        assert section.bounding_box().size.Z == pytest.approx(11.65)
     assert proof["selected_front_edge_to_guide_start_land_mm"] == pytest.approx(1.5)
     assert proof["minimum_continuous_centre_overlap_mm"] == pytest.approx(41)
     assert proof["rigid_centre_finger_guide_only_yaw_limit_degrees"] < 0.5
     assert all(row["missing_from_base_mm3"] < 1e-6 for row in proof["walls"])
 
 
+@pytest.mark.slow
 def test_tall_squeeze_pads_clear_normal_travel_and_require_keeper_off_for_removal():
     parts = make_trunk_blocker_parts()
     proof = _disassembly_proofs(parts)
     revision = proof["tall_pad_revision"]
+    assert revision["pad_count"] == 3
     assert DIMENSIONS.pad_height == 24
     assert revision["pad_height_mm"] == 24
-    assert revision["finger_height_mm"] == 11.35
-    assert revision["pad_above_finger_mm"] == pytest.approx(12.65)
+    assert revision["pad_width_mm"] == 9
+    assert revision["pad_length_mm"] == 11
+    assert revision["finger_height_mm"] == pytest.approx(11.65)
+    assert revision["finger_top_above_pusher_floor_mm"] == pytest.approx(11.4)
+    assert revision["pad_above_finger_mm"] == pytest.approx(12.6)
     assert revision["pad_top_world_z_mm"] == pytest.approx(29.35)
     assert revision["keeper_roof_bottom_z_mm"] == 22
     assert revision["pad_top_edge_radius_mm"] == 1
     assert revision["base_brep_difference_from_short_pad_revision_mm3"] < 1e-6
     assert revision["pusher_brep_difference_outside_pad_top_regions_mm3"] < 1e-6
+    assert revision["translated_pad_brep_difference_mm3"] < 1e-6
+    assert revision["middle_pad_root_overlap_mm3"] > 0
+    assert revision["middle_pad_missing_from_pusher_mm3"] < 1e-6
+    assert len(revision["outer_pad_release_sweep"]) == 38
+    assert revision["minimum_outer_to_middle_pad_clearance_mm"] == pytest.approx(3.1)
+    assert all(
+        overlap < 1e-6
+        for row in revision["outer_pad_release_sweep"]
+        for overlap in row["outer_pad_overlap_volumes_mm3"]
+    )
 
     normal = proof["normal_adjustment"]
     assert normal["extension_range_mm"] == [0, 48]
@@ -311,7 +342,7 @@ def test_tooth_carriers_stop_overtravel_even_when_released():
 def test_obsolete_mini_removal_shoulders_are_absent():
     _, pusher, _ = make_trunk_blocker_parts(TrunkBlockerSpec(0))
     probes = [
-        Location((x0, 94.5, DIMENSIONS.pusher_z + DIMENSIONS.finger_height + 0.01))
+        Location((x0, 94.5, DIMENSIONS.finger_top_z + 0.01))
         * Box(
             x1 - x0,
             2.5,
@@ -386,12 +417,12 @@ def test_feature_ordered_rounding_preserves_working_regions_and_finger_sections(
     radius_counts = proof["cylindrical_face_radius_counts_mm"]
     assert radius_counts["fixed_base"]["2"] >= 36
     assert radius_counts["moving_wall"]["2"] >= 33
-    assert radius_counts["moving_wall"]["1"] == 46
+    assert radius_counts["moving_wall"]["1"] == 55
     assert radius_counts["short_screwed_keeper"]["1"] >= 6
     assert all(counts["G1"] > 0 for counts in proof["adjacent_edge_continuity_counts"].values())
     sections = proof["finger_cross_sections"]
-    assert sections["outer_each_mm2"] == pytest.approx(101.2915926535898)
-    assert sections["centre_mm2"] == pytest.approx(112.64159265359)
+    assert sections["outer_each_mm2"] == pytest.approx(103.9915926535898)
+    assert sections["centre_mm2"] == pytest.approx(115.64159265359)
     assert all(
         item["brep_difference_mm3"] < 1e-6
         for item in proof["protected_region_brep_differences"].values()
@@ -407,6 +438,28 @@ def test_feature_ordered_rounding_preserves_working_regions_and_finger_sections(
     assert "R0.05" in exceptions[("moving_wall", "six wall-root side transitions")]
 
 
+def test_export_refuses_nonempty_output_before_building_geometry(
+    tmp_path: Path,
+    monkeypatch,
+):
+    output = tmp_path / "occupied"
+    output.mkdir()
+    sentinel = output / "keep.txt"
+    sentinel.write_text("keep")
+
+    def fail_if_built(*_args, **_kwargs):
+        pytest.fail("occupied-output refusal must happen before geometry construction")
+
+    monkeypatch.setattr(
+        "cargo_grid.trunk_blocker_export.make_trunk_blocker_parts",
+        fail_if_built,
+    )
+    with pytest.raises(ValueError, match="output directory is not empty"):
+        export_trunk_blocker(output)
+    assert sentinel.read_text() == "keep"
+
+
+@pytest.mark.slow
 def test_complete_export_is_native_step_first_and_refuses_overwrite(tmp_path: Path):
     output = tmp_path / "job"
     manifest_path = export_trunk_blocker(output)
@@ -424,6 +477,11 @@ def test_complete_export_is_native_step_first_and_refuses_overwrite(tmp_path: Pa
     assert manifest["design_mode"]["workflow"] == "native Cargo-Grid BREP"
     assert manifest["design_mode"]["catalogue_member"] is False
     assert manifest["parameters"]["wall_backing_thickness_mm"] == 8
+    assert manifest["parameters"]["base_passage_floor_top_z_mm"] == 5
+    assert manifest["parameters"]["finger_bottom_z_mm"] == pytest.approx(5.1)
+    assert manifest["parameters"]["finger_top_z_mm"] == pytest.approx(16.75)
+    assert manifest["parameters"]["push_pad_count"] == 3
+    assert "lower_bearing_top_z_mm" not in manifest["parameters"]
     assert manifest["geometry"]["manufactured_parts"] == 3
     assert manifest["geometry"]["complete_representation"] is True
     anchors = manifest["geometry"]["underbody_base_anchors"]
@@ -486,6 +544,7 @@ def test_complete_export_is_native_step_first_and_refuses_overwrite(tmp_path: Pa
     assert {path.name: path.read_bytes() for path in output.iterdir()} == before
 
 
+@pytest.mark.slow
 def test_export_measures_each_owned_part_before_reusing_one_checked_mesh(
     tmp_path: Path,
     monkeypatch,
