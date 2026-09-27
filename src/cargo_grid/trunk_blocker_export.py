@@ -41,7 +41,9 @@ from OCP.TopoDS import TopoDS
 from cargo_grid._version import __version__
 from cargo_grid.accessories import make_bidirectional_panel_connector
 from cargo_grid.meshes import write_stl
+from cargo_grid.parameters import Tile
 from cargo_grid.prepared import PreparedShape
+from cargo_grid.tiles import make_tile
 from cargo_grid.trunk_blocker import (
     BASE_ANCHOR_CENTRES_Y_MM,
     CONNECTOR_CENTRES_ABOVE_PUSHER_FLOOR_MM,
@@ -299,7 +301,7 @@ def _ratchet_ramp_faces(part: Part, *, moving: bool) -> list[Face]:
     )
     expected_y = expected_x / DIMENSIONS.ratchet_ramp_radial_per_axial
     expected_z = (
-        DIMENSIONS.tooth_height
+        DIMENSIONS.tooth_height - DIMENSIONS.pusher_bed_bottom
         if moving
         else DIMENSIONS.pusher_z + DIMENSIONS.tooth_height - DIMENSIONS.floor
     )
@@ -320,7 +322,7 @@ def _ratchet_lock_faces(part: Part, *, moving: bool) -> list[Face]:
         else DIMENSIONS.rack_carrier_inner - DIMENSIONS.rack_tip
     )
     expected_z = (
-        DIMENSIONS.tooth_height
+        DIMENSIONS.tooth_height - DIMENSIONS.pusher_bed_bottom
         if moving
         else DIMENSIONS.pusher_z + DIMENSIONS.tooth_height - DIMENSIONS.floor
     )
@@ -862,6 +864,71 @@ def _guide_proofs(parts: tuple[Part, Part, Part]) -> dict:
             "deflection can reduce or redistribute motion, so this is not a claim that the "
             "assembled mechanism achieves the bound or that yaw caused both sides to disengage."
         ),
+    }
+
+
+def _pusher_bed_proofs(parts: tuple[Part, Part, Part], spec: TrunkBlockerSpec) -> dict:
+    _, pusher, _ = parts
+    bed_z = DIMENSIONS.finger_bottom_z
+    nearby_downward_faces = []
+    for face in pusher.faces():
+        if face.geom_type != GeomType.PLANE or face.normal_at().Z >= -0.99:
+            continue
+        bounds = face.bounding_box()
+        if bounds.min.Z > bed_z + 0.5 + CONNECTOR_PROOF_TOLERANCE_MM:
+            continue
+        nearby_downward_faces.append(
+            {
+                "area_mm2": face.area,
+                "centre_mm": [face.center().X, face.center().Y, face.center().Z],
+                "bounds_mm": [
+                    [bounds.min.X, bounds.min.Y, bounds.min.Z],
+                    [bounds.max.X, bounds.max.Y, bounds.max.Z],
+                ],
+            }
+        )
+    if len(nearby_downward_faces) != 1 or any(
+        abs(bound - bed_z) > CONNECTOR_PROOF_TOLERANCE_MM
+        for face in nearby_downward_faces
+        for bound in (face["bounds_mm"][0][2], face["bounds_mm"][1][2])
+    ):
+        raise ValueError("pusher bed-facing underside is not one coplanar datum")
+
+    front_y = -DIMENSIONS.wall_thickness - spec.extension_mm
+    wall_tile = (
+        make_tile(Tile(1, 2))
+        .rotate(Axis.X, 90)
+        .moved(Location((-DIMENSIONS.width / 2, front_y, DIMENSIONS.pusher_z)))
+    )
+    tile_overlap = _shape_volume(pusher.intersect(wall_tile))
+    tile_bottom_gap = wall_tile.bounding_box().min.Z - bed_z
+    floor_gap = bed_z - DIMENSIONS.floor
+    if (
+        tile_overlap >= VOLUME_TOLERANCE_MM3
+        or abs(tile_bottom_gap - 0.25) > CONNECTOR_PROOF_TOLERANCE_MM
+        or abs(floor_gap - 0.1) > CONNECTOR_PROOF_TOLERANCE_MM
+    ):
+        raise ValueError("flat pusher underside lost its floor or upright-tile clearance")
+
+    return {
+        "named_local_datum_mm": DIMENSIONS.pusher_bed_bottom,
+        "world_bed_plane_z_mm": bed_z,
+        "downward_planar_faces_within_0p5_mm": nearby_downward_faces,
+        "downward_planar_face_count_within_0p5_mm": len(nearby_downward_faces),
+        "base_floor_top_z_mm": DIMENSIONS.floor,
+        "minimum_vertical_gap_to_base_floor_mm": floor_gap,
+        "minimum_vertical_gap_to_mat_z0_mm": bed_z,
+        "upright_tile_bottom_z_mm": wall_tile.bounding_box().min.Z,
+        "wall_bottom_below_upright_tile_mm": tile_bottom_gap,
+        "upright_tile_overlap_volume_mm3": tile_overlap,
+        "upright_tile_surface_distance_mm": pusher.distance_to(wall_tile),
+        "coplanar_features": [
+            "wall backing",
+            "finger undersides",
+            "reinforcement roots",
+            "moving tooth carriers",
+            "moving teeth",
+        ],
     }
 
 
@@ -1501,6 +1568,7 @@ def export_trunk_blocker(
     rounding_proofs = _rounding_proofs(parts, spec)
     ratchet_proofs = _ratchet_proofs(parts, spec)
     guide_proofs = _guide_proofs(parts)
+    pusher_bed_proofs = _pusher_bed_proofs(parts, spec)
     disassembly_proofs = _disassembly_proofs(parts)
 
     output.mkdir(parents=True, exist_ok=True)
@@ -1548,6 +1616,7 @@ def export_trunk_blocker(
         "edge_rounding": rounding_proofs,
         "ratchet_geometry": ratchet_proofs,
         "centre_guides": guide_proofs,
+        "pusher_bed_facing_underside": pusher_bed_proofs,
         "step_roundtrip": {
             "precision_mode": step_precision_mode,
             "parts": step_facts,
@@ -1595,6 +1664,7 @@ def export_trunk_blocker(
             "base_passage_floor_top_z_mm": DIMENSIONS.floor,
             "finger_bottom_z_mm": DIMENSIONS.finger_bottom_z,
             "finger_top_z_mm": DIMENSIONS.finger_top_z,
+            "pusher_bed_plane_z_mm": DIMENSIONS.finger_bottom_z,
             "keeper_underside_z_mm": DIMENSIONS.keeper_seat,
             "locking_teeth_per_outer_finger": len(MOVING_TOOTH_STATIONS_MM),
             "locking_pitch_mm": DIMENSIONS.pitch,
@@ -1649,6 +1719,7 @@ def export_trunk_blocker(
             "native_front_interfaces": connector_proofs,
             "underbody_base_anchors": base_anchor_proofs,
             "centre_guides": guide_proofs,
+            "pusher_bed_facing_underside": pusher_bed_proofs,
             "unaffected_backing_and_mechanism": protected_proof,
             "edge_rounding": rounding_proofs,
             "ratchet_geometry": ratchet_proofs,
