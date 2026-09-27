@@ -658,6 +658,13 @@ def _legacy_panel_connector(interface: Interface = Interface()) -> Part:
 
 
 @lru_cache(maxsize=16)
+def make_panel_connector(interface: Interface = Interface()) -> Part:
+    """Build a native front-facing panel plug with its hidden mounting root."""
+
+    return _legacy_panel_connector(interface)
+
+
+@lru_cache(maxsize=16)
 def _bidirectional_panel_post(interface: Interface = Interface()) -> Part:
     tip_start = interface.plug_depth - PANEL_TIP_RADIUS_MM
     transition_start = tip_start - PANEL_TIP_TRANSITION_MM
@@ -707,6 +714,13 @@ def _panel_connector(interface: Interface = Interface()) -> Part:
         .rotate(Axis.X, 180)
         .moved(Location((center, center, 0)))
     )
+
+
+@lru_cache(maxsize=16)
+def make_bidirectional_panel_connector(interface: Interface = Interface()) -> Part:
+    """Build the accepted two-way panel post in the shared panel frame."""
+
+    return _panel_connector(interface)
 
 
 def _vertical_bracket(spec: Accessory, *, round_lip: bool = True) -> Part:
