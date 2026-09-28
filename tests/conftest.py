@@ -7,7 +7,11 @@ from cargo_grid import catalogue
 # at the beginning of a run instead of becoming its tail. A group name keeps the tests on one
 # worker under `--dist loadgroup`, so the fixture is built once. Without one, each test is
 # long enough that building a copy per worker finishes sooner than one chain.
-EARLY_FIXTURES = {"h2d_plan": "h2d-plan", "review_job": None}
+EARLY_FIXTURES = {
+    "h2d_plan": "h2d-plan",
+    "expansion_set_job": "zeekr-expansion-set",
+    "review_job": None,
+}
 
 
 @pytest.hookimpl(tryfirst=True)

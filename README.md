@@ -96,31 +96,29 @@ Open `outputs/full-catalogue/job.3mf` as a project. Common plates keep model bou
 
 The project names the H2D 0.8 nozzle, 0.32 mm Balanced Strength process, Textured PEI plate and Bambu PETG Basic profile. Confirm those profiles and your loaded filament before slicing. The catalogue does not add PLA roof interfaces to tiles; the PETG/PLA roof-support job below remains a separate tile-only workflow.
 
-## Make the separate Zeekr 7X extras
+## Make the Zeekr 7X expansion set
 
-The Zeekr extras provide two separate recipes. `extras zeekr-7x` keeps the original set of 40 mm straight male and female edges unchanged; these generic strips are not a measured vehicle outline and there are no matching 40 mm corners. `extras zeekr-7x-rear-panel` uses the measured rear lift-out-panel outline described below.
+`extras zeekr-7x` makes every Zeekr-specific piece in one project: the ten 40 mm straight edges and the nine measured rear lift-out-panel contour pieces, 19 parts in all. The tiles and 30 mm north edges used with the rear panel are ordinary catalogue parts, so they are not in the set; print them with the commands further down.
 
 ```bash
-uv run cargo-grid extras zeekr-7x --h2d-dual-safe --build-width-mm 350 --build-depth-mm 320 --build-height-mm 325 --bambu --material "Bambu PETG Basic @BBL H2D 0.8 nozzle" PETG "#637b70" --nozzle-diameter-mm 0.8 --layer-height-mm 0.32 --no-stl --output outputs/zeekr-7x-extras
+uv run cargo-grid extras zeekr-7x --h2d-dual-safe --build-width-mm 350 --build-depth-mm 320 --build-height-mm 325 --bambu --material "Bambu PETG Basic @BBL H2D 0.8 nozzle" PETG "#637b70" --nozzle-diameter-mm 0.8 --layer-height-mm 0.32 --no-stl --output outputs/zeekr-7x-expansion-set
 ```
 
-At standard 60/13 settings this produces ten parts: one of each 1, 2, 3, 4 and 5-cell length (60 through 300 mm). Packing uses the shared H2D common-reach inset and 4 mm default part clearance; `--packing-gap-mm` requests a different clearance. The manifest records the resulting plates, with automatic filament matching. The body extends 40 mm outward from the tile edge; male tabs add another 6 mm toward the tile, making the male part's overall cross-edge size 46 mm. Female parts measure 40 mm across.
+The H2D project keeps each family on its own named plates inside the common reach: `Zeekr 7X - Male 40mm edges`, `Zeekr 7X - Female 40mm edges`, `Zeekr 7X - Rear panel contour side caps`, and `Zeekr 7X - Rear panel south contour ramps 1` and `2` (the five ramps need two plates). Edge plates use the shared 4 mm H2D part clearance and contour plates keep 10 mm; `--packing-gap-mm` sets one clearance for every plate. Every plate uses automatic `Auto For Match` filament matching, and the manifest records the plates and placements.
 
-The default parts complete accepted 10 mm boundary openings on matching tiles. At an exposed strip end, the remaining corner quarter still needs adjacent perimeter material; this collection does not close a whole floor outline. `--no-holes` or `--hole-scope interior` selects only plain strips, while `--hole-diameter-mm` follows the same accepted-site policy as the tiles. Original roofed joints are required. Roof support stays off: inspect the female pocket bridges in your slicer and test physical fit and flatness before making a full set.
-
-For another build envelope, omit `--h2d-dual-safe` and supply its dimensions; the catalogue retains only lengths that actually fit. A single strip uses `part --family edge-x --length-cells 4 --edge-outward-mm 40` (or `edge-y` for female) with the usual build and output options. The normal `catalogue` command still uses only its existing 10/20/30 mm perimeter choices.
+The set needs the standard 60 mm unit, 13 mm thickness, original joints, zero fit offset and full 10 mm hole pattern, because the contour pieces are measured for that tile field. For plain or other-diameter 40 mm strips, make them one at a time with `part --family edge-x --length-cells 4 --edge-outward-mm 40` (or `edge-y` for female) plus `--plain-edge` or `--hole-diameter-mm`. For another build envelope, omit `--h2d-dual-safe` and supply its dimensions: the set keeps every straight-edge length that fits, and stops with an error if a contour piece does not fit.
 
 The 3MF is an unsliced project. Open it as a project, then slice and inspect every plate you plan to print.
 
+### 40 mm straight edges
+
+There is one male and one female edge of each 1, 2, 3, 4 and 5-cell length (60 through 300 mm). Male strips (`edge-x`) join a tile's female south or west edge; female strips (`edge-y`) join its male north or east edge. The body extends 40 mm outward from the tile edge; male tabs add another 6 mm toward the tile, making the male part's overall cross-edge size 46 mm. Female parts measure 40 mm across. These generic strips are not a measured vehicle outline, and there are no matching 40 mm corners.
+
+The strips complete accepted 10 mm boundary openings on matching tiles. At an exposed strip end, the remaining corner quarter still needs adjacent perimeter material; the strips don't close a whole floor outline on their own. Original roofed joints are required. Roof support stays off: inspect the female pocket bridges in your slicer and test physical fit and flatness before making a full set. The normal `catalogue` command still uses only its existing 10/20/30 mm perimeter choices.
+
 ### Rear lift-out-panel contour pieces
 
-`extras zeekr-7x-rear-panel` makes only the nine Zeekr-specific perimeter pieces: west male and east female contour caps split into north and south segments, plus five south male ramps aligned to the 4x4 + 4x4 + 2x4 + 4x4 + 4x4 tile modules. It does not duplicate the standard tiles or north edges.
-
-```bash
-uv run cargo-grid extras zeekr-7x-rear-panel --h2d-dual-safe --build-width-mm 350 --build-depth-mm 320 --build-height-mm 325 --bambu --material "Bambu PETG Basic @BBL H2D 0.8 nozzle" PETG "#637b70" --nozzle-diameter-mm 0.8 --layer-height-mm 0.32 --no-stl --output outputs/zeekr-7x-rear-panel
-```
-
-Print the matching standard parts separately with these commands:
+The contour pieces are west male and east female caps, each split into north and south segments, plus five south male ramps aligned to the 4x4 + 4x4 + 2x4 + 4x4 + 4x4 tile modules. Print the matching standard parts separately: four 4x4 tiles, one 2x4 tile, four 4-cell 30 mm north edges and one 2-cell 30 mm north edge.
 
 ```bash
 uv run cargo-grid part --family tile --width-cells 4 --depth-cells 4 --copy-count 4 --build-width-mm 350 --build-depth-mm 320 --build-height-mm 325 --bambu --material "Bambu PETG Basic @BBL H2D 0.8 nozzle" PETG "#637b70" --nozzle-diameter-mm 0.8 --layer-height-mm 0.32 --no-stl --output outputs/zeekr-7x-rear-panel-4x4-tiles
@@ -249,7 +247,7 @@ uv run cargo-grid layout --help
 uv run cargo-grid catalogue --help
 ```
 
-`part` makes one design, `layout` fills a requested rectangle, `catalogue` lists the supported standard designs that fit, and `extras zeekr-7x` makes only that named recipe. Normal generation doesn't need a downloaded reference model.
+`part` makes one design, `layout` fills a requested rectangle, `catalogue` lists the supported standard designs that fit, and `extras zeekr-7x` makes the Zeekr 7X expansion set. Normal generation doesn't need a downloaded reference model.
 
 Common options:
 

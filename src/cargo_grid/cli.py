@@ -35,7 +35,7 @@ from cargo_grid.parameters import (
 from cargo_grid.rods import ROD_FAMILIES, Rod, RodBrace
 from cargo_grid.roof_support import RoofSupportSettings
 from cargo_grid.stacking import StackSettings
-from cargo_grid.vehicles import zeekr_7x, zeekr_7x_rear_review
+from cargo_grid.vehicles import zeekr_7x
 
 
 def _positive_mm(value: str) -> float:
@@ -312,10 +312,10 @@ def parser() -> argparse.ArgumentParser:
         if command == "extras":
             p.add_argument(
                 "vehicle",
-                choices=("zeekr-7x", "zeekr-7x-rear-panel"),
+                choices=("zeekr-7x",),
                 help=(
-                    "Zeekr recipe: 40 mm straight edges, or measured rear-panel "
-                    "contour pieces with a user-reviewed test fit"
+                    "Zeekr 7X expansion set: 40 mm straight edges plus the measured "
+                    "rear-panel contour caps and ramps"
                 ),
             )
         for axis, meaning in (
@@ -346,7 +346,7 @@ def parser() -> argparse.ArgumentParser:
             help=(
                 "minimum packed-part separation in mm; default 2, or "
                 f"{H2D_DEFAULT_PART_CLEARANCE_MM:g} with --h2d-dual-safe; "
-                "the rear-panel recipe defaults to 10"
+                f"Zeekr contour plates default to {zeekr_7x.CONTOUR_GAP_MM:g}"
             ),
         )
         for axis, meaning in (
@@ -809,11 +809,7 @@ def main(argv: list[str] | None = None) -> int:
             job = layout_job(layout, build)
         else:
             requested_gap = getattr(args, "packing_gap_mm", None)
-            default_gap = (
-                zeekr_7x_rear_review.H2D_REVIEW_GAP_MM
-                if args.command == "extras" and args.vehicle == "zeekr-7x-rear-panel"
-                else (H2D_DEFAULT_PART_CLEARANCE_MM if args.h2d_dual_safe else 2)
-            )
+            default_gap = H2D_DEFAULT_PART_CLEARANCE_MM if args.h2d_dual_safe else 2
             packing_gap = default_gap if requested_gap is None else requested_gap
             if args.h2d_dual_safe:
                 if not bambu:
@@ -837,27 +833,17 @@ def main(argv: list[str] | None = None) -> int:
                     )
                 positive("H2D packing gap", packing_gap)
             if args.command == "extras":
-                if args.vehicle == "zeekr-7x-rear-panel":
-                    if hole_diameter != DEFAULT_HOLE_DIAMETER_MM or args.hole_scope != "full":
-                        raise ValueError(
-                            "Zeekr rear-panel contour pieces require the standard "
-                            "full-scope 10 mm hole pattern"
-                        )
-                    job = zeekr_7x_rear_review.rear_panel_job(
-                        build,
-                        interface=interface,
-                        placement_build=(h2d_common_build() if args.h2d_dual_safe else None),
-                        part_gap=packing_gap,
-                    )
-                else:
-                    job = zeekr_7x.extras_job(
-                        build,
-                        interface=interface,
-                        hole_diameter=hole_diameter,
-                        hole_scope=args.hole_scope,
-                        placement_build=(h2d_common_build() if args.h2d_dual_safe else None),
-                        part_gap=packing_gap,
-                    )
+                job = zeekr_7x.extras_job(
+                    build,
+                    interface=interface,
+                    hole_diameter=hole_diameter,
+                    hole_scope=args.hole_scope,
+                    placement_build=(h2d_common_build() if args.h2d_dual_safe else None),
+                    edge_gap=packing_gap,
+                    contour_gap=(
+                        zeekr_7x.CONTOUR_GAP_MM if requested_gap is None else requested_gap
+                    ),
+                )
                 if args.h2d_dual_safe:
                     job.placement_policy.update(
                         name="H2D dual-nozzle safe",
@@ -869,7 +855,7 @@ def main(argv: list[str] | None = None) -> int:
                             "max_z": 320,
                         },
                         common_model_inset_mm=5,
-                        minimum_actual_part_xy_clearance_mm=packing_gap,
+                        minimum_actual_part_xy_clearance_mm=job.part_gap,
                         clearance_measurement="model bounds on rectangle-packed plates",
                     )
             elif args.h2d_dual_safe:
