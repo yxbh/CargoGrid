@@ -3,9 +3,9 @@
 from collections import Counter
 
 import pytest
-from build123d import Shape
+from build123d import Location, Shape
 
-from cargo_grid import Interface, Tile, tiles
+from cargo_grid import Interface, Tile, interfaces, tiles
 
 
 @pytest.mark.parametrize("interface", [Interface(), Interface(30, 8), Interface(height=18)])
@@ -59,3 +59,21 @@ def test_all_standard_socket_bores_share_one_boolean_without_changing_their_spac
     result = tiles.make_tile(Tile(2, 3, hole_diameter=None))
     assert socket_cuts == [[(x, y, 6.5) for x in (30, 90) for y in (30, 90, 150)]]
     assert result.is_valid and len(result.solids()) == 1
+
+
+@pytest.mark.parametrize(
+    "interface", [Interface(), Interface(30, 8), Interface(joint_style="full-height")]
+)
+@pytest.mark.parametrize("male", [True, False])
+def test_cached_joint_tool_templates_hand_out_independent_identical_copies(interface, male):
+    depth = interface.male_join_depth if male else interface.female_join_depth
+    fresh = interfaces._tile_join_template.__wrapped__(interface, depth, male)
+    first = interfaces.tile_join_tool(interface, male=male)
+    first.move(Location((5, 7, 11)))
+    second = interfaces.tile_join_tool(interface, male=male)
+    assert not first.wrapped.IsPartner(second.wrapped)
+    assert second.is_valid and len(second.solids()) == 1
+    assert second.volume == fresh.volume and second.area == fresh.area
+    assert tuple(second.bounding_box().min) == tuple(fresh.bounding_box().min)
+    assert tuple(second.bounding_box().max) == tuple(fresh.bounding_box().max)
+    assert len(second.faces()) == len(fresh.faces())

@@ -33,6 +33,30 @@ def _mesh_edges(faces):
     )
 
 
+def _edge_defects(faces, vertex_count: int) -> tuple[bool, bool]:
+    """Return whether any edge is open, and whether any edge breaks the closed-manifold rule.
+
+    These are the same questions ``checked_mesh`` asks of the ``_mesh_edges`` counters.
+    Each undirected edge of indices below ``vertex_count`` gets one integer key instead of
+    a dictionary entry.
+    """
+    if not len(faces):
+        return False, False
+    faces = np.asarray(faces, dtype=np.int64)
+    if faces.min() < 0 or faces.max() >= vertex_count or vertex_count > 2**31:
+        raise ValueError("edge check needs vertex indices in 0..vertex_count-1 below 2**31")
+    start = np.concatenate((faces[:, 0], faces[:, 1], faces[:, 2]))
+    end = np.concatenate((faces[:, 1], faces[:, 2], faces[:, 0]))
+    direction = np.where(start < end, 1, -1)
+    key = np.minimum(start, end) * vertex_count + np.maximum(start, end)
+    order = np.argsort(key, kind="stable")
+    key, direction = key[order], direction[order]
+    starts = np.r_[0, np.flatnonzero(key[1:] != key[:-1]) + 1]
+    counts = np.diff(np.r_[starts, len(key)])
+    orientation = np.add.reduceat(direction, starts)
+    return bool(np.any(counts == 1)), bool(np.any(counts != 2) or np.any(orientation))
+
+
 def _close_cad_microtriangles(shape, vertices, faces, counts, orientation):
     """Close only three-edge mesher cracks supported by the unchanged CAD surface."""
     if any(n > 2 for n in counts.values()):
@@ -97,30 +121,41 @@ def checked_mesh(shape: Shape) -> tuple[np.ndarray, np.ndarray, dict]:
     if not mesher.IsDone():
         raise ValueError("OCCT tessellation did not finish")
     points, triangles, skipped = [], [], []
+    point_count = 0
     for face in shape.faces():
+        topods_face = face.wrapped
         location = TopLoc_Location()
-        poly = BRep_Tool.Triangulation_s(face.wrapped, location)
+        poly = BRep_Tool.Triangulation_s(topods_face, location)
         if poly is None:
             if face.area > 1e-10:
                 raise ValueError(f"unmeshed nondegenerate face: area {face.area:g} mm2")
             skipped.append(face.area)
             continue
-        offset = len(points)
-        for i in range(1, poly.NbNodes() + 1):
-            p = poly.Node(i).Transformed(location.Transformation())
-            points.append((p.X(), p.Y(), p.Z()))
-        for i in range(1, poly.NbTriangles() + 1):
-            a, b, c = poly.Triangle(i).Get()
-            if face.wrapped.Orientation() == TopAbs_REVERSED:
-                b, c = c, b
-            triangles.append((offset + a - 1, offset + b - 1, offset + c - 1))
-    vertices = np.array(points)
+        node = poly.Node
+        nodes = range(1, poly.NbNodes() + 1)
+        # An identity location leaves gp_Pnt coordinates unchanged, so skip the no-op transform.
+        if location.IsIdentity():
+            face_points = [node(i).Coord() for i in nodes]
+        else:
+            transformation = location.Transformation()
+            face_points = [node(i).Transformed(transformation).Coord() for i in nodes]
+        if face_points:
+            points.append(np.array(face_points))
+        triangle = poly.Triangle
+        face_triangles = [triangle(i).Get() for i in range(1, poly.NbTriangles() + 1)]
+        if face_triangles:
+            face_triangles = np.array(face_triangles, dtype=np.int64)
+            if topods_face.Orientation() == TopAbs_REVERSED:
+                face_triangles = face_triangles[:, (0, 2, 1)]
+            triangles.append(face_triangles + (point_count - 1))
+        point_count += len(face_points)
+    vertices = np.concatenate(points) if points else np.array(points)
     # Join duplicate surface seams within the model kernel's vertex tolerance,
     # not the much larger mesh chord tolerance.
     quantized = np.round(vertices / 1e-6).astype(np.int64)
     _, indices, inverse = np.unique(quantized, axis=0, return_index=True, return_inverse=True)
     vertices = vertices[indices]
-    faces = inverse[np.array(triangles)]
+    faces = inverse[np.concatenate(triangles) if triangles else np.array(triangles)]
     kernel_tolerance = max(BRep_Tool.Tolerance_s(v.wrapped) for v in shape.vertices())
     # A Boolean may assign conservative topological tolerances without an
     # actual geometric gap. Never move mesh vertices by that entire allowance.
@@ -133,9 +168,13 @@ def checked_mesh(shape: Shape) -> tuple[np.ndarray, np.ndarray, dict]:
             i = parents[i]
         return i
 
-    for a, b in cKDTree(vertices).query_pairs(weld_tolerance):
+    pairs = cKDTree(vertices).query_pairs(weld_tolerance)
+    for a, b in pairs:
         parents[root(b)] = root(a)
-    remap = np.array([root(i) for i in range(len(vertices))])
+    # Only vertices named by a welded pair can have another root.
+    remap = np.arange(len(vertices))
+    for i in {index for pair in pairs for index in pair}:
+        remap[i] = root(i)
     displacement = float(np.linalg.norm(vertices - vertices[remap], axis=1).max())
     if displacement > weld_tolerance + 1e-9:
         raise ValueError("transitive seam welding exceeds the geometric displacement budget")
@@ -143,12 +182,14 @@ def checked_mesh(shape: Shape) -> tuple[np.ndarray, np.ndarray, dict]:
     faces = faces[
         (faces[:, 0] != faces[:, 1]) & (faces[:, 1] != faces[:, 2]) & (faces[:, 2] != faces[:, 0])
     ]
-    undirected, oriented = _mesh_edges(faces)
+    has_boundary, defective = _edge_defects(faces, len(vertices))
     repairs = []
-    if any(n == 1 for n in undirected.values()):
-        faces, repairs = _close_cad_microtriangles(shape, vertices, faces, undirected, oriented)
+    if has_boundary:
         undirected, oriented = _mesh_edges(faces)
-    if any(n != 2 for n in undirected.values()) or any(oriented.values()):
+        faces, repairs = _close_cad_microtriangles(shape, vertices, faces, undirected, oriented)
+        _, defective = _edge_defects(faces, len(vertices))
+    if defective:
+        undirected, _ = _mesh_edges(faces)
         invalid = [
             (vertices[a].tolist(), vertices[b].tolist(), n)
             for (a, b), n in undirected.items()

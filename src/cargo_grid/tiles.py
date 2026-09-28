@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 from dataclasses import dataclass
+from functools import lru_cache
 from math import hypot
 
 from build123d import Axis, Face, Location, Part, Solid, Vector
@@ -34,8 +35,15 @@ def socket_centers(tile: Tile) -> list[tuple[float, float]]:
 
 
 def hole_placements(tile: Tile) -> list[HolePlacement]:
+    # Equal int and float fields print differently in manifests, so key on the exact repr too.
+    return list(_hole_placements(repr(tile), tile))
+
+
+@lru_cache(maxsize=256)
+def _hole_placements(_key: str, tile: Tile) -> tuple[HolePlacement, ...]:
+    """Pure keep-out classification of one frozen tile, shared as immutable placements."""
     if tile.hole_diameter is None:
-        return []
+        return ()
     p = tile.interface.pitch
     candidates = [
         *((i * p, (j + 0.5) * p) for i in range(1, tile.nx) for j in range(tile.ny)),
@@ -84,7 +92,7 @@ def hole_placements(tile: Tile) -> list[HolePlacement]:
             if (ox, oy) != (x, y)
         )
         result.append(HolePlacement(x, y, safe, "" if safe else "socket/join/material keep-out"))
-    return result
+    return tuple(result)
 
 
 def _join_tool(

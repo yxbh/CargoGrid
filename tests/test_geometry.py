@@ -4,11 +4,12 @@ from pathlib import Path
 import pytest
 from build123d import Compound, Location, Vector
 
-from cargo_grid import BuildVolume, Tile, make_tile
+from cargo_grid import BuildVolume, Tile, make_tile, tiles
 from cargo_grid.export import _checked_step_roundtrip
 from cargo_grid.interfaces import make_plug, prism, rectangle, x_profile
 from cargo_grid.jobs import Design, Job, layout_job
 from cargo_grid.layout import exact_layout
+from cargo_grid.parameters import Interface
 from cargo_grid.tiles import hole_placements
 
 
@@ -54,6 +55,26 @@ def test_interior_hole_centers_and_actual_void_radii():
             assert not shape.is_inside(Vector(hole.x + 4.99, hole.y, z))
             assert shape.is_inside(Vector(hole.x + 5.01, hole.y, z))
     assert all(not h.accepted for h in hole_placements(Tile(2, 2, hole_diameter=60)))
+
+
+def test_memoised_hole_placements_match_a_fresh_classification_and_stay_private():
+    cases = [
+        Tile(3, 2),
+        Tile(2, 1, hole_scope="interior"),
+        Tile(1, 1, Interface(pitch=30, height=8)),
+        Tile(2, 2, hole_diameter=None),
+    ]
+    for tile in cases:
+        fresh = list(tiles._hole_placements.__wrapped__(repr(tile), tile))
+        first = hole_placements(tile)
+        assert first == fresh
+        first.append("caller-owned")
+        assert hole_placements(tile) == fresh
+    # Equal int and float units print differently in manifests, so they must not share entries.
+    as_int = hole_placements(Tile(2, 2, Interface(pitch=60), hole_scope="interior"))
+    as_float = hole_placements(Tile(2, 2, Interface(pitch=60.0), hole_scope="interior"))
+    assert as_int == as_float
+    assert [repr(h.x) for h in as_int] != [repr(h.x) for h in as_float]
 
 
 @pytest.mark.parametrize("nx,ny,expected", [(1, 1, 8), (2, 1, 13), (2, 3, 29), (4, 4, 65)])
