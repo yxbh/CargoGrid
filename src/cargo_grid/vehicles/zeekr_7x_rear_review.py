@@ -42,8 +42,8 @@ from cargo_grid.accessories import (
 )
 from cargo_grid.interfaces import socket_entry_tool, tile_join_tool, x_profile
 from cargo_grid.jobs import Design, Job, tile_design
-from cargo_grid.packing import PrintPlacement, h2d_common_build, pack_sizes
-from cargo_grid.parameters import BuildVolume, Interface, Tile, positive
+from cargo_grid.packing import h2d_common_build, pack_sizes
+from cargo_grid.parameters import Interface, Tile, positive
 from cargo_grid.tiles import hole_placements
 
 ORIGINAL_RIGHT_WALL_STATIONS_MM = (
@@ -2232,20 +2232,10 @@ def inspect_scan_obj(path: Path) -> dict:
     }
 
 
-def rear_panel_job(
-    build: BuildVolume,
-    *,
-    interface: Interface = Interface(),
-    placement_build: BuildVolume | None = None,
-    part_gap: float = H2D_REVIEW_GAP_MM,
-) -> Job:
-    """Build only the nine measured contour pieces for normal CLI export."""
-    positive("rear-panel packing gap", part_gap)
-    parameters = RearReviewParameters(
-        interface=interface,
-        packing_gap_mm=part_gap,
-    )
-    envelope = placement_build or build
+def rear_panel_designs(
+    parameters: RearReviewParameters = RearReviewParameters(),
+) -> tuple[list[Design], list[Design]]:
+    """Build the four measured side-cap segments and five south contour ramps."""
     side_designs = [
         _side_design(side, segment, parameters)
         for side in ("west", "east")
@@ -2256,91 +2246,7 @@ def rear_panel_job(
     for index, cells in enumerate(TEST_TILE_MODULES):
         south_designs.append(_south_design(cells, index, x, parameters))
         x += cells * parameters.interface.pitch
-    designs = side_designs + south_designs
-    for design in designs:
-        if envelope.placement(design.size) is None or build.placement(design.size) is None:
-            raise ValueError(
-                f"{design.name}: actual bounds {design.size} exceed the configured build envelope"
-            )
-
-    placements = []
-    plate_names = {}
-    plate_offset = 0
-    for group, members in (
-        ("Contour side caps", side_designs),
-        ("South contour ramps", south_designs),
-    ):
-        packed = pack_sizes([design.size for design in members], envelope, gap=part_gap)
-        count = max(placement.plate for placement in packed) + 1
-        placements.extend(
-            PrintPlacement(
-                placement.plate + plate_offset,
-                placement.x,
-                placement.y,
-                placement.rotation,
-            )
-            for placement in packed
-        )
-        for plate in range(count):
-            title = f"Zeekr 7X rear panel - {group}"
-            plate_names[plate_offset + plate] = title if count == 1 else f"{title} {plate + 1}"
-        plate_offset += count
-
-    return Job(
-        designs,
-        build,
-        "zeekr-7x-rear-panel",
-        footprint=(2 * parameters.east_edge_x_mm, parameters.centre_depth_mm),
-        part_gap=part_gap,
-        print_placements=placements,
-        plate_names=plate_names,
-        placement_policy={
-            "collection": "zeekr-7x-rear-panel",
-            "minimum_model_gap_mm": part_gap,
-            "grouped_by_family": True,
-            "outline_parameters_mm": {
-                "pen_offset": parameters.pen_offset_mm,
-                "east_edge_x": parameters.east_edge_x_mm,
-                "centre_depth": parameters.centre_depth_mm,
-                "traced_corner_radius": parameters.traced_north_corner_radius_mm,
-                "true_corner_radius": parameters.north_corner_radius_mm,
-            },
-        },
-        manifest_metadata={
-            "scope": "Zeekr 7X rear lift-out-panel contour pieces only",
-            "inventory": {
-                "side_caps": 4,
-                "south_contour_ramps": 5,
-                "standard_tiles_and_north_edges_included": False,
-            },
-            "assembly": {
-                "tile_modules_west_to_east_cells": TEST_TILE_MODULES,
-                "tile_field_cells": (18, 4),
-                "tile_male_directions": "NORTH and EAST",
-                "west_cap": "male",
-                "east_cap": "female",
-                "south_ramps": "male",
-            },
-            "outline": {
-                "source": (
-                    "tape measurements and pen traces corrected by the measured "
-                    "5 mm pen-barrel offset"
-                ),
-                "pen_offset_mm": parameters.pen_offset_mm,
-                "east_edge_x_mm": parameters.east_edge_x_mm,
-                "centre_depth_mm": parameters.centre_depth_mm,
-                "traced_north_corner_radius_mm": (parameters.traced_north_corner_radius_mm),
-                "true_north_corner_radius_mm": parameters.north_corner_radius_mm,
-                "physical_test": (
-                    "one user test fit of the corrected outline was judged good enough for now"
-                ),
-            },
-            "limitations": (
-                "No general vehicle-fit, strength, flatness or service guarantee. "
-                "Print the documented standard tiles and 30 mm north edges separately."
-            ),
-        },
-    )
+    return side_designs, south_designs
 
 
 def rear_review_job(

@@ -1,24 +1,17 @@
 """Measured rear-panel review recipe and local artifact checks."""
 
-import json
 import os
-from collections import defaultdict
 from math import hypot
 from pathlib import Path
-from zipfile import ZipFile
 
 import pytest
-from build123d import Axis, Box, GeomType, Location, Solid
+from build123d import Axis, GeomType, Location, Solid
 from local_geometry import bounded_distance
 from OCP.BRepAdaptor import BRepAdaptor_Surface
 
-from cargo_grid import cli
-from cargo_grid.cli import main
-from cargo_grid.export import BambuSettings, Material, export_job
 from cargo_grid.interfaces import make_plug
-from cargo_grid.jobs import Design
 from cargo_grid.meshes import checked_mesh
-from cargo_grid.parameters import BuildVolume, Exclusion, Tile
+from cargo_grid.parameters import Tile
 from cargo_grid.tiles import make_tile
 from cargo_grid.vehicles.zeekr_7x_rear_review import (
     CORRECTED_TAPER_JUNCTION_SLOPE_DS_DU,
@@ -40,7 +33,6 @@ from cargo_grid.vehicles.zeekr_7x_rear_review import (
     _tail_slope_dy_dx,
     _taper_interpolators,
     inspect_scan_obj,
-    rear_panel_job,
     rear_review_job,
     right_review_outline_x_mm,
     right_wall_x_mm,
@@ -84,82 +76,6 @@ def _witness_intersection_volume(placed, bore):
 @pytest.fixture(scope="module")
 def review_job():
     return rear_review_job()
-
-
-@pytest.fixture(scope="module")
-def product_job():
-    return rear_panel_job(
-        BuildVolume(350, 320, 325),
-        placement_build=BuildVolume(
-            350,
-            320,
-            320,
-            margin=5,
-            exclusions=(
-                Exclusion(0, 0, 30, 320),
-                Exclusion(320, 0, 30, 320),
-            ),
-        ),
-    )
-
-
-def _planned_product_job(monkeypatch):
-    def side_design(side, segment, parameters):
-        return Design(
-            f"planned_{side}_{segment}_cap",
-            Box(60, 120, 13),
-            {
-                "family": "zeekr-rear-contour-side",
-                "side": side,
-                "segment": segment,
-                "interface": {
-                    "pitch": parameters.interface.pitch,
-                    "height": parameters.interface.height,
-                    "fit_offset": parameters.interface.fit_offset,
-                    "joint_style": parameters.interface.joint_style,
-                },
-            },
-            display_name=f"{side.title()} contour cap - {segment}",
-        )
-
-    def south_design(cells, index, x, parameters):
-        return Design(
-            f"planned_south_ramp_{index + 1}",
-            Box(cells * parameters.interface.pitch, 50, 13),
-            {
-                "family": "zeekr-rear-contour-ramp",
-                "width_cells": cells,
-                "interface": {
-                    "pitch": parameters.interface.pitch,
-                    "height": parameters.interface.height,
-                    "fit_offset": parameters.interface.fit_offset,
-                    "joint_style": parameters.interface.joint_style,
-                },
-            },
-            display_name=f"South contour ramp {index + 1}",
-        )
-
-    monkeypatch.setattr(
-        "cargo_grid.vehicles.zeekr_7x_rear_review._side_design",
-        side_design,
-    )
-    monkeypatch.setattr(
-        "cargo_grid.vehicles.zeekr_7x_rear_review._south_design",
-        south_design,
-    )
-    return rear_panel_job(
-        BuildVolume(350, 320, 325),
-        placement_build=BuildVolume(
-            350,
-            320,
-            320,
-            margin=5,
-            exclusions=(
-                Exclusion(0, 0, 30, 320),
-                Exclusion(320, 0, 30, 320),
-            ),
-        ),
-    )
 
 
 def test_measured_outline_uses_exact_mirrored_pchip_and_named_inset():
@@ -346,170 +262,6 @@ def test_review_inventory_frames_connector_sexes_and_actual_h2d_packing(review_j
                 dx = max(0, first[0] - second[1], second[0] - first[1])
                 dy = max(0, first[2] - second[3], second[2] - first[3])
                 assert hypot(dx, dy) >= H2D_REVIEW_GAP_MM - 1e-5
-
-
-@pytest.mark.slow
-def test_product_recipe_contains_only_nine_contour_pieces_with_clean_metadata(
-    product_job,
-):
-    job = product_job
-    assert job.kind == "zeekr-7x-rear-panel"
-    assert len(job.designs) == 9
-    assert [design.parameters["family"] for design in job.designs] == [
-        *(["zeekr-rear-contour-side"] * 4),
-        *(["zeekr-rear-contour-ramp"] * 5),
-    ]
-    assert job.part_gap == 10
-    assert job.placement_policy["collection"] == "zeekr-7x-rear-panel"
-    assert job.manifest_metadata["inventory"] == {
-        "side_caps": 4,
-        "south_contour_ramps": 5,
-        "standard_tiles_and_north_edges_included": False,
-    }
-    serialized = json.dumps(job.manifest_metadata)
-    assert "/Users/" not in serialized
-    assert "session-state" not in serialized
-    assert "npy" not in serialized.lower()
-    assert "photogrammetry" not in serialized.lower()
-    rectangles = defaultdict(list)
-    for design, placement in zip(job.designs, job.print_placements):
-        width, depth, height = design.size
-        if placement.rotation == 90:
-            width, depth = depth, width
-        assert 30 <= placement.x
-        assert placement.x + width <= 320 + 1e-6
-        assert 5 <= placement.y
-        assert placement.y + depth <= 315 + 1e-6
-        assert height == pytest.approx(13)
-        rectangles[placement.plate].append(
-            (placement.x, placement.x + width, placement.y, placement.y + depth)
-        )
-    assert "side caps" in job.plate_names[0].lower()
-    assert all(
-        "south contour ramps" in job.plate_names[plate].lower()
-        for plate in range(1, max(rectangles) + 1)
-    )
-    for bounds in rectangles.values():
-        for index, first in enumerate(bounds):
-            for second in bounds[index + 1 :]:
-                dx = max(0, first[0] - second[1], second[0] - first[1])
-                dy = max(0, first[2] - second[3], second[2] - first[3])
-                assert hypot(dx, dy) >= 10 - 1e-5
-
-
-def test_cli_routes_rear_panel_recipe_with_ten_mm_default_gap(
-    tmp_path,
-    monkeypatch,
-):
-    product_plan = _planned_product_job(monkeypatch)
-    captured = []
-
-    def capture(job, output, **settings):
-        captured.append((job, settings))
-        return output / "manifest.json"
-
-    monkeypatch.setattr(cli, "export_job", capture)
-    monkeypatch.setattr(
-        cli.zeekr_7x_rear_review,
-        "rear_panel_job",
-        lambda *args, **kwargs: product_plan,
-    )
-    assert (
-        main(
-            [
-                "extras",
-                "zeekr-7x-rear-panel",
-                "--h2d-dual-safe",
-                "--build-width-mm",
-                "350",
-                "--build-depth-mm",
-                "320",
-                "--build-height-mm",
-                "325",
-                "--bambu",
-                "--material",
-                "Bambu PETG Basic @BBL H2D 0.8 nozzle",
-                "PETG",
-                "#637b70",
-                "--nozzle-diameter-mm",
-                "0.8",
-                "--layer-height-mm",
-                "0.32",
-                "--output",
-                str(tmp_path / "rear-panel"),
-            ]
-        )
-        == 0
-    )
-    job, settings = captured[0]
-    assert job.kind == "zeekr-7x-rear-panel"
-    assert len(job.designs) == 9
-    assert job.part_gap == 10
-    assert job.placement_policy["minimum_actual_part_xy_clearance_mm"] == 10
-    assert settings["bambu"].machine_nozzle_count == 2
-    assert settings["bambu"].printer_settings_id == "Bambu Lab H2D 0.8 nozzle"
-
-    with pytest.raises(SystemExit) as caught:
-        main(
-            [
-                "extras",
-                "zeekr-7x-rear-panel",
-                "--build-width-mm",
-                "350",
-                "--build-depth-mm",
-                "320",
-                "--build-height-mm",
-                "325",
-                "--no-holes",
-                "--output",
-                str(tmp_path / "invalid"),
-            ]
-        )
-    assert caught.value.code == 2
-
-
-def test_product_recipe_export_smoke_has_nine_clean_named_objects(
-    tmp_path,
-    monkeypatch,
-):
-    job = _planned_product_job(monkeypatch)
-    output = tmp_path / "product"
-    manifest_path = export_job(
-        job,
-        output,
-        stl=False,
-        bambu=BambuSettings(
-            (
-                Material(
-                    "Bambu PETG Basic @BBL H2D 0.8 nozzle",
-                    "PETG",
-                    "#637b70",
-                ),
-            ),
-            nozzle=0.8,
-            layer_height=0.32,
-            printer_settings_id="Bambu Lab H2D 0.8 nozzle",
-            print_settings_id="0.32mm Balanced Strength @BBL H2D 0.8 nozzle",
-            bed_type="Textured PEI Plate",
-            machine_nozzle_count=2,
-            printer_model="Bambu Lab H2D",
-        ),
-    )
-    manifest = json.loads(manifest_path.read_text())
-    assert manifest["kind"] == "zeekr-7x-rear-panel"
-    assert len(manifest["designs"]) == 9
-    assert len(manifest["export"]["plates"]) == 2
-    assert "side caps" in job.plate_names[0].lower()
-    assert "south contour ramps" in job.plate_names[1].lower()
-    assert sum(len(plate["items"]) for plate in manifest["export"]["plates"]) == 9
-    assert manifest["export"]["sliced"] is False
-    serialized = json.dumps(manifest)
-    assert "/Users/" not in serialized
-    assert "session-state" not in serialized
-    assert "photogrammetry" not in serialized.lower()
-    with ZipFile(output / "job.3mf") as archive:
-        assert archive.testzip() is None
-        assert not any("slice" in name.lower() for name in archive.namelist())
 
 
 def _assert_valid_single_solid(design):
