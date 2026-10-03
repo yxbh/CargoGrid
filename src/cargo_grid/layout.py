@@ -75,7 +75,7 @@ def exact_layout(
     nx, ny = floor((width + 1e-8) / p), floor((depth + 1e-8) / p)
     if min(nx, ny) < 1:
         raise ValueError(f"exact layout needs at least one {p:g} mm cell in each axis")
-    if interface.height > build.usable[2] + 1e-6:
+    if interface.body_height > build.usable[2] + 1e-6:
         raise ValueError("tile height exceeds usable Z")
 
     def split(residual: float) -> tuple[float, float]:
@@ -124,7 +124,7 @@ def exact_layout(
                     + tile.filler_south
                     + tile.filler_north
                     + (interface.male_join_depth if tile.north else 0),
-                    interface.height,
+                    interface.body_height,
                 )
                 if build.placement(size) is None:
                     break

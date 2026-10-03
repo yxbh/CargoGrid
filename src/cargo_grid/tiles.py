@@ -105,9 +105,67 @@ def _join_tool(
     return dovetail_face(interface, depth=depth).rotate(Axis.Z, angle).moved(Location((x, y, 0)))
 
 
+def tile_joins(tile: Tile) -> list[dict]:
+    """Tile-edge joins in construction order: north/south per column, then east/west per row.
+
+    South pockets keep the male 0.1*pitch depth; west pockets add the 0.1 mm allowance.
+    """
+    interface = tile.interface
+    p = interface.pitch
+    w, d = tile.body_size
+    joins = []
+
+    def add(side: str, x: float, y: float, angle: float, male: bool, depth: float) -> None:
+        joins.append(
+            {
+                "position": (x, y, 0),
+                "angle": angle,
+                "sex": "male" if male else "female",
+                "side": side,
+                "depth": depth,
+                "height": interface.male_height if male else interface.female_opening_height,
+                "interface": "tile-dovetail",
+                "joint_style": interface.joint_style,
+            }
+        )
+
+    for i in range(tile.nx):
+        if tile.north:
+            add("north", (i + 0.5) * p, d, 0, True, interface.male_join_depth)
+        if tile.south:
+            add("south", (i + 0.5) * p, 0, 0, False, interface.male_join_depth)
+    for j in range(tile.ny):
+        if tile.east:
+            add("east", w, (j + 0.5) * p, -90, True, interface.male_join_depth)
+        if tile.west:
+            add("west", 0, (j + 0.5) * p, -90, False, interface.female_join_depth)
+    return joins
+
+
+def _original_body(prism_body: Part, h: float, male_tools: list, female_tools: list) -> Part:
+    part = prism_body.fillet(1, horizontal_edges(prism_body, h))
+    if male_tools:
+        part = part.fuse(*male_tools, tol=1e-7)
+    if female_tools:
+        part = part.cut(*female_tools)
+    if part.is_valid:
+        return part
+    # Each pocket tool's wall meets the top round only along a tangent line, and at some
+    # thicknesses (14.92 mm with four or more rows) OCCT resolves that contact into an invalid
+    # face. The pockets and their root blends stop 1.8 mm below the top, under the R1 top
+    # round, so cutting them first and rounding afterwards makes the same solid.
+    part = prism_body.cut(*female_tools)
+    part = part.fillet(1, horizontal_edges(part, h))
+    if male_tools:
+        part = part.fuse(*male_tools, tol=1e-7)
+    return part
+
+
 def make_tile(tile: Tile = Tile()) -> Part:
     w, d = tile.body_size
-    p, h = tile.interface.pitch, tile.interface.height
+    h = tile.interface.body_height
+    # A solid bottom closes sockets and holes at its top face, keeping their depth from the top.
+    cut_start = tile.interface.solid_bottom_mm or -1.0
     body = rectangle(
         -tile.filler_west,
         -tile.filler_south,
@@ -129,82 +187,15 @@ def make_tile(tile: Tile = Tile()) -> Part:
     female_tools = []
     male_faces = []
     female_faces = []
-    for i in range(tile.nx):
-        if tile.north:
-            male_faces.append(
-                _join_tool(tile.interface, (i + 0.5) * p, d, 0, tile.interface.male_join_depth)
+    for join in tile_joins(tile):
+        x, y, _ = join["position"]
+        male = join["sex"] == "male"
+        face = _join_tool(tile.interface, x, y, join["angle"], join["depth"])
+        (male_faces if male else female_faces).append(face)
+        if tile.interface.joint_style == "original":
+            (male_tools if male else female_tools).append(
+                tool(x, y, join["angle"], join["depth"], male)
             )
-            if tile.interface.joint_style == "original":
-                male_tools.append(
-                    tool(
-                        (i + 0.5) * p,
-                        d,
-                        0,
-                        tile.interface.male_join_depth,
-                        True,
-                    )
-                )
-        if tile.south:
-            female_faces.append(
-                _join_tool(
-                    tile.interface,
-                    (i + 0.5) * p,
-                    0,
-                    0,
-                    tile.interface.male_join_depth,
-                )
-            )
-            if tile.interface.joint_style == "original":
-                female_tools.append(
-                    tool(
-                        (i + 0.5) * p,
-                        0,
-                        0,
-                        tile.interface.male_join_depth,
-                        False,
-                    )
-                )
-    for j in range(tile.ny):
-        if tile.east:
-            male_faces.append(
-                _join_tool(
-                    tile.interface,
-                    w,
-                    (j + 0.5) * p,
-                    -90,
-                    tile.interface.male_join_depth,
-                )
-            )
-            if tile.interface.joint_style == "original":
-                male_tools.append(
-                    tool(
-                        w,
-                        (j + 0.5) * p,
-                        -90,
-                        tile.interface.male_join_depth,
-                        True,
-                    )
-                )
-        if tile.west:
-            female_faces.append(
-                _join_tool(
-                    tile.interface,
-                    0,
-                    (j + 0.5) * p,
-                    -90,
-                    tile.interface.female_join_depth,
-                )
-            )
-            if tile.interface.joint_style == "original":
-                female_tools.append(
-                    tool(
-                        0,
-                        (j + 0.5) * p,
-                        -90,
-                        tile.interface.female_join_depth,
-                        False,
-                    )
-                )
     if tile.interface.joint_style == "full-height":
         part = full_height_part(
             body,
@@ -215,12 +206,7 @@ def make_tile(tile: Tile = Tile()) -> Part:
         )
     else:
         body = body.fillet_2d(1, body.vertices())
-        part = prism(body, h)
-        part = part.fillet(1, horizontal_edges(part, h))
-        if male_tools:
-            part = part.fuse(*male_tools, tol=1e-7)
-        if female_tools:
-            part = part.cut(*female_tools)
+        part = _original_body(prism(body, h), h, male_tools, female_tools)
     part = part.clean()
     part = underside_fillet(part)
     if tile.interface.joint_style == "full-height":
@@ -231,8 +217,10 @@ def make_tile(tile: Tile = Tile()) -> Part:
         part = part.cut(*(cutter.moved(Location((cx, cy, 0))) for cx, cy in socket_centers(tile)))
     else:
         profile = x_profile(tile.interface, offset=tile.interface.fit_offset)
-        cutter = prism(profile, h + 2)
-        part = part.cut(*(cutter.moved(Location((cx, cy, -1))) for cx, cy in socket_centers(tile)))
+        cutter = prism(profile, h + 1 - cut_start)
+        part = part.cut(
+            *(cutter.moved(Location((cx, cy, cut_start))) for cx, cy in socket_centers(tile))
+        )
         entry_wires = [
             profile.outer_wire().moved(Location((cx, cy, h))) for cx, cy in socket_centers(tile)
         ]
@@ -244,7 +232,9 @@ def make_tile(tile: Tile = Tile()) -> Part:
         part = part.fillet(tile.interface.socket_entry_radius, entry_edges)
     holes = hole_placements(tile)
     cutters = [
-        Solid.make_cylinder(tile.hole_diameter / 2, h + 2).moved(Location((hole.x, hole.y, -1)))
+        Solid.make_cylinder(tile.hole_diameter / 2, h + 1 - cut_start).moved(
+            Location((hole.x, hole.y, cut_start))
+        )
         for hole in holes
         if hole.accepted
     ]

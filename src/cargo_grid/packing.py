@@ -5,6 +5,33 @@ from dataclasses import dataclass
 from cargo_grid.parameters import BuildVolume, Exclusion, positive
 
 
+@dataclass(frozen=True)
+class PrimeTower:
+    """Space kept free for Bambu's default prime tower; no tower settings are written.
+
+    Each plate only chooses the tower origin (``wipe_tower_x``/``wipe_tower_y``). The fields
+    are how far tower extrusion may reach from that origin. Bambu Studio 02.08.02.61 sliced
+    the default H2D rib-wall tower on PETG/PLA plates as a 25.5 to 28.3 mm square whose walls,
+    wipe lines and automatic first-layer brim reached up to 7.05 mm left, 6.39 mm in front,
+    34.05 mm right and 30.83 mm behind the origin; the defaults add a little to each.
+    """
+
+    left: float = 7.5
+    front: float = 7.0
+    right: float = 34.5
+    back: float = 31.5
+
+    def __post_init__(self) -> None:
+        positive("prime tower left reach", self.left, zero=True)
+        positive("prime tower front reach", self.front, zero=True)
+        positive("prime tower right reach", self.right)
+        positive("prime tower back reach", self.back)
+
+    def footprint(self, x: float, y: float) -> tuple[float, float, float, float]:
+        """Reserved extrusion bounds (x0, y0, x1, y1) for a tower whose origin is (x, y)."""
+        return (x - self.left, y - self.front, x + self.right, y + self.back)
+
+
 def h2d_common_build() -> BuildVolume:
     """H2D shared nozzle reach with a further 5 mm model inset."""
     return BuildVolume(

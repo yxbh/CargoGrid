@@ -262,7 +262,7 @@ def test_either_retained_female_edge_is_supported(west, south, edges, coverage, 
 def test_only_male_edges_are_not_roof_support_targets(support):
     design = tile_design(Tile(west=False, south=False))
     assert roof_enforcers(design, 0.2) == []
-    with pytest.raises(ValueError, match="no retained west or south"):
+    with pytest.raises(ValueError, match="no retained original female pocket roofs"):
         validate_roof_job(Job([design], BuildVolume(150, 150, 50), "part"), support, 0.2)
 
 
@@ -271,7 +271,7 @@ def test_non_tile_job_is_rejected_before_creating_output(bambu, tmp_path):
     from cargo_grid.catalogue import accessory_design
 
     job = Job([accessory_design(Accessory("edge-x"))], BuildVolume(150, 150, 50), "catalogue")
-    with pytest.raises(ValueError, match="tile-only"):
+    with pytest.raises(ValueError, match="catalogues and extras are not supported"):
         export_job(job, tmp_path / "unsupported", bambu=bambu)
     assert not (tmp_path / "unsupported").exists()
 

@@ -2,7 +2,6 @@
 
 import json
 from collections import defaultdict
-from dataclasses import asdict
 from hashlib import sha256
 from math import hypot
 from types import SimpleNamespace
@@ -13,6 +12,7 @@ import pytest
 from build123d import Box
 
 from cargo_grid import cli
+from cargo_grid import plates as plates_module
 from cargo_grid.accessories import EDGE_OUTWARD_OPTIONS_MM, Accessory, tile_matched_perimeter
 from cargo_grid.catalogue import (
     H2D_DEFAULT_PART_CLEARANCE_MM,
@@ -22,8 +22,9 @@ from cargo_grid.catalogue import (
 from cargo_grid.cli import main
 from cargo_grid.export import BambuSettings, Material, export_job
 from cargo_grid.jobs import Design
-from cargo_grid.packing import h2d_common_build
-from cargo_grid.parameters import BuildVolume, Exclusion, Interface
+from cargo_grid.packing import PrimeTower, h2d_common_build
+from cargo_grid.parameters import BuildVolume, Exclusion, Interface, interface_parameters
+from cargo_grid.plates import needs_auto_support
 from cargo_grid.rods import Rod, RodBrace
 from cargo_grid.vehicles import zeekr_7x, zeekr_7x_rear_review
 from cargo_grid.vehicles.zeekr_7x import CONTOUR_GAP_MM, extras_job, variants
@@ -98,7 +99,7 @@ def _stand_in_contours(side_sizes=SIDE_CAP_SIZES, ramp_sizes=SOUTH_RAMP_SIZES):
     """Contour pieces with the real names and bounds, without their slow construction."""
 
     def designs(parameters):
-        interface = asdict(parameters.interface)
+        interface = interface_parameters(parameters.interface)
         caps = [
             Design(
                 f"zeekr_rear_{side}_{segment}_cap",
@@ -463,6 +464,44 @@ def test_cli_h2d_extras_routes_shared_printer_settings(
     assert settings["bambu"].printer_settings_id == "Bambu Lab H2D 0.8 nozzle"
 
 
+def test_cli_extras_accept_a_solid_bottom_for_every_piece(
+    tmp_path,
+    monkeypatch,
+    accessory_metadata_shape,
+    contour_stand_ins,
+):
+    captured = []
+    monkeypatch.setattr(cli, "export_job", lambda job, output, **_: captured.append(job) or output)
+    command = [
+        "extras",
+        COLLECTION,
+        *H2D_OPTIONS,
+        "--solid-bottom-thickness-mm",
+        "1.92",
+        "--output",
+        str(tmp_path / "set"),
+    ]
+    assert main(command) == 0
+    (job,) = captured
+    assert len(job.designs) == 19
+    assert {design.parameters["interface"]["solid_bottom_mm"] for design in job.designs} == {1.92}
+    solid_bottom = job.manifest_metadata["solid_bottom"]
+    assert solid_bottom["body_thickness_mm"] == pytest.approx(14.92)
+    assert "recheck clearance under the lift-out panel" in solid_bottom["note"]
+    standard_parts = job.manifest_metadata["assembly"]["standard_parts_printed_separately"]
+    assert {part["solid_bottom_thickness_mm"] for part in standard_parts} == {1.92}
+
+
+def test_extras_without_a_solid_bottom_record_no_solid_bottom(expansion_plan):
+    assert expansion_plan.prime_tower is None and expansion_plan.prime_tower_positions == {}
+    assert "auto_roof_support" not in expansion_plan.placement_policy
+    assert "solid_bottom" not in expansion_plan.manifest_metadata
+    assert expansion_plan.manifest_metadata["assembly"]["standard_parts_printed_separately"] == (
+        STANDARD_PARTS
+    )
+    assert all("solid_bottom_mm" not in d.parameters["interface"] for d in expansion_plan.designs)
+
+
 def test_cli_extras_outside_h2d_keeps_the_ordinary_and_contour_default_gaps(
     tmp_path,
     monkeypatch,
@@ -574,7 +613,7 @@ def test_cli_only_accepts_the_single_expansion_set_route(command, tmp_path, caps
 @pytest.mark.parametrize(
     "options,message",
     [
-        (["--roof-support"], "roof supports require a tile-only"),
+        (["--roof-support"], "catalogues and extras are not supported"),
         (
             [
                 "--stack-count",
@@ -660,3 +699,131 @@ def test_real_expansion_set_exports_every_piece_in_one_project(expansion_set_job
             for plate in config.findall("plate")
         ]
         assert sorted(names) == sorted(name for name, _, _ in PLATES.values())
+
+
+AUTO_SUPPORTED = {
+    ("edge-y", None),
+    ("zeekr-rear-contour-side", "east"),
+}
+
+
+def _stand_in_needs_support(design):
+    family = design.parameters.get("family")
+    return (family, design.parameters.get("side")) in AUTO_SUPPORTED
+
+
+@pytest.fixture
+def auto_stand_ins(monkeypatch, accessory_metadata_shape, contour_stand_ins):
+    """Stand-in geometry where female edges and east caps carry pocket roofs."""
+    monkeypatch.setattr(plates_module, "needs_auto_support", _stand_in_needs_support)
+    return _stand_in_needs_support
+
+
+def _placed_by_plate(job):
+    plates = defaultdict(list)
+    for design, placement in zip(job.designs, job.print_placements):
+        plates[placement.plate].append((design, placement))
+    return plates
+
+
+def test_auto_support_reserves_a_tower_on_plates_with_supported_pieces(auto_stand_ins):
+    default = extras_job(H2D, placement_build=h2d_common_build(), edge_gap=4)
+    job = extras_job(H2D, placement_build=h2d_common_build(), edge_gap=4, auto_roof_support=True)
+    assert job.plate_names == default.plate_names
+    plates = _placed_by_plate(job)
+    supported = {
+        plate for plate, members in plates.items() if any(auto_stand_ins(d) for d, _ in members)
+    }
+    assert supported and set(job.prime_tower_positions) == supported
+    assert set(job.prime_tower_positions.values()) == {(290.5, 8.0)}
+    assert job.prime_tower == PrimeTower()
+    x0, _, _, y1 = job.prime_tower.footprint(290.5, 8.0)
+    gaps = job.placement_policy["plate_group_minimum_model_gap_mm"]
+    for plate, members in plates.items():
+        name = job.plate_names[plate]
+        group = next(title for title in gaps if name.startswith(title))
+        if plate in supported:
+            assert (
+                gaps[group]
+                == default.placement_policy["plate_group_minimum_model_gap_mm"][group] + 4
+            )
+            for design, placement in members:
+                width, depth = design.size[:2] if placement.rotation == 0 else design.size[1::-1]
+                assert placement.x >= 30 - 1e-6 and placement.x + width <= 320 + 1e-6
+                assert placement.y >= 6 - 1e-6 and placement.y + depth <= 314 + 1e-6
+                assert placement.x + width + 6.5 <= x0 + 1e-6 or placement.y >= y1 + 6.5 - 1e-6
+    assert job.placement_policy["auto_roof_support"]["prime_tower_plates"] == [
+        plate + 1 for plate in sorted(supported)
+    ]
+
+
+def test_auto_support_outside_h2d_uses_a_front_left_tower_corner(auto_stand_ins):
+    build = BuildVolume(400, 400, 50)
+    job = extras_job(build, auto_roof_support=True)
+    (origin,) = set(job.prime_tower_positions.values())
+    x0, y0, x1, y1 = job.prime_tower.footprint(*origin)
+    assert (x0, y0) == (0, 0)
+    gaps = job.placement_policy["plate_group_minimum_model_gap_mm"]
+    for plate, members in _placed_by_plate(job).items():
+        if plate in job.prime_tower_positions:
+            name = job.plate_names[plate]
+            gap = next(gaps[title] for title in gaps if name.startswith(title))
+            assert gap in (2 + 4, CONTOUR_GAP_MM + 4)
+            assert all(
+                placement.x >= x1 + 6.5 - 1e-6 or placement.y >= y1 + 6.5 - 1e-6
+                for _, placement in members
+            )
+
+
+def test_cli_extras_accept_auto_roof_support_and_refuse_painted(
+    auto_stand_ins, monkeypatch, tmp_path, capsys
+):
+    captured = []
+
+    def capture(job, output, **settings):
+        captured.append((job, settings))
+        return output / "manifest.json"
+
+    monkeypatch.setattr(cli, "export_job", capture)
+    materials = [
+        "--material",
+        "Bambu PLA Basic @BBL H2D 0.8 nozzle",
+        "PLA",
+        "#dddddd",
+    ]
+    command = ["extras", COLLECTION, *H2D_OPTIONS, *materials, "--roof-support"]
+    assert main([*command, "--roof-support-mode", "auto", "--output", str(tmp_path / "a")]) == 0
+    ((job, settings),) = captured
+    assert settings["bambu"].roof_support.mode == "auto"
+    assert job.prime_tower is not None and job.prime_tower_positions
+    with pytest.raises(SystemExit) as error:
+        main([*command, "--output", str(tmp_path / "painted")])
+    assert error.value.code == 2
+    assert "use auto mode (--roof-support-mode auto)" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("side,supported", [("east", True), ("west", False)])
+def test_real_contour_caps_get_object_support_only_on_female_roofs(side, supported):
+    from cargo_grid.roof_support import RoofSupportSettings, effective_object_settings
+
+    parameters = zeekr_7x_rear_review.RearReviewParameters()
+    design = zeekr_7x_rear_review._side_design(side, "north", parameters)
+    auto = RoofSupportSettings(mode="auto")
+    expected = {"enable_support": "1", "support_type": "normal(auto)"} if supported else {}
+    assert effective_object_settings(design, auto) == expected
+    assert needs_auto_support(design) is supported
+
+
+@pytest.mark.parametrize("family,supported", [("edge-y", True), ("edge-x", False)])
+def test_real_forty_mm_edges_get_object_support_only_when_female(family, supported):
+    (spec,) = [v for v in variants(H2D) if v.family == family and v.nx == 1]
+    design = accessory_design(spec)
+    assert needs_auto_support(design) is supported
+
+
+@pytest.mark.slow
+def test_real_male_south_ramp_stays_without_object_support():
+    parameters = zeekr_7x_rear_review.RearReviewParameters()
+    x = parameters.field_x_min_mm + 8 * parameters.interface.pitch
+    design = zeekr_7x_rear_review._south_design(2, 2, x, parameters)
+    assert not needs_auto_support(design)

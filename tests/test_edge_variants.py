@@ -640,7 +640,18 @@ def test_outer_corner_halves_keep_rounds_step_and_mesh(
     )
     assert part.is_valid and len(part.solids()) == 1 and part.volume > 0
     assert min(face.area for face in part.faces()) > 0.3
-    assert min(edge.length for edge in part.edges()) > 0.3
+    # The tile-matching R1 underside on the tile-facing face leaves one known short tangent
+    # line: between a completed 10 mm corner hole (which crosses the round's edge at 4.899 mm)
+    # and the unchanged joint-tool wall end 5 mm from the corner. Nothing else may be short.
+    for edge in part.edges():
+        if edge.length > 0.3:
+            continue
+        center = edge.center()
+        assert complete and edge.geom_type == GeomType.LINE, edge
+        assert edge.length == pytest.approx(5 - sqrt(24), abs=1e-6)
+        assert abs(center.Z) < 1e-6
+        assert any(abs(abs(value) - 1) < 1e-6 for value in (center.X, center.Y))
+        assert any(abs(value - wall) < 0.1 for value in (center.X, center.Y) for wall in (5, 55))
     assert any(
         face.geom_type == GeomType.CYLINDER
         and BRepAdaptor_Surface(face.wrapped).Cylinder().Radius() == pytest.approx(3, abs=1e-7)

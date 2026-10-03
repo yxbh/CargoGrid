@@ -1,19 +1,20 @@
 """Zeekr 7X expansion set built from shared CargoGrid geometry."""
 
 from collections import Counter
+from dataclasses import replace
 from math import floor
 from typing import Literal
 
 from cargo_grid.accessories import Accessory, tile_matched_perimeter
 from cargo_grid.catalogue import accessory_design
-from cargo_grid.jobs import Design, Job
-from cargo_grid.packing import PrintPlacement, pack_sizes
+from cargo_grid.jobs import Job
 from cargo_grid.parameters import (
     DEFAULT_HOLE_DIAMETER_MM,
     BuildVolume,
     Interface,
     positive,
 )
+from cargo_grid.plates import PlateGroup, PlatePlan, plan_plates
 from cargo_grid.vehicles import zeekr_7x_rear_review as rear_panel
 
 OUTWARD_MM = 40.0
@@ -47,11 +48,11 @@ def variants(
     ]
 
 
-def standard_rear_panel_parts() -> list[dict]:
+def standard_rear_panel_parts(solid_bottom_mm: float = 0.0) -> list[dict]:
     """Ordinary catalogue parts that complete the rear panel; not part of this set."""
     rows = round(rear_panel.TEST_FIELD_DEPTH_MM / Interface().pitch)
     lengths = sorted(Counter(rear_panel.TEST_TILE_MODULES).items(), reverse=True)
-    return [
+    parts = [
         *(
             {"family": "tile", "width_cells": cells, "depth_cells": rows, "quantity": quantity}
             for cells, quantity in lengths
@@ -66,27 +67,10 @@ def standard_rear_panel_parts() -> list[dict]:
             for cells, quantity in lengths
         ),
     ]
-
-
-def _plates(
-    groups: list[tuple[str, list[Design], float]],
-    sizes: dict[int, tuple[float, float, float]],
-    envelope: BuildVolume,
-) -> tuple[list[Design], list[PrintPlacement], dict[int, str]]:
-    designs, placements, names = [], [], {}
-    for title, members, gap in groups:
-        packed = pack_sizes([sizes[id(design)] for design in members], envelope, gap=gap)
-        count = max(placement.plate for placement in packed) + 1
-        offset = len(names)
-        for plate in range(count):
-            label = f"{PLATE_PREFIX}{title}"
-            names[offset + plate] = label if count == 1 else f"{label} {plate + 1}"
-        designs.extend(members)
-        placements.extend(
-            PrintPlacement(placement.plate + offset, placement.x, placement.y, placement.rotation)
-            for placement in packed
-        )
-    return designs, placements, names
+    if solid_bottom_mm:
+        for part in parts:
+            part["solid_bottom_thickness_mm"] = solid_bottom_mm
+    return parts
 
 
 def extras_job(
@@ -98,11 +82,16 @@ def extras_job(
     placement_build: BuildVolume | None = None,
     edge_gap: float = 2,
     contour_gap: float = CONTOUR_GAP_MM,
+    auto_roof_support: bool = False,
 ) -> Job:
-    """Build the whole expansion set: 40 mm straight edges plus rear-panel contour pieces."""
+    """Build the whole expansion set: 40 mm straight edges plus rear-panel contour pieces.
+
+    ``auto_roof_support`` reserves a prime tower on every plate with a piece that gets
+    object-scoped Auto support (female edges and the female east caps).
+    """
     if interface.joint_style != "original":
         raise ValueError("Zeekr 7X extras require original roofed tile-edge joints")
-    if interface != Interface():
+    if replace(interface, solid_bottom_mm=0.0) != Interface():
         raise ValueError(
             "the Zeekr 7X expansion set requires the standard 60 mm unit, "
             "13 mm tile thickness and zero fit offset"
@@ -135,7 +124,7 @@ def extras_job(
     if not edges:
         raise ValueError("no supported designs fit the configured build envelope")
 
-    parameters = rear_panel.RearReviewParameters()
+    parameters = rear_panel.RearReviewParameters(interface=interface)
     side_caps, south_ramps = rear_panel.rear_panel_designs(parameters)
     for design in side_caps + south_ramps:
         size = design.size
@@ -147,37 +136,55 @@ def extras_job(
 
     male = [design for design in edges if design.parameters["family"] == "edge-x"]
     female = [design for design in edges if design.parameters["family"] == "edge-y"]
+
+    def plan(groups: list[PlateGroup]) -> PlatePlan:
+        result = plan_plates(
+            groups,
+            envelope,
+            size=lambda design: sizes[id(design)],
+            auto_roof_support=auto_roof_support,
+        )
+        if result.unfit:
+            raise ValueError(f"{result.unfit[0].name} does not fit its plate area")
+        return result
+
     edge_groups = [
-        (title, members, edge_gap)
+        PlateGroup(f"{PLATE_PREFIX}{title}", members, edge_gap)
         for title, members in (("Male 40mm edges", male), ("Female 40mm edges", female))
         if members
     ]
-    _, grouped_placements, _ = _plates(edge_groups, sizes, envelope)
-    _, combined_placements, _ = _plates([("40mm edges", edges, edge_gap)], sizes, envelope)
-    grouped = max(p.plate for p in combined_placements) >= max(p.plate for p in grouped_placements)
+    combined_edges = [PlateGroup(f"{PLATE_PREFIX}40mm edges", edges, edge_gap)]
+    grouped = plan(combined_edges).plate_count >= plan(edge_groups).plate_count
     groups = [
-        *(edge_groups if grouped else [("40mm edges", edges, edge_gap)]),
-        ("Rear panel contour side caps", side_caps, contour_gap),
-        ("Rear panel south contour ramps", south_ramps, contour_gap),
+        *(edge_groups if grouped else combined_edges),
+        PlateGroup(f"{PLATE_PREFIX}Rear panel contour side caps", side_caps, contour_gap),
+        PlateGroup(f"{PLATE_PREFIX}Rear panel south contour ramps", south_ramps, contour_gap),
     ]
-    designs, placements, plate_names = _plates(groups, sizes, envelope)
+    plates = plan(groups)
     job_gap = min(edge_gap, contour_gap)
     return Job(
-        designs,
+        plates.designs,
         build,
         "extras",
         omitted=omitted,
         part_gap=job_gap,
-        print_placements=placements,
-        plate_names=plate_names,
+        print_placements=plates.placements,
+        plate_names=plates.plate_names,
+        plate_builds=plates.plate_builds,
+        prime_tower=plates.prime_tower,
+        prime_tower_positions=plates.prime_tower_positions,
+        prime_tower_clearances=plates.prime_tower_clearances,
         placement_policy={
             "collection": "zeekr-7x",
             "minimum_model_gap_mm": job_gap,
-            "plate_group_minimum_model_gap_mm": {
-                f"{PLATE_PREFIX}{title}": gap for title, _, gap in groups
-            },
+            "plate_group_minimum_model_gap_mm": plates.group_gaps,
             "grouped_by_family": True,
             "grouped_by_connector_sex": grouped,
+            **(
+                {"auto_roof_support": plates.auto_roof_support}
+                if plates.auto_roof_support is not None
+                else {}
+            ),
             "outward_body_width_mm": OUTWARD_MM,
             "outline_parameters_mm": {
                 "pen_offset": parameters.pen_offset_mm,
@@ -218,7 +225,9 @@ def extras_job(
                 "east_cap": "female",
                 "south_ramps": "male",
                 "north_edges": "standard 30 mm female edge-y strips",
-                "standard_parts_printed_separately": standard_rear_panel_parts(),
+                "standard_parts_printed_separately": standard_rear_panel_parts(
+                    interface.solid_bottom_mm
+                ),
                 "outline_footprint_mm": (
                     2 * parameters.east_edge_x_mm,
                     parameters.centre_depth_mm,
@@ -241,6 +250,22 @@ def extras_job(
             "limitations": (
                 "No general vehicle-fit, strength, flatness or service guarantee. "
                 "Print the documented standard tiles and 30 mm north edges separately."
+            ),
+            **(
+                {
+                    "solid_bottom": {
+                        "solid_bottom_mm": interface.solid_bottom_mm,
+                        "body_thickness_mm": interface.body_height,
+                        "note": (
+                            f"Every piece has a {interface.solid_bottom_mm:g} mm closed floor "
+                            "and sits that much higher than the test-fitted version; recheck "
+                            "clearance under the lift-out panel. Print the matching tiles and "
+                            "north edges with the same solid bottom."
+                        ),
+                    }
+                }
+                if interface.solid_bottom_mm
+                else {}
             ),
         },
     )

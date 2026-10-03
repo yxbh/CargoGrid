@@ -12,6 +12,7 @@ from cargo_grid.footprints import (
     ProjectedFootprint,
     minimum_projected_clearance,
     pack_projected_footprints,
+    placed_footprint,
     projected_mesh_footprint,
 )
 from cargo_grid.jobs import Design, Job
@@ -354,3 +355,17 @@ def test_explicit_placement_count_still_matches_prepared_batches():
     )
     with pytest.raises(ValueError, match="packed batches"):
         _PreparedProject(job, None, None)
+
+
+def test_projected_packing_keeps_bounding_boxes_out_of_obstacles():
+    footprints = [ProjectedFootprint(box(0, 0, 40, 40)) for _ in range(3)]
+    placements = pack_projected_footprints(
+        footprints, (10, 10, 130, 130), gap=2, search_gap=1.5, obstacles=((0, 0, 60, 60),)
+    )
+    for footprint, placement in zip(footprints, placements):
+        x0, y0, _, _ = placed_footprint(footprint, placement).bounds
+        assert x0 >= 60 - 1e-6 or y0 >= 60 - 1e-6
+    with pytest.raises(ValueError, match="could not fit"):
+        pack_projected_footprints(
+            footprints, (10, 10, 130, 130), gap=2, search_gap=1.5, obstacles=((0, 0, 130, 130),)
+        )

@@ -17,7 +17,7 @@ from functools import lru_cache
 from math import atan, degrees, sqrt, tan
 from typing import Literal
 
-from build123d import Axis, Face, GeomType, Location, Part, Solid, Wire
+from build123d import Axis, Edge, Face, GeomType, Location, Part, Solid, Vector, Wire
 from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet
 
 from cargo_grid.interfaces import (
@@ -72,6 +72,7 @@ BRACKET_ENVELOPE_MARGIN_MM = 0.1
 STOP_WALL_MM = 6.0
 EDGE_TOP_RADIUS_MM = 2.0
 EDGE_BODY_RADIUS_MM = 3.0
+EDGE_MATING_RADIUS_MM = 1.0
 EDGE_OUTWARD_OPTIONS_MM = (10.0, 20.0, 30.0)
 STRAIGHT_EDGE_OUTWARD_OPTIONS_MM = (*EDGE_OUTWARD_OPTIONS_MM, 40.0)
 EDGE_FAMILIES = ("edge-x", "edge-y", "corner-in", "corner-out")
@@ -167,6 +168,11 @@ class Accessory:
         positive("height", self.height)
         if not isinstance(self.interface, Interface):
             raise ValueError("interface must be an Interface")
+        if self.interface.solid_bottom_mm and self.family not in (*EDGE_FAMILIES, "ramp"):
+            raise ValueError(
+                f"a solid bottom applies only to tiles, edge/corner pieces and ramps; "
+                f"{self.family} is unchanged, so omit --solid-bottom-thickness-mm"
+            )
         if self.ramp_join not in ("female", "male"):
             raise ValueError("ramp join must be female or male")
         if self.family != "ramp" and self.ramp_join != "female":
@@ -500,11 +506,13 @@ def _edge_hole_centers(spec: Accessory) -> list[tuple[float, float]]:
 def _cut_completed_edge_holes(part: Part, spec: Accessory) -> Part:
     if not spec.complete_edge_holes:
         return part
+    # Like tile holes, a solid bottom leaves completed openings blind from the top.
+    start = spec.interface.solid_bottom_mm or -1.0
     cutters = [
         Solid.make_cylinder(
             (spec.edge_hole_diameter or DEFAULT_HOLE_DIAMETER_MM) / 2,
-            spec.interface.height + 2,
-        ).moved(Location((x, y, -1)))
+            spec.interface.body_height + 1 - start,
+        ).moved(Location((x, y, start)))
         for x, y in _edge_hole_centers(spec)
     ]
     return part.cut(*cutters).clean() if cutters else part
@@ -1175,14 +1183,14 @@ def _ramp_shelf_radius(tile_thickness: float) -> float:
 
 def _ramp(spec: Accessory, *, cut_joins: bool = True) -> Part:
     width = spec.nx * spec.interface.pitch
-    raw_tip = _ramp_profile_tip_y(spec.interface.height)
+    raw_tip = _ramp_profile_tip_y(spec.interface.body_height)
     profile = Face(
         Wire.make_polygon(
             [
                 (0, 0, 0),
                 (0, raw_tip, 0),
-                (0, RAMP_CARRIER_RUN_MM, spec.interface.height),
-                (0, 0, spec.interface.height),
+                (0, RAMP_CARRIER_RUN_MM, spec.interface.body_height),
+                (0, 0, spec.interface.body_height),
             ],
             close=True,
         )
@@ -1190,12 +1198,12 @@ def _ramp(spec: Accessory, *, cut_joins: bool = True) -> Part:
     # Resolve these arcs in section: the 3D fillet builder can treat a
     # shallow shelf/slope angle as tangent and silently leave the crease.
     profile = profile.fillet_2d(
-        _ramp_shelf_radius(spec.interface.height),
+        _ramp_shelf_radius(spec.interface.body_height),
         [
             vertex
             for vertex in profile.vertices()
             if abs(vertex.Y - RAMP_CARRIER_RUN_MM) < 1e-7
-            and abs(vertex.Z - spec.interface.height) < 1e-7
+            and abs(vertex.Z - spec.interface.body_height) < 1e-7
         ],
     )
     profile = profile.fillet_2d(
@@ -1236,7 +1244,7 @@ def _ramp(spec: Accessory, *, cut_joins: bool = True) -> Part:
         # Only the outward half of the stock tool is a tab. Its construction
         # wall must not flatten the fixed ramp slope at large unit sizes.
         depth = spec.interface.male_join_depth
-        outside = _box(0, -depth, width, depth, spec.interface.height)
+        outside = _box(0, -depth, width, depth, spec.interface.body_height)
         tabs = [Part(join.intersect(outside).solids()) for join in joins]
         result = part.fuse(*tabs).clean()
     else:
@@ -1272,7 +1280,7 @@ def _free_top_rims(spec: Accessory) -> list[tuple[str, float]]:
 
 def _round_free_top(part: Part, spec: Accessory) -> Part:
     support = spec.family.startswith("support")
-    top = 0 if support else spec.interface.height
+    top = 0 if support else spec.interface.body_height
     rims = _free_top_rims(spec)
     edges = [
         edge
@@ -1289,6 +1297,61 @@ def _round_free_top(part: Part, spec: Accessory) -> Part:
     return part.fillet(SUPPORT_TOP_RADIUS_MM if support else EDGE_TOP_RADIUS_MM, edges)
 
 
+def _edge_mating_sides(face: Face, joins: list[dict]) -> list[Edge]:
+    """Plan sides that meet a tile or a neighbouring perimeter piece.
+
+    A tile-facing side carries a join. The perpendicular sides that share its ends are the
+    strip or corner ends that butt against neighbouring perimeter pieces on the same cell
+    line. Every other side is the free outward outline.
+    """
+    sides = list(face.outer_wire().edges())
+    tile_facing = [
+        side
+        for side in sides
+        if any(side.distance_to(Vector(*join["position"][:2], 0)) < 1e-6 for join in joins)
+    ]
+
+    def direction(side: Edge) -> Vector:
+        return (side.end_point() - side.start_point()).normalized()
+
+    ends = [
+        side
+        for side in sides
+        if side not in tile_facing
+        and any(
+            abs(direction(side).dot(direction(tile))) < 1e-9
+            and any(
+                (vertex.center() - end.center()).length < 1e-6
+                for vertex in side.vertices()
+                for end in tile.vertices()
+            )
+            for tile in tile_facing
+        )
+    ]
+    return tile_facing + ends
+
+
+def _round_edge_body(body: Part, mating: list[Edge], label: str) -> Part:
+    """Tile-matching R1 on every edge of a mating face; R3 comfort rounds elsewhere.
+
+    Vertical edges project to plan vertices and horizontal edges to plan sides, so an edge
+    is on a mating face exactly when its projected centre lies on a mating side.
+    """
+    operation = BRepFilletAPI_MakeFillet(body.wrapped)
+    for edge in body.edges():
+        center = edge.center()
+        plan = Vector(center.X, center.Y, 0)
+        mates = any(side.distance_to(plan) < 1e-6 for side in mating)
+        operation.Add(EDGE_MATING_RADIUS_MM if mates else EDGE_BODY_RADIUS_MM, edge.wrapped)
+    operation.Build()
+    if not operation.IsDone():
+        raise ValueError(f"{label}: R1 mating / R3 free body fillet failed")
+    rounded = Part(Solid(operation.Shape()).wrapped)
+    if not rounded.is_valid or len(rounded.solids()) != 1:
+        raise ValueError(f"{label}: R1 mating / R3 free body fillet produced invalid geometry")
+    return rounded
+
+
 def _rounded_original_corner_out_half_body(spec: Accessory, half_face: Face) -> Part:
     p = spec.interface.pitch
     partner_variant, partner_offset = {
@@ -1297,7 +1360,8 @@ def _rounded_original_corner_out_half_body(spec: Accessory, half_face: Face) -> 
         4: (5, (-p, 0, 0)),
         5: (4, (p, 0, 0)),
     }[spec.variant]
-    partner_face, _ = _edge_plan(
+    _, half_joins = _edge_plan(spec)
+    partner_face, partner_plan_joins = _edge_plan(
         Accessory(
             "corner-out",
             variant=partner_variant,
@@ -1311,15 +1375,17 @@ def _rounded_original_corner_out_half_body(spec: Accessory, half_face: Face) -> 
     pair_faces = half_face.fuse(partner_face).faces()
     if len(pair_faces) != 1:
         raise ValueError("corner-out: half-pair plan did not form one face")
-    pair_body = prism(Face(pair_faces[0].wrapped), spec.interface.height)
-    operation = BRepFilletAPI_MakeFillet(pair_body.wrapped)
-    for edge in pair_body.edges():
-        operation.Add(EDGE_BODY_RADIUS_MM, edge.wrapped)
-    operation.Build()
-    if not operation.IsDone():
-        raise ValueError("corner-out: coupled half-pair R3 body fillet failed")
-    rounded_pair = Part(Solid(operation.Shape()).wrapped)
-    trim = prism(half_face, spec.interface.height + 2).moved(Location((0, 0, -1)))
+    pair_body = prism(Face(pair_faces[0].wrapped), spec.interface.body_height)
+    partner_joins = [
+        {**join, "position": tuple(a + b for a, b in zip(join["position"], partner_offset))}
+        for join in partner_plan_joins
+    ]
+    mating = [
+        *_edge_mating_sides(half_face, half_joins),
+        *_edge_mating_sides(partner_face, partner_joins),
+    ]
+    rounded_pair = _round_edge_body(pair_body, mating, "corner-out half pair")
+    trim = prism(half_face, spec.interface.body_height + 2).moved(Location((0, 0, -1)))
     body = Part(rounded_pair.intersect(trim).solids()).clean()
     if not body.is_valid or len(body.solids()) != 1 or body.volume <= 0:
         raise ValueError("corner-out: half-pair split produced invalid body")
@@ -1447,6 +1513,12 @@ def _support(spec: Accessory, *, round_top: bool = True) -> Part:
     return _apply_joins(part, joins)
 
 
+def _solid_bottom_datums(spec: Accessory) -> dict:
+    if not spec.interface.solid_bottom_mm:
+        return {}
+    return {"solid_bottom_mm": spec.interface.solid_bottom_mm}
+
+
 def accessory_datums(spec: Accessory | Rod | RodBrace) -> dict:
     """Machine-readable nominal mating datums; no physical-fit assertions."""
     if isinstance(spec, Rod):
@@ -1503,11 +1575,11 @@ def accessory_datums(spec: Accessory | Rod | RodBrace) -> dict:
         return result
     if spec.family == "ramp":
         male = spec.ramp_join == "male"
-        return {
+        return _solid_bottom_datums(spec) | {
             "underside_z": 0,
-            "top_z": spec.interface.height,
+            "top_z": spec.interface.body_height,
             "finished_run": RAMP_RUN_MM,
-            "shelf_radius": _ramp_shelf_radius(spec.interface.height),
+            "shelf_radius": _ramp_shelf_radius(spec.interface.body_height),
             "minimum_flat_shelf": RAMP_MINIMUM_FLAT_SHELF_MM,
             "ramp_join": spec.ramp_join,
             "tab_projection": spec.interface.male_join_depth if male else 0,
@@ -1565,9 +1637,9 @@ def accessory_datums(spec: Accessory | Rod | RodBrace) -> dict:
         join["open_through_top"] = (
             join["sex"] == "female" and spec.interface.joint_style == "full-height"
         )
-    return {
+    return _solid_bottom_datums(spec) | {
         "underside_z": 0,
-        "top_z": spec.interface.height,
+        "top_z": spec.interface.body_height,
         "mount_centers": [],
         "joins": joins,
         "edge_outward": spec.edge_outward,
@@ -1611,7 +1683,7 @@ def make_accessory(spec: Accessory | Rod | RodBrace) -> Part:
                 face,
                 males,
                 females,
-                spec.interface.height,
+                spec.interface.body_height,
                 round_body_corners=False,
                 free_top_rims=_free_top_rims(spec),
                 free_top_radius=EDGE_TOP_RADIUS_MM,
@@ -1621,14 +1693,11 @@ def make_accessory(spec: Accessory | Rod | RodBrace) -> Part:
             if spec.family == "corner-out" and spec.variant in (1, 2, 4, 5):
                 body = _rounded_original_corner_out_half_body(spec, face)
             else:
-                body = prism(face, spec.interface.height)
-                operation = BRepFilletAPI_MakeFillet(body.wrapped)
-                for edge in body.edges():
-                    operation.Add(EDGE_BODY_RADIUS_MM, edge.wrapped)
-                operation.Build()
-                if not operation.IsDone():
-                    raise ValueError(f"{spec.family}: coupled R3 body fillet failed")
-                body = Part(Solid(operation.Shape()).wrapped)
+                body = _round_edge_body(
+                    prism(face, spec.interface.body_height),
+                    _edge_mating_sides(face, joins),
+                    spec.family,
+                )
             part = _apply_joins(body, joins, interface=spec.interface)
         if spec.interface.joint_style == "full-height":
             part = part.fillet(1, horizontal_edges(part, 0))
