@@ -14,19 +14,19 @@ from build123d import Box
 
 from cargo_grid import BuildVolume, Interface, Tile
 from cargo_grid import catalogue as catalogue_module
+from cargo_grid import plates as plates_module
 from cargo_grid.accessories import Accessory
-from cargo_grid.catalogue import (
-    H2D_AUTO_SUPPORT_MODEL_MAX_X,
-    H2D_AUTO_SUPPORT_TOWER,
-    H2D_AUTO_SUPPORT_TOWER_ORIGIN,
-    accessory_design,
-    h2d_dual_safe_catalogue_job,
-    needs_auto_support,
-)
+from cargo_grid.catalogue import accessory_design, h2d_dual_safe_catalogue_job
 from cargo_grid.cli import main
 from cargo_grid.export import BambuSettings, Material, export_job, write_3mf
 from cargo_grid.jobs import Design, Job, tile_design, tile_identity
 from cargo_grid.packing import PrimeTower, PrintPlacement
+from cargo_grid.plates import (
+    H2D_AUTO_SUPPORT_MODEL_MAX_X,
+    H2D_AUTO_SUPPORT_TOWER,
+    H2D_AUTO_SUPPORT_TOWER_ORIGIN,
+    needs_auto_support,
+)
 from cargo_grid.rods import Rod, RodBrace
 from cargo_grid.roof_support import (
     OBJECT_AUTO_SUPPORT,
@@ -336,7 +336,7 @@ def stubbed_h2d(monkeypatch):
             return False
         return family in supported
 
-    monkeypatch.setattr(catalogue_module, "needs_auto_support", fake_needs)
+    monkeypatch.setattr(plates_module, "needs_auto_support", fake_needs)
     return fake_needs
 
 

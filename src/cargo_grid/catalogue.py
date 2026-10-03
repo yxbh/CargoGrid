@@ -20,39 +20,20 @@ from cargo_grid.accessories import (
     required_bambu_object_settings,
     tile_matched_perimeter,
 )
-from cargo_grid.footprints import pack_projected_footprints, projected_mesh_footprint
 from cargo_grid.jobs import Design, Job, tile_design
-from cargo_grid.meshes import checked_mesh
-from cargo_grid.packing import PrimeTower, PrintPlacement, h2d_common_build, pack_sizes
+from cargo_grid.packing import h2d_common_build
 from cargo_grid.parameters import (
     DEFAULT_HOLE_DIAMETER_MM,
     BuildVolume,
-    Exclusion,
     Interface,
     Tile,
     interface_parameters,
     positive,
 )
+from cargo_grid.plates import PlateGroup, plan_plates
 from cargo_grid.rods import BRACE_SPACINGS_MM, ROD_HEIGHTS_MM, Rod, RodBrace
-from cargo_grid.roof_support import OBJECT_AUTO_SUPPORT, female_roofs
 
 H2D_DEFAULT_PART_CLEARANCE_MM = 4.0
-# Auto roof support prints a PLA interface, so every plate with supported parts needs a prime
-# tower that both H2D nozzles reach (X 25..325). Bambu makes tower width and style project-wide,
-# so one compact 28 mm rectangular tower with a fixed 3 mm brim serves every plate. It starts
-# near the front of a reserved right-hand column (X 284..325, the whole plate depth) and Bambu
-# grows it toward the back; models on those plates stay at X <= 276.5, so support feet keep clear
-# of the purge line. The column fits beside the 246 mm-wide tiles with a 5-cell side, which
-# already span the full common depth.
-H2D_AUTO_SUPPORT_TOWER = PrimeTower(width=28, depth=300)
-H2D_AUTO_SUPPORT_TOWER_ORIGIN = (293.0, 10.0)
-H2D_AUTO_SUPPORT_MODEL_MAX_X = 276.5
-# Bambu's automatic support-foot expansion grows the first support layer up to about 5 mm past
-# the part outline, so plates with supported parts add this to the model clearance and keep
-# parts a further 1 mm from the front and back plate edges.
-AUTO_SUPPORT_FOOT_ALLOWANCE_MM = 4.0
-AUTO_SUPPORT_PLATE_MARGIN_MM = 6.0
-H2D_FOOTPRINT_SEARCH_ALLOWANCE_MM = 0.75
 
 BRACKET_DISPLAY_NAMES = {
     (1, 2, 2): "Deep tall tile bracket — floor 1x2, wall 1x2",
@@ -213,11 +194,6 @@ def accessory_variants(
     return result
 
 
-def needs_auto_support(design: Design) -> bool:
-    """Whether auto roof support switches object support on, so the plate prints PLA."""
-    return bool(female_roofs(design)) or design.bambu_object_settings == OBJECT_AUTO_SUPPORT
-
-
 def accessory_design(spec: Accessory | Rod | RodBrace) -> Design:
     name, parameters = accessory_identity(spec)
     if isinstance(spec, (Rod, RodBrace)):
@@ -286,86 +262,39 @@ def catalogue_job(
     )
     if not auto_roof_support:
         return job
-    return _with_left_prime_tower(job, sizes, packing_gap)
-
-
-def _with_left_prime_tower(
-    job: Job, sizes: dict[int, tuple[float, float, float]], packing_gap: float
-) -> Job:
-    """Pack a mixed catalogue around one prime tower column at the left of the usable area."""
     positive("packing gap", packing_gap, zero=True)
-    build = job.build
-    usable_depth = build.y - 2 * build.margin - build.reserve_y
-    if usable_depth <= 2 * H2D_AUTO_SUPPORT_TOWER.brim + 1:
-        raise ValueError("auto roof support needs room for a prime tower at the left of the build")
-    tower = PrimeTower(
-        width=H2D_AUTO_SUPPORT_TOWER.width,
-        depth=usable_depth - 2 * H2D_AUTO_SUPPORT_TOWER.brim - 0.5,
+    plan = plan_plates(
+        [PlateGroup(None, job.designs, packing_gap)],
+        build,
+        size=lambda design: sizes[id(design)],
+        auto_roof_support=True,
     )
-    origin = (build.margin + tower.purge_lead, build.margin + 2 * tower.brim + 0.5)
-    x0, y0, x1, y1 = tower.footprint(*origin)
-    if any(
-        x0 < area.x + area.width and area.x < x1 and y0 < area.y + area.depth and area.y < y1
-        for area in build.exclusions
-    ):
-        raise ValueError("auto roof support needs room for a prime tower at the left of the build")
-    support_gap = packing_gap + AUTO_SUPPORT_FOOT_ALLOWANCE_MM
-    strip = min(build.x, x1 + support_gap)
-    tower_build = BuildVolume(
-        build.x,
-        build.y,
-        build.z,
-        margin=build.margin,
-        reserve_x=build.reserve_x,
-        reserve_y=build.reserve_y,
-        reserve_z=build.reserve_z,
-        exclusions=(*build.exclusions, Exclusion(0, 0, strip, build.y)),
-    )
-    designs, omitted = [], list(job.omitted)
-    for design in job.designs:
-        if tower_build.placement(sizes[id(design)]) is None:
-            omitted.append(
-                {
-                    "name": design.name,
-                    "parameters": design.parameters,
-                    "size_mm": sizes[id(design)],
-                    "reason": "actual bounds do not fit beside the reserved prime tower",
-                }
-            )
-        else:
-            designs.append(design)
-    if not designs:
+    if not plan.designs:
         raise ValueError("no supported designs fit beside the reserved prime tower")
-    placements = pack_sizes(
-        [sizes[id(design)] for design in designs], tower_build, gap=support_gap, pack=True
-    )
-    positions = {
-        placement.plate: origin
-        for design, placement in zip(designs, placements)
-        if needs_auto_support(design)
-    }
-    result = Job(
-        designs,
+    omitted = [
+        *job.omitted,
+        *(
+            {
+                "name": design.name,
+                "parameters": design.parameters,
+                "size_mm": sizes[id(design)],
+                "reason": "actual bounds do not fit beside the reserved prime tower",
+            }
+            for design in plan.unfit
+        ),
+    ]
+    return Job(
+        plan.designs,
         build,
         "catalogue",
         omitted=omitted,
-        print_placements=placements,
-        placement_policy={
-            "auto_roof_support": {
-                "prime_tower_plates": [plate + 1 for plate in sorted(positions)],
-                "model_min_x_mm": strip,
-                "model_gap_mm": support_gap,
-                "reason": (
-                    "PLA interface plates need a prime tower; it sits at the left of the usable "
-                    "area, so check that every nozzle of your printer reaches it"
-                ),
-            }
-        },
-        prime_tower=tower,
-        prime_tower_positions=positions,
+        part_gap=packing_gap,
+        print_placements=plan.placements,
+        plate_builds=plan.plate_builds,
+        placement_policy={"auto_roof_support": plan.auto_roof_support},
+        prime_tower=plan.prime_tower,
+        prime_tower_positions=plan.prime_tower_positions,
     )
-    result.part_gap = packing_gap
-    return result
 
 
 def _catalogue_job_with_sizes(
@@ -470,16 +399,17 @@ def h2d_dual_safe_catalogue_job(
         return outward, complete
 
     groups = [
-        ("Tiles", family_members({"tile"})),
-        ("Female ramps", family_members({"ramp"}, "female")),
-        ("Male ramps", family_members({"ramp"}, "male")),
-        ("Normal stops", family_members({"vertical-stop"})),
-        (
+        PlateGroup("Tiles", family_members({"tile"}), packing_gap),
+        PlateGroup("Female ramps", family_members({"ramp"}, "female"), packing_gap),
+        PlateGroup("Male ramps", family_members({"ramp"}, "male"), packing_gap),
+        PlateGroup("Normal stops", family_members({"vertical-stop"}), packing_gap),
+        PlateGroup(
             "Tile brackets - deep and shallow",
             family_members({"vertical-tile-bracket"}),
+            packing_gap,
         ),
-        ("Angled stops", family_members({"lock-45"})),
-        ("Attachment plates", family_members({"plate"})),
+        PlateGroup("Angled stops", family_members({"lock-45"}), packing_gap),
+        PlateGroup("Attachment plates", family_members({"plate"}), packing_gap),
     ]
     perimeter_designs = family_members({"edge-x", "edge-y", "corner-in", "corner-out"})
     for outward in EDGE_OUTWARD_OPTIONS_MM:
@@ -488,118 +418,34 @@ def h2d_dual_safe_catalogue_job(
             traits = (outward, complete)
             members = [design for design in perimeter_designs if perimeter_traits(design) == traits]
             if members:
-                groups.append((f"{outward:g}mm edges and corners - {mode}", members))
+                groups.append(
+                    PlateGroup(
+                        f"{outward:g}mm edges and corners - {mode}",
+                        members,
+                        packing_gap,
+                        projected=True,
+                    )
+                )
     groups.append(
-        (
+        PlateGroup(
             "Rails and connectors",
             family_members({"support", "support-bit", "support-end"}),
+            packing_gap,
         )
     )
-    groups.append(("Rods and upper braces", family_members({"rod", "rod-brace"})))
-    tower_build = BuildVolume(
-        350,
-        320,
-        320,
-        margin=AUTO_SUPPORT_PLATE_MARGIN_MM,
-        exclusions=(
-            Exclusion(0, 0, 30, 320),
-            Exclusion(H2D_AUTO_SUPPORT_MODEL_MAX_X, 0, 350 - H2D_AUTO_SUPPORT_MODEL_MAX_X, 320),
-        ),
+    groups.append(
+        PlateGroup("Rods and upper braces", family_members({"rod", "rod-brace"}), packing_gap)
     )
-    plate_builds = {}
-    tower_positions = {}
-    tower_groups = []
-    designs = []
-    placements = []
-    footprints = []
-    projected_clearances = {}
-    projected_packing = {}
-    plate_names = {}
-    plate_offset = 0
-    for title, members in groups:
-        perimeter_group = bool(members) and all(
-            design.parameters.get("family") in {"edge-x", "edge-y", "corner-in", "corner-out"}
-            for design in members
-        )
-        towered = auto_roof_support and any(needs_auto_support(design) for design in members)
-        group_build = tower_build if towered else common_build
-        group_gap = packing_gap + AUTO_SUPPORT_FOOT_ALLOWANCE_MM if towered else packing_gap
-        if towered:
-            tower_groups.append(title)
-        rectangular = pack_sizes(
-            [sizes[id(design)] for design in members],
-            group_build,
-            gap=group_gap,
-            pack=True,
-        )
-        shape_nested = False
-        rectangle_plate_count = max(placement.plate for placement in rectangular) + 1
-        if perimeter_group and rectangle_plate_count > 1:
-            group_footprints = []
-            for design in members:
-                vertices, faces, _ = checked_mesh(design.bambu_shape)
-                group_footprints.append(projected_mesh_footprint(vertices, faces))
-            search_gap = max(
-                group_gap - H2D_FOOTPRINT_SEARCH_ALLOWANCE_MM,
-                group_gap / 2,
-            )
-            try:
-                candidate = pack_projected_footprints(
-                    group_footprints,
-                    ((30, 6, H2D_AUTO_SUPPORT_MODEL_MAX_X, 314) if towered else (30, 5, 320, 315)),
-                    gap=group_gap,
-                    search_gap=search_gap,
-                )
-            except ValueError as error:
-                packed = rectangular
-                group_footprints = [None] * len(members)
-                projected_packing[title] = {
-                    "status": "rectangle fallback",
-                    "reason": str(error),
-                }
-            else:
-                packed = candidate
-                shape_nested = True
-                projected_packing[title] = {
-                    "status": "applied",
-                    "minimum_projected_gap_mm": group_gap,
-                    "search_gap_mm": search_gap,
-                    "grid_mm": 1,
-                    "maximum_candidate_positions": 4_000_000,
-                    "maximum_order_attempts": 8,
-                }
-        else:
-            group_footprints = [None] * len(members)
-            packed = rectangular
-            if perimeter_group:
-                projected_packing[title] = {
-                    "status": "rectangle retained",
-                    "reason": "the group already fits one plate at the requested bounds gap",
-                }
-        group_plate_count = max(placement.plate for placement in packed) + 1
-        for local_plate in range(group_plate_count):
-            plate_names[plate_offset + local_plate] = (
-                title if group_plate_count == 1 else f"{title} {local_plate + 1}"
-            )
-            plate_builds[plate_offset + local_plate] = group_build
-        if towered:
-            for design, placement in zip(members, packed):
-                if needs_auto_support(design):
-                    tower_positions[plate_offset + placement.plate] = H2D_AUTO_SUPPORT_TOWER_ORIGIN
-        designs.extend(members)
-        footprints.extend(group_footprints)
-        if shape_nested:
-            projected_clearances[plate_offset] = group_gap
-        placements.extend(
-            PrintPlacement(
-                placement.plate + plate_offset,
-                placement.x,
-                placement.y,
-                placement.rotation,
-            )
-            for placement in packed
-        )
-        plate_offset += group_plate_count
+    plan = plan_plates(
+        groups,
+        common_build,
+        size=lambda design: sizes[id(design)],
+        auto_roof_support=auto_roof_support,
+    )
+    if plan.unfit:
+        raise ValueError(f"{plan.unfit[0].name} does not fit its H2D plate area")
+    designs = plan.designs
+    plate_names = plan.plate_names
     if len(designs) != len(common_designs) or len({design.name for design in designs}) != len(
         common_designs
     ):
@@ -609,9 +455,9 @@ def h2d_dual_safe_catalogue_job(
         physical_build,
         "catalogue",
         omitted=omitted,
-        print_placements=placements,
+        print_placements=plan.placements,
         plate_names=plate_names,
-        plate_builds=plate_builds,
+        plate_builds=plan.plate_builds,
         placement_policy={
             "name": "H2D dual-nozzle safe",
             "common_reach_mm": {"min_x": 25, "max_x": 325, "min_y": 0, "max_y": 320, "max_z": 320},
@@ -623,36 +469,25 @@ def h2d_dual_safe_catalogue_job(
                 "footprints on marked shape-packed plates"
             ),
             "projected_footprint_gap_overrides_mm": {
-                plate_names[plate]: clearance for plate, clearance in projected_clearances.items()
+                plate_names[plate]: clearance
+                for plate, clearance in plan.projected_clearances.items()
             },
-            "projected_footprint_packing": projected_packing,
+            "projected_footprint_packing": plan.projected_packing,
             "grouped_by_family": True,
             "perimeter_grouping": "outward width and boundary-hole mode",
             "omitted_tiles": [entry["name"] for entry in omitted],
             **(
-                {
-                    "auto_roof_support": {
-                        "prime_tower_plates": [plate + 1 for plate in sorted(tower_positions)],
-                        "prime_tower_groups": tower_groups,
-                        "model_max_x_on_tower_plates_mm": H2D_AUTO_SUPPORT_MODEL_MAX_X,
-                        "model_gap_on_tower_plates_mm": packing_gap
-                        + AUTO_SUPPORT_FOOT_ALLOWANCE_MM,
-                        "reason": (
-                            "PLA interface plates need a prime tower both nozzles reach; the "
-                            "tower column and its 4 mm clearance are kept free of models"
-                        ),
-                    }
-                }
-                if auto_roof_support
+                {"auto_roof_support": plan.auto_roof_support}
+                if plan.auto_roof_support is not None
                 else {}
             ),
         },
-        projected_footprints=footprints,
-        projected_footprint_clearances=projected_clearances,
-        prime_tower=H2D_AUTO_SUPPORT_TOWER if auto_roof_support else None,
-        prime_tower_positions=tower_positions,
+        projected_footprints=plan.projected_footprints,
+        projected_footprint_clearances=plan.projected_clearances,
+        prime_tower=plan.prime_tower,
+        prime_tower_positions=plan.prime_tower_positions,
     )
     job.part_gap = packing_gap
-    if plate_offset > 36:
+    if plan.plate_count > 36:
         raise ValueError("H2D dual-safe grouped catalogue exceeds the 36-plate limit")
     return job

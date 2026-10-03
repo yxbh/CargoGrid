@@ -7,14 +7,14 @@ from typing import Literal
 
 from cargo_grid.accessories import Accessory, tile_matched_perimeter
 from cargo_grid.catalogue import accessory_design
-from cargo_grid.jobs import Design, Job
-from cargo_grid.packing import PrintPlacement, pack_sizes
+from cargo_grid.jobs import Job
 from cargo_grid.parameters import (
     DEFAULT_HOLE_DIAMETER_MM,
     BuildVolume,
     Interface,
     positive,
 )
+from cargo_grid.plates import PlateGroup, PlatePlan, plan_plates
 from cargo_grid.vehicles import zeekr_7x_rear_review as rear_panel
 
 OUTWARD_MM = 40.0
@@ -71,27 +71,6 @@ def standard_rear_panel_parts(solid_bottom_mm: float = 0.0) -> list[dict]:
         for part in parts:
             part["solid_bottom_thickness_mm"] = solid_bottom_mm
     return parts
-
-
-def _plates(
-    groups: list[tuple[str, list[Design], float]],
-    sizes: dict[int, tuple[float, float, float]],
-    envelope: BuildVolume,
-) -> tuple[list[Design], list[PrintPlacement], dict[int, str]]:
-    designs, placements, names = [], [], {}
-    for title, members, gap in groups:
-        packed = pack_sizes([sizes[id(design)] for design in members], envelope, gap=gap)
-        count = max(placement.plate for placement in packed) + 1
-        offset = len(names)
-        for plate in range(count):
-            label = f"{PLATE_PREFIX}{title}"
-            names[offset + plate] = label if count == 1 else f"{label} {plate + 1}"
-        designs.extend(members)
-        placements.extend(
-            PrintPlacement(placement.plate + offset, placement.x, placement.y, placement.rotation)
-            for placement in packed
-        )
-    return designs, placements, names
 
 
 def extras_job(
@@ -152,35 +131,40 @@ def extras_job(
 
     male = [design for design in edges if design.parameters["family"] == "edge-x"]
     female = [design for design in edges if design.parameters["family"] == "edge-y"]
+
+    def plan(groups: list[PlateGroup]) -> PlatePlan:
+        result = plan_plates(groups, envelope, size=lambda design: sizes[id(design)])
+        if result.unfit:
+            raise ValueError(f"{result.unfit[0].name} does not fit its plate area")
+        return result
+
     edge_groups = [
-        (title, members, edge_gap)
+        PlateGroup(f"{PLATE_PREFIX}{title}", members, edge_gap)
         for title, members in (("Male 40mm edges", male), ("Female 40mm edges", female))
         if members
     ]
-    _, grouped_placements, _ = _plates(edge_groups, sizes, envelope)
-    _, combined_placements, _ = _plates([("40mm edges", edges, edge_gap)], sizes, envelope)
-    grouped = max(p.plate for p in combined_placements) >= max(p.plate for p in grouped_placements)
+    combined_edges = [PlateGroup(f"{PLATE_PREFIX}40mm edges", edges, edge_gap)]
+    grouped = plan(combined_edges).plate_count >= plan(edge_groups).plate_count
     groups = [
-        *(edge_groups if grouped else [("40mm edges", edges, edge_gap)]),
-        ("Rear panel contour side caps", side_caps, contour_gap),
-        ("Rear panel south contour ramps", south_ramps, contour_gap),
+        *(edge_groups if grouped else combined_edges),
+        PlateGroup(f"{PLATE_PREFIX}Rear panel contour side caps", side_caps, contour_gap),
+        PlateGroup(f"{PLATE_PREFIX}Rear panel south contour ramps", south_ramps, contour_gap),
     ]
-    designs, placements, plate_names = _plates(groups, sizes, envelope)
+    plates = plan(groups)
     job_gap = min(edge_gap, contour_gap)
     return Job(
-        designs,
+        plates.designs,
         build,
         "extras",
         omitted=omitted,
         part_gap=job_gap,
-        print_placements=placements,
-        plate_names=plate_names,
+        print_placements=plates.placements,
+        plate_names=plates.plate_names,
+        plate_builds=plates.plate_builds,
         placement_policy={
             "collection": "zeekr-7x",
             "minimum_model_gap_mm": job_gap,
-            "plate_group_minimum_model_gap_mm": {
-                f"{PLATE_PREFIX}{title}": gap for title, _, gap in groups
-            },
+            "plate_group_minimum_model_gap_mm": plates.group_gaps,
             "grouped_by_family": True,
             "grouped_by_connector_sex": grouped,
             "outward_body_width_mm": OUTWARD_MM,

@@ -34,7 +34,7 @@ from cargo_grid.parameters import (
     positive,
 )
 from cargo_grid.rods import ROD_FAMILIES, Rod, RodBrace
-from cargo_grid.roof_support import RoofSupportSettings
+from cargo_grid.roof_support import RoofSupportSettings, check_roof_job_kind
 from cargo_grid.stacking import StackSettings
 from cargo_grid.vehicles import zeekr_7x
 
@@ -227,12 +227,7 @@ def _roof_support(args) -> RoofSupportSettings | None:
     if args.joint_style != "original":
         raise ValueError("roof supports require original roofed joints")
     mode = args.roof_support_mode or "painted"
-    if args.command == "extras" or (args.command == "catalogue" and mode == "painted"):
-        raise ValueError(
-            "roof supports require a part or layout job; catalogues and extras are not supported"
-            if mode == "painted"
-            else "auto roof support requires a part, layout or catalogue job; extras are not supported"
-        )
+    check_roof_job_kind(args.command, mode)
     if mode == "auto" and args.roof_coverage is not None:
         raise ValueError(
             "--roof-coverage applies to painted roof support; auto support covers whole roofs"

@@ -260,14 +260,28 @@ def effective_object_settings(design: Design, settings: RoofSupportSettings | No
     return dict(design.bambu_object_settings)
 
 
+# Job kinds each roof-support mode can plan for. Painted enforcers need parts that keep their
+# model orientation and plates without prime towers; auto mode plans towers per plate.
+ROOF_SUPPORT_JOB_KINDS = {
+    "painted": ("part", "layout"),
+    "auto": ("part", "layout", "catalogue"),
+}
+_JOB_KIND_PLURALS = {"catalogue": "catalogues", "extras": "extras"}
+
+
+def check_roof_job_kind(kind: str, mode: str) -> None:
+    """Reject a job kind the selected roof-support mode can't plan; shared by CLI and export."""
+    allowed = ROOF_SUPPORT_JOB_KINDS[mode]
+    if kind in allowed:
+        return
+    subject = "roof supports require" if mode == "painted" else f"{mode} roof support requires"
+    kinds = f"{', '.join(allowed[:-1])} or {allowed[-1]}"
+    unsupported = [plural for name, plural in _JOB_KIND_PLURALS.items() if name not in allowed]
+    raise ValueError(f"{subject} a {kinds} job; {' and '.join(unsupported)} are not supported")
+
+
 def validate_roof_job(job: Job, settings: RoofSupportSettings, layer_height: float) -> None:
-    allowed = ("part", "layout", "catalogue") if settings.mode == "auto" else ("part", "layout")
-    if job.kind not in allowed:
-        raise ValueError(
-            "roof supports require a part or layout job; catalogues and extras are not supported"
-            if settings.mode == "painted"
-            else "auto roof support requires a part, layout or catalogue job; extras are not supported"
-        )
+    check_roof_job_kind(job.kind, settings.mode)
     found_female = False
     for design in job.designs:
         interface = _design_interface(design)
