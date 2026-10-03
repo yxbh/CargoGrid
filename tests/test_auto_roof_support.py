@@ -266,13 +266,14 @@ def test_tower_positions_need_a_tower_and_valid_plates():
         )
 
 
-def test_auto_mode_allows_catalogues_but_not_extras(designs):
+def test_auto_mode_allows_catalogues_and_extras_but_painted_mode_does_not(designs):
     tile = designs[0]["tile"]
-    validate_roof_job(Job([tile], BUILD, "catalogue"), AUTO, 0.32)
-    with pytest.raises(ValueError, match="extras are not supported"):
-        validate_roof_job(Job([tile], BUILD, "extras"), AUTO, 0.32)
-    with pytest.raises(ValueError, match="catalogues and extras are not supported"):
-        validate_roof_job(Job([tile], BUILD, "catalogue"), RoofSupportSettings(), 0.32)
+    for kind in ("catalogue", "extras"):
+        validate_roof_job(Job([tile], BUILD, kind), AUTO, 0.32)
+        with pytest.raises(ValueError, match="catalogues and extras are not supported"):
+            validate_roof_job(Job([tile], BUILD, kind), RoofSupportSettings(), 0.32)
+    with pytest.raises(ValueError, match="part, layout, catalogue or extras"):
+        validate_roof_job(Job([tile], BUILD, "stack-review"), AUTO, 0.32)
 
 
 @pytest.mark.parametrize(
@@ -287,7 +288,10 @@ def test_auto_mode_allows_catalogues_but_not_extras(designs):
             "--roof-coverage applies to painted",
         ),
         (["catalogue", "--h2d-dual-safe", *TWO_MATERIALS], "requires one official"),
-        (["extras", "zeekr-7x", "--h2d-dual-safe", *TWO_MATERIALS], "extras are not supported"),
+        (
+            ["extras", "zeekr-7x", "--h2d-dual-safe", "--material", H2D_PETG, "PETG", "#637b70"],
+            "two official",
+        ),
     ],
 )
 def test_cli_rejects_unsupported_auto_combinations(command, message, tmp_path, capsys):

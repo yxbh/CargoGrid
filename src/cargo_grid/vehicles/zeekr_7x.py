@@ -82,8 +82,13 @@ def extras_job(
     placement_build: BuildVolume | None = None,
     edge_gap: float = 2,
     contour_gap: float = CONTOUR_GAP_MM,
+    auto_roof_support: bool = False,
 ) -> Job:
-    """Build the whole expansion set: 40 mm straight edges plus rear-panel contour pieces."""
+    """Build the whole expansion set: 40 mm straight edges plus rear-panel contour pieces.
+
+    ``auto_roof_support`` reserves a prime tower on every plate with a piece that gets
+    object-scoped Auto support (female edges and the female east caps).
+    """
     if interface.joint_style != "original":
         raise ValueError("Zeekr 7X extras require original roofed tile-edge joints")
     if replace(interface, solid_bottom_mm=0.0) != Interface():
@@ -133,7 +138,12 @@ def extras_job(
     female = [design for design in edges if design.parameters["family"] == "edge-y"]
 
     def plan(groups: list[PlateGroup]) -> PlatePlan:
-        result = plan_plates(groups, envelope, size=lambda design: sizes[id(design)])
+        result = plan_plates(
+            groups,
+            envelope,
+            size=lambda design: sizes[id(design)],
+            auto_roof_support=auto_roof_support,
+        )
         if result.unfit:
             raise ValueError(f"{result.unfit[0].name} does not fit its plate area")
         return result
@@ -161,12 +171,19 @@ def extras_job(
         print_placements=plates.placements,
         plate_names=plates.plate_names,
         plate_builds=plates.plate_builds,
+        prime_tower=plates.prime_tower,
+        prime_tower_positions=plates.prime_tower_positions,
         placement_policy={
             "collection": "zeekr-7x",
             "minimum_model_gap_mm": job_gap,
             "plate_group_minimum_model_gap_mm": plates.group_gaps,
             "grouped_by_family": True,
             "grouped_by_connector_sex": grouped,
+            **(
+                {"auto_roof_support": plates.auto_roof_support}
+                if plates.auto_roof_support is not None
+                else {}
+            ),
             "outward_body_width_mm": OUTWARD_MM,
             "outline_parameters_mm": {
                 "pen_offset": parameters.pen_offset_mm,

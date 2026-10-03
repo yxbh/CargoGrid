@@ -264,7 +264,7 @@ def effective_object_settings(design: Design, settings: RoofSupportSettings | No
 # model orientation and plates without prime towers; auto mode plans towers per plate.
 ROOF_SUPPORT_JOB_KINDS = {
     "painted": ("part", "layout"),
-    "auto": ("part", "layout", "catalogue"),
+    "auto": ("part", "layout", "catalogue", "extras"),
 }
 _JOB_KIND_PLURALS = {"catalogue": "catalogues", "extras": "extras"}
 
@@ -276,8 +276,14 @@ def check_roof_job_kind(kind: str, mode: str) -> None:
         return
     subject = "roof supports require" if mode == "painted" else f"{mode} roof support requires"
     kinds = f"{', '.join(allowed[:-1])} or {allowed[-1]}"
-    unsupported = [plural for name, plural in _JOB_KIND_PLURALS.items() if name not in allowed]
-    raise ValueError(f"{subject} a {kinds} job; {' and '.join(unsupported)} are not supported")
+    unsupported = [name for name in _JOB_KIND_PLURALS if name not in allowed]
+    plurals = " and ".join(_JOB_KIND_PLURALS[name] for name in unsupported)
+    message = f"{subject} a {kinds} job"
+    if unsupported:
+        message += f"; {plurals} are not supported"
+        if mode != "auto" and set(unsupported) <= set(ROOF_SUPPORT_JOB_KINDS["auto"]):
+            message += f"; use auto mode (--roof-support-mode auto) for {plurals}"
+    raise ValueError(message)
 
 
 def validate_roof_job(job: Job, settings: RoofSupportSettings, layer_height: float) -> None:

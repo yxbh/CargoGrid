@@ -526,7 +526,7 @@ def parser() -> argparse.ArgumentParser:
             help=(
                 "painted (default): non-printing support enforcers under each female roof, part/layout only; "
                 "auto: object-scoped normal Auto support on parts with female roofs or existing "
-                "object support, also for catalogues, with a reserved prime tower on H2D plates"
+                "object support, also for catalogues and extras, with a reserved prime tower"
             ),
         )
         p.add_argument(
@@ -918,6 +918,7 @@ def main(argv: list[str] | None = None) -> int:
                     contour_gap=(
                         zeekr_7x.CONTOUR_GAP_MM if requested_gap is None else requested_gap
                     ),
+                    auto_roof_support=bool(roof_support and roof_support.mode == "auto"),
                 )
                 if args.h2d_dual_safe:
                     job.placement_policy.update(

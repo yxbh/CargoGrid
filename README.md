@@ -115,7 +115,7 @@ Open `outputs/full-catalogue/job.3mf` as a project. Every part sits inside the a
 
 The 306x306 mm 5x5 tile is left out because it is wider than the 300 mm area both nozzles reach; the manifest lists it as omitted. To print one, make it with `part --width-cells 5 --depth-cells 5` and choose the nozzle yourself in Bambu Studio.
 
-The project names the H2D 0.8 nozzle, 0.32 mm Balanced Strength process, Textured PEI plate and Bambu PETG Basic profile. Check those profiles and your loaded filament before slicing. To add supports with a PLA interface under the joint roofs, see [auto roof support](#auto-roof-support-for-catalogues).
+The project names the H2D 0.8 nozzle, 0.32 mm Balanced Strength process, Textured PEI plate and Bambu PETG Basic profile. Check those profiles and your loaded filament before slicing. To add supports with a PLA interface under the joint roofs, see [auto roof support](#auto-roof-support-for-catalogues-and-extras).
 
 ## Make the Zeekr 7X expansion set
 
@@ -131,13 +131,15 @@ The set needs the standard 60 mm unit, 13 mm thickness, original joints, zero fi
 
 Add `--solid-bottom-thickness-mm` to give every piece in the set a [solid bottom](#close-the-underside), and print the matching tiles and north edges with the same value. The outline doesn't change, but every piece is thicker and sits that much higher than in the test fit, so recheck clearance under the lift-out panel. The manifest records the thickness, and the contour piece names end in `_solid-bottom-<T>mm`.
 
+Add `--roof-support --roof-support-mode auto` and a second material to get [auto roof support](#auto-roof-support-for-catalogues-and-extras) under the female joint roofs. On the H2D that means the PETG Basic and PLA Basic profiles used in that section's example. Support is switched on for the female 40 mm edges and the female east caps; male edges, west caps and south ramps print without it. The female-edge and side-cap plates get a prime tower and wider part spacing; on the H2D the set still needs five plates. Support can fill the round holes next to the female roofs while printing; remove it from the underside before assembly. The PLA interface on these pieces hasn't been tested on a real print.
+
 The 3MF is an unsliced project. Open it as a project, then slice and inspect every plate you plan to print.
 
 ### 40 mm straight edges
 
 There is one male and one female edge of each 1, 2, 3, 4 and 5-cell length (60 through 300 mm). Male strips (`edge-x`) join a tile's female south or west edge; female strips (`edge-y`) join its male north or east edge. The body extends 40 mm outward from the tile edge; male tabs add another 6 mm toward the tile, making the male part's overall cross-edge size 46 mm. Female parts measure 40 mm across. These generic strips are not a measured vehicle outline, and there are no matching 40 mm corners.
 
-The strips carry the other half of the tiles' 10 mm edge holes. At an open strip end the last quarter of the corner hole stays open, because there are no 40 mm corners to finish it. The strips need original roofed joints. The set has no roof support, so check the female joint roofs in your slicer, and test fit and flatness before making a full set. The normal `catalogue` command doesn't include 40 mm edges.
+The strips carry the other half of the tiles' 10 mm edge holes. At an open strip end the last quarter of the corner hole stays open, because there are no 40 mm corners to finish it. The strips need original roofed joints. Without auto roof support (below), the set has no support, so check the female joint roofs in your slicer, and test fit and flatness before making a full set. The normal `catalogue` command doesn't include 40 mm edges.
 
 ### Rear lift-out-panel contour pieces
 
@@ -261,9 +263,9 @@ Before printing:
 4. On a full-hole 2x1 tile, support fills the three round edge holes at (0,30), (30,0) and (90,0) while printing. Female edges and corners with edge holes do the same at the centre of each female joint, and the manifest lists those holes. Remove the support through the open underside and the female edge afterwards.
 5. Recheck support, brim, tower and warnings whenever the profile or material changes.
 
-### Auto roof support for catalogues
+### Auto roof support for catalogues and extras
 
-`--roof-support-mode auto` lets the slicer find the supports instead of painting them. It works with `part`, `layout` and `catalogue`, including `--h2d-dual-safe`:
+`--roof-support-mode auto` lets the slicer find the supports instead of painting them. It works with `part`, `layout`, `catalogue` and `extras`, including `--h2d-dual-safe`:
 
 ```sh
 uv run cargo-grid catalogue --h2d-dual-safe --build-width-mm 350 --build-depth-mm 320 --build-height-mm 325 --solid-bottom-thickness-mm 1.92 --bambu --material "Bambu PETG Basic @BBL H2D 0.8 nozzle" PETG "#637b70" --material "Bambu PLA Basic @BBL H2D 0.8 nozzle" PLA "#dddddd" --nozzle-diameter-mm 0.8 --layer-height-mm 0.32 --roof-support --roof-support-mode auto --no-stl --output outputs/auto-support-catalogue
@@ -308,7 +310,7 @@ Older option names such as `--cells`, `--pitch` and `--quantity` are rejected wi
 
 See `--help` for build reservations and excluded areas, stacking and more roof-support settings.
 
-Roof support in either mode can't be used with `extras`, stacking or `--joint-style full-height`. The default painted mode also only works with `part` and `layout`, and not with parts that Bambu turns over for printing (plates, brackets, stops, angled stops and rods). Auto mode works with catalogues and with those parts.
+Roof support in either mode can't be used with stacking or `--joint-style full-height`. The default painted mode only works with `part` and `layout`, and not with parts that Bambu turns over for printing (plates, brackets, stops, angled stops and rods). Auto mode also works with `catalogue`, `extras` and those parts.
 
 ## Compatibility notes
 
