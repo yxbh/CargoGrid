@@ -154,6 +154,7 @@ def designs():
         "lock-45": accessory_design(Accessory("lock-45")),
         "brace": accessory_design(RodBrace(60)),
         "support rail": accessory_design(Accessory("support", nx=1)),
+        "rail end": accessory_design(Accessory("support-end", variant=1)),
     }
     return female, existing, plain
 
@@ -279,6 +280,16 @@ def test_auto_mode_allows_catalogues_and_extras_but_painted_mode_does_not(design
             validate_roof_job(Job([tile], BUILD, kind), RoofSupportSettings(), 0.32)
     with pytest.raises(ValueError, match="part, layout, catalogue or extras"):
         validate_roof_job(Job([tile], BUILD, "stack-review"), AUTO, 0.32)
+
+
+def test_auto_part_job_turns_rail_ends_over_without_support(designs):
+    tile, rail_end = designs[0]["tile"], designs[2]["rail end"]
+    assert rail_end.apply_orientation_to_bambu and rail_end.recommended_print_rotation_x == 180
+    validate_roof_job(Job([tile, rail_end], BUILD, "part"), AUTO, 0.32)
+    assert effective_object_settings(tile, AUTO) == OBJECT_AUTO_SUPPORT
+    assert effective_object_settings(rail_end, AUTO) == {}
+    with pytest.raises(ValueError, match="no retained original female pocket roofs"):
+        validate_roof_job(Job([rail_end], BUILD, "part"), AUTO, 0.32)
 
 
 @pytest.mark.parametrize(
