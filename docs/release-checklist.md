@@ -11,7 +11,7 @@ Use this before cutting a release. These checks cover the source and packages. T
 
 ## Run the portable checks
 
-The documented workstation uses 12 process workers for the full portable suite. Use fewer on a smaller machine:
+On a 12-core workstation, run the full portable suite with 12 workers:
 
 ```sh
 uv run ruff check .
@@ -36,7 +36,7 @@ The Linux job installs the CAD runtime libraries, runs Ruff, runs the portable t
 
 The portable test command includes pytest's built-in `--durations=0 --durations-min=0` report. It lists every test's setup, call and teardown durations, slowest first, without adding a timing plugin. Add the same flags to a local run when investigating slow tests. These are per-phase elapsed times: phases on parallel workers can overlap, so their sum is not the CI job's wall time. The same run writes a JUnit report, and `tools/check_test_durations.py` fails the job if any portable test takes longer than its per-test budget, unless the test is in the checker's reviewed allowlist with its own limit. It warns, without failing, when the pytest session runs past its target, because hosted runners differ in speed from run to run. `tests/README.md` describes how to keep new tests inside the budget.
 
-The slow tier holds exhaustive parameter sweeps and review-package exports. Portable CI keeps at least one case for each connector sex, joint style, family variant and recorded pose, plus the largest size; the slow tier adds interior sizes, repeated poses and full exports. It runs with `--dist loadgroup`, which hands out one test at a time, so its few multi-minute tests start on separate workers.
+The slow tier holds exhaustive parameter sweeps and review-package exports. Portable CI keeps at least one case for each male/female joint, joint style, family variant and recorded pose, plus the largest size; the slow tier adds interior sizes, repeated poses and full exports. It runs with `--dist loadgroup`, which hands out one test at a time, so its few multi-minute tests start on separate workers.
 
 Keep option propagation, design metadata, family geometry and whole-catalogue packing as separate test responsibilities. CLI option tests capture the resolved spec at the construction boundary; each distinct physical hole configuration also goes through real CLI export. Metadata-only accessory tests use a small real solid at `make_accessory`, while family geometry tests still construct the actual bodies. Neither parser results nor manifest hole counts prove that a bore was cut.
 
@@ -66,7 +66,7 @@ If a separate CAD workbench is needed, use its documented interpreter and launch
 
 - Keep original roofed joints and experimental open-through tile-edge joints clearly separated.
 - Confirm the default full 10 mm hole pattern or a `--no-holes` opt-out; roof support remains opt-in.
-- Confirm roof support appears only under retained female pocket roofs (tile west/south edges and female edges, corners and ramps), and that male-only pieces get none.
+- Confirm roof support appears only under female pocket roofs (tile west/south edges and female edges, corners and ramps), and that male-only pieces get none.
 - Recheck support, brim and tower paths after profile changes.
 - Record printer, nozzle, layer height, materials, fit, roof finish, support removal and flatness for any physical trial.
 
@@ -76,6 +76,6 @@ One print doesn't establish fit or strength for every profile, material, climate
 
 After the release commit has been reviewed, create the release input from tracked files at that revision, for example with `git archive`. Do not zip the working directory.
 
-Exclude local locks, environments, caches, reference meshes, system profiles, G-code, study output and runtime diagnostics. The maintained documentation images are the exception: seven overview images, 105 accessory thumbnails and their provenance manifest. The source archive contains exactly 112 PNGs; the runtime wheel contains none. A partial image update keeps the source and tool revisions for retained images and records separate provenance for regenerated images.
+Exclude local lock files, environments, caches, reference meshes, system profiles, G-code, study output and runtime diagnostics. The documentation images are the exception: seven overview images, 105 accessory thumbnails and their provenance manifest. The source archive contains exactly 112 PNGs; the runtime wheel contains none. A partial image update keeps the source and tool revisions of the images it doesn't touch and records separate provenance for the new ones.
 
 Run `tools/render_docs.py --check` to confirm image hashes, links and one-to-one inventory coverage. Tagging, uploading packages/models and merging remain separate maintainer actions.
