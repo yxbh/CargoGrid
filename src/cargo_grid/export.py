@@ -180,13 +180,14 @@ def _bambu_project_settings(job: Job, bambu: BambuSettings, plate_count: int = 1
     if bambu.roof_support:
         settings.update(bambu.roof_support.native_settings())
         overrides.update(bambu.roof_support.process_override_keys)
-    if job.prime_tower is not None:
-        tower = job.prime_tower.bambu_settings()
-        default = next(iter(job.prime_tower_positions.values()), None)
+    default = next(iter(job.prime_tower_positions.values()), None)
+    if job.prime_tower is not None and default is not None:
+        # Bambu's default tower is used; only its per-plate position is written.
         positions = [job.prime_tower_positions.get(plate, default) for plate in range(plate_count)]
-        if default is not None:
-            tower["wipe_tower_x"] = [f"{x:g}" for x, _ in positions]
-            tower["wipe_tower_y"] = [f"{y:g}" for _, y in positions]
+        tower = {
+            "wipe_tower_x": [f"{x:g}" for x, _ in positions],
+            "wipe_tower_y": [f"{y:g}" for _, y in positions],
+        }
         settings.update(tower)
         overrides.update(tower)
     settings["different_settings_to_system"] = [
@@ -928,7 +929,13 @@ def _write_3mf(
             if job.prime_tower is None
             else {
                 "prime_tower": {
-                    "settings": job.prime_tower.bambu_settings(),
+                    "tower": "Bambu default (no tower settings written)",
+                    "reserved_reach_from_origin_mm": {
+                        "left": job.prime_tower.left,
+                        "front": job.prime_tower.front,
+                        "right": job.prime_tower.right,
+                        "back": job.prime_tower.back,
+                    },
                     "plates": [
                         {
                             "plate": plate + 1,
@@ -940,7 +947,7 @@ def _write_3mf(
                         }
                         for plate, (x, y) in sorted(job.prime_tower_positions.items())
                     ],
-                    "note": "Width, rotation and rib-wall style are project-wide Bambu settings; each plate sets only the tower origin. Bounds are measured local Bambu Studio envelopes, not a guarantee for other profiles or materials.",
+                    "note": "Each plate sets only the tower origin. The reserved bounds cover the default tower and its automatic brim as sliced locally in Bambu Studio 02.08.02.61, not a guarantee for other profiles or materials.",
                 }
             }
         ),

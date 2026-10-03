@@ -294,6 +294,7 @@ def catalogue_job(
         placement_policy={"auto_roof_support": plan.auto_roof_support},
         prime_tower=plan.prime_tower,
         prime_tower_positions=plan.prime_tower_positions,
+        prime_tower_clearances=plan.prime_tower_clearances,
     )
 
 
@@ -486,6 +487,7 @@ def h2d_dual_safe_catalogue_job(
         projected_footprint_clearances=plan.projected_clearances,
         prime_tower=plan.prime_tower,
         prime_tower_positions=plan.prime_tower_positions,
+        prime_tower_clearances=plan.prime_tower_clearances,
     )
     job.part_gap = packing_gap
     if plan.plate_count > 36:

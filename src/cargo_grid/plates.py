@@ -19,15 +19,15 @@ from cargo_grid.parameters import BuildVolume, Exclusion, positive
 from cargo_grid.roof_support import OBJECT_AUTO_SUPPORT, female_roofs
 
 # Auto roof support prints a PLA interface, so every plate with supported parts needs a prime
-# tower that both H2D nozzles reach (X 25..325). Bambu makes tower width and style project-wide,
-# so one compact 28 mm rectangular tower with a fixed 3 mm brim serves every plate. It starts
-# near the front of a reserved right-hand column (X 284..325, the whole plate depth) and Bambu
-# grows it toward the back; models on those plates stay at X <= 276.5, so support feet keep clear
-# of the purge line. The column fits beside the 246 mm-wide tiles with a 5-cell side, which
-# already span the full common depth.
-H2D_AUTO_SUPPORT_TOWER = PrimeTower(width=28, depth=300)
-H2D_AUTO_SUPPORT_TOWER_ORIGIN = (293.0, 10.0)
-H2D_AUTO_SUPPORT_MODEL_MAX_X = 276.5
+# tower. Bambu's default tower is used as it is; each plate only gets a tower position and a
+# model-free corner around the reserved tower bounds. On the H2D the bounds (X 283..325,
+# Y 1..39.5) stay inside the reach of both nozzles (X 25..325), and models can still reach
+# X 276.5 beside them, which the 246 mm-wide tiles with a 5-cell side need.
+DEFAULT_PRIME_TOWER = PrimeTower()
+H2D_AUTO_SUPPORT_TOWER_ORIGIN = (290.5, 8.0)
+# Models keep this far from the reserved tower bounds: Bambu's automatic support foot grows up
+# to about 5 mm past a supported part.
+AUTO_SUPPORT_TOWER_CLEARANCE_MM = 6.5
 # Bambu's automatic support-foot expansion grows the first support layer up to about 5 mm past
 # the part outline, so plates with supported parts add this to the model clearance and keep
 # parts a further 1 mm from the front and back plate edges.
@@ -42,17 +42,27 @@ def needs_auto_support(design: Design) -> bool:
 
 
 def h2d_auto_support_build() -> BuildVolume:
-    """H2D common reach for plates that carry the right-hand prime tower column."""
+    """H2D common reach for plates with a prime tower in the front-right corner."""
+    common = h2d_common_build()
     return BuildVolume(
-        350,
-        320,
-        320,
+        common.x,
+        common.y,
+        common.z,
         margin=AUTO_SUPPORT_PLATE_MARGIN_MM,
         exclusions=(
-            Exclusion(0, 0, 30, 320),
-            Exclusion(H2D_AUTO_SUPPORT_MODEL_MAX_X, 0, 350 - H2D_AUTO_SUPPORT_MODEL_MAX_X, 320),
+            *common.exclusions,
+            _keep_out(DEFAULT_PRIME_TOWER.footprint(*H2D_AUTO_SUPPORT_TOWER_ORIGIN), common),
         ),
     )
+
+
+def _keep_out(bounds: tuple[float, float, float, float], build: BuildVolume) -> Exclusion:
+    """Model-free rectangle: tower bounds grown by the tower clearance, clipped to the plate."""
+    gap = AUTO_SUPPORT_TOWER_CLEARANCE_MM
+    x0, y0, x1, y1 = bounds
+    left, front = max(0.0, x0 - gap), max(0.0, y0 - gap)
+    right, back = min(build.x, x1 + gap), min(build.y, y1 + gap)
+    return Exclusion(left, front, right - left, back - front)
 
 
 @dataclass(frozen=True)
@@ -78,6 +88,7 @@ class PlatePlan:
     projected_packing: dict[str | None, dict] = field(default_factory=dict)
     prime_tower: PrimeTower | None = None
     prime_tower_positions: dict[int, tuple[float, float]] = field(default_factory=dict)
+    prime_tower_clearances: dict[int, float] = field(default_factory=dict)
     auto_roof_support: dict | None = None
 
     @property
@@ -85,70 +96,16 @@ class PlatePlan:
         return max((placement.plate for placement in self.placements), default=-1) + 1
 
 
-class _TowerLayout:
-    tower: PrimeTower
-    origin: tuple[float, float]
+class _TowerCorner:
+    """Bambu's default tower in one front corner, with models kept clear of its bounds."""
 
-    def supported_build(self, gap: float) -> BuildVolume:
-        raise NotImplementedError
+    tower = DEFAULT_PRIME_TOWER
 
-    def record(self, plates: list[int], groups: list[str | None], gaps: list[float]) -> dict:
-        raise NotImplementedError
+    def __init__(self, build: BuildVolume, origin: tuple[float, float], reason: str) -> None:
+        self.build, self.origin, self.reason = build, origin, reason
+        self.bounds = self.tower.footprint(*origin)
 
-
-class _H2DTowerColumn(_TowerLayout):
-    """Fixed tower in a right-hand column that both H2D nozzles reach."""
-
-    tower = H2D_AUTO_SUPPORT_TOWER
-    origin = H2D_AUTO_SUPPORT_TOWER_ORIGIN
-
-    def supported_build(self, gap: float) -> BuildVolume:
-        return h2d_auto_support_build()
-
-    def record(self, plates, groups, gaps) -> dict:
-        return {
-            "prime_tower_plates": [plate + 1 for plate in plates],
-            "prime_tower_groups": groups,
-            "model_max_x_on_tower_plates_mm": H2D_AUTO_SUPPORT_MODEL_MAX_X,
-            "model_gap_on_tower_plates_mm": min(gaps),
-            "reason": (
-                "PLA interface plates need a prime tower both nozzles reach; the "
-                "tower column and its 4 mm clearance are kept free of models"
-            ),
-        }
-
-
-class _LeftTowerColumn(_TowerLayout):
-    """Tower along the left edge of a generic usable area, as deep as that area allows."""
-
-    def __init__(self, build: BuildVolume) -> None:
-        brim = H2D_AUTO_SUPPORT_TOWER.brim
-        usable_depth = build.y - 2 * build.margin - build.reserve_y
-        if usable_depth <= 2 * brim + 1:
-            raise ValueError(
-                "auto roof support needs room for a prime tower at the left of the build"
-            )
-        self.build = build
-        self.tower = PrimeTower(
-            width=H2D_AUTO_SUPPORT_TOWER.width, depth=usable_depth - 2 * brim - 0.5
-        )
-        self.origin = (build.margin + self.tower.purge_lead, build.margin + 2 * brim + 0.5)
-        x0, y0, self.right, y1 = self.tower.footprint(*self.origin)
-        if any(
-            x0 < area.x + area.width
-            and area.x < self.right
-            and y0 < area.y + area.depth
-            and area.y < y1
-            for area in build.exclusions
-        ):
-            raise ValueError(
-                "auto roof support needs room for a prime tower at the left of the build"
-            )
-
-    def strip(self, gap: float) -> float:
-        return min(self.build.x, self.right + gap)
-
-    def supported_build(self, gap: float) -> BuildVolume:
+    def supported_build(self) -> BuildVolume:
         build = self.build
         return BuildVolume(
             build.x,
@@ -158,42 +115,92 @@ class _LeftTowerColumn(_TowerLayout):
             reserve_x=build.reserve_x,
             reserve_y=build.reserve_y,
             reserve_z=build.reserve_z,
-            exclusions=(*build.exclusions, Exclusion(0, 0, self.strip(gap), build.y)),
+            exclusions=(*build.exclusions, _keep_out(self.bounds, build)),
         )
 
-    def record(self, plates, groups, gaps) -> dict:
+    def record(self, plates: list[int], groups: list[str | None], gaps: list[float]) -> dict:
         titled = [group for group in groups if group is not None]
         return {
             "prime_tower_plates": [plate + 1 for plate in plates],
             **({"prime_tower_groups": titled} if titled else {}),
-            "model_min_x_mm": self.strip(min(gaps)),
-            "model_gap_mm": min(gaps),
-            "reason": (
-                "PLA interface plates need a prime tower; it sits at the left of the usable "
-                "area, so check that every nozzle of your printer reaches it"
-            ),
+            "prime_tower_origin_mm": self.origin,
+            "reserved_tower_bounds_mm": self.bounds,
+            "model_clearance_to_tower_bounds_mm": AUTO_SUPPORT_TOWER_CLEARANCE_MM,
+            "model_gap_on_tower_plates_mm": min(gaps),
+            "reason": self.reason,
         }
 
 
-def _tower_layout(build: BuildVolume) -> _TowerLayout:
-    return _H2DTowerColumn() if build == h2d_common_build() else _LeftTowerColumn(build)
+class _H2DTowerCorner(_TowerCorner):
+    def __init__(self) -> None:
+        common = h2d_common_build()
+        super().__init__(
+            BuildVolume(
+                common.x,
+                common.y,
+                common.z,
+                margin=AUTO_SUPPORT_PLATE_MARGIN_MM,
+                exclusions=common.exclusions,
+            ),
+            H2D_AUTO_SUPPORT_TOWER_ORIGIN,
+            "PLA interface plates need a prime tower both nozzles reach; Bambu's default tower "
+            "goes in the front-right corner and models keep clear of its reserved bounds",
+        )
+
+    def supported_build(self) -> BuildVolume:
+        return h2d_auto_support_build()
 
 
-def _projected_bounds(build: BuildVolume) -> tuple[float, float, float, float]:
-    """Model area for outline nesting; only full-depth side exclusions are supported."""
+class _FrontLeftTowerCorner(_TowerCorner):
+    """Generic builds: the tower sits in the front-left corner of the usable area."""
+
+    def __init__(self, build: BuildVolume) -> None:
+        super().__init__(
+            build,
+            (build.margin + self.tower.left, build.margin + self.tower.front),
+            "PLA interface plates need a prime tower; Bambu's default tower goes in the "
+            "front-left corner of the usable area, so check that every nozzle reaches it",
+        )
+        x0, y0, x1, y1 = self.bounds
+        usable_x = build.x - build.margin - build.reserve_x
+        usable_y = build.y - build.margin - build.reserve_y
+        if (
+            x1 > usable_x
+            or y1 > usable_y
+            or any(
+                x0 < area.x + area.width
+                and area.x < x1
+                and y0 < area.y + area.depth
+                and area.y < y1
+                for area in build.exclusions
+            )
+        ):
+            raise ValueError(
+                "auto roof support needs room for a prime tower at the front left of the build"
+            )
+
+
+def _tower_layout(build: BuildVolume) -> _TowerCorner:
+    return _H2DTowerCorner() if build == h2d_common_build() else _FrontLeftTowerCorner(build)
+
+
+def _projected_bounds(
+    build: BuildVolume,
+) -> tuple[tuple[float, float, float, float], tuple[tuple[float, float, float, float], ...]]:
+    """Model area for outline nesting plus any partial-depth exclusions as obstacles."""
     x0, y0 = build.margin, build.margin
     x1 = build.x - build.margin - build.reserve_x
     y1 = build.y - build.margin - build.reserve_y
+    obstacles = []
     for area in build.exclusions:
-        if area.y > 0 or area.y + area.depth < build.y:
-            raise ValueError("projected-footprint packing needs full-depth side exclusions")
-        if area.x <= 0:
+        full_depth = area.y <= 0 and area.y + area.depth >= build.y
+        if full_depth and area.x <= 0:
             x0 = max(x0, area.x + area.width)
-        elif area.x + area.width >= build.x:
+        elif full_depth and area.x + area.width >= build.x:
             x1 = min(x1, area.x)
         else:
-            raise ValueError("projected-footprint packing needs full-depth side exclusions")
-    return x0, y0, x1, y1
+            obstacles.append((area.x, area.y, area.x + area.width, area.y + area.depth))
+    return (x0, y0, x1, y1), tuple(obstacles)
 
 
 def plan_plates(
@@ -218,7 +225,7 @@ def plan_plates(
         positive("plate group gap", group.gap, zero=True)
         towered = tower is not None and any(needs_auto_support(d) for d in group.designs)
         gap = group.gap + AUTO_SUPPORT_FOOT_ALLOWANCE_MM if towered else group.gap
-        group_build = tower.supported_build(gap) if towered else build
+        group_build = tower.supported_build() if towered else build
         plan.group_gaps[group.title] = gap
         members = []
         for design in group.designs:
@@ -241,12 +248,14 @@ def plan_plates(
                 vertices, faces, _ = checked_mesh(design.bambu_shape)
                 candidate_footprints.append(projected_mesh_footprint(vertices, faces))
             search_gap = max(gap - H2D_FOOTPRINT_SEARCH_ALLOWANCE_MM, gap / 2)
+            bounds, obstacles = _projected_bounds(group_build)
             try:
                 packed = pack_projected_footprints(
                     candidate_footprints,
-                    _projected_bounds(group_build),
+                    bounds,
                     gap=gap,
                     search_gap=search_gap,
+                    obstacles=obstacles,
                 )
             except ValueError as error:
                 plan.projected_packing[group.title] = {
@@ -282,6 +291,7 @@ def plan_plates(
             plate = placement.plate + offset
             if towered and needs_auto_support(design):
                 plan.prime_tower_positions[plate] = tower.origin
+                plan.prime_tower_clearances[plate] = AUTO_SUPPORT_TOWER_CLEARANCE_MM
                 towered_plates.add(plate)
             plan.designs.append(design)
             plan.placements.append(

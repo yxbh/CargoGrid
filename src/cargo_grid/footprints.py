@@ -168,6 +168,24 @@ def _rasterize(
     return _Raster(mask, ix0, iy0, width, depth, rotation)
 
 
+def _blocked(
+    obstacles: tuple[tuple[float, float, float, float], ...],
+    x: float,
+    y: float,
+    width: float,
+    depth: float,
+    tolerance: float,
+) -> bool:
+    """Whether a placed bounding box overlaps any obstacle rectangle (local coordinates)."""
+    return any(
+        x < x1 - tolerance
+        and x0 < x + width - tolerance
+        and y < y1 - tolerance
+        and y0 < y + depth - tolerance
+        for x0, y0, x1, y1 in obstacles
+    )
+
+
 def _placement_geometries(
     footprints: list[ProjectedFootprint],
     placements: dict[int, tuple[float, float, int]],
@@ -204,6 +222,7 @@ def _refine_clearance(
     grid: float,
     tolerance: float,
     max_refinements: int,
+    obstacles: tuple[tuple[float, float, float, float], ...] = (),
 ) -> dict[int, tuple[float, float, int]]:
     for _ in range(max_refinements + 1):
         geometries = _placement_geometries(footprints, placements)
@@ -227,6 +246,14 @@ def _refine_clearance(
                     or minimum_y < -tolerance
                     or maximum_x > width + tolerance
                     or maximum_y > depth + tolerance
+                    or _blocked(
+                        obstacles,
+                        minimum_x,
+                        minimum_y,
+                        maximum_x - minimum_x,
+                        maximum_y - minimum_y,
+                        tolerance,
+                    )
                 ):
                     continue
                 key, moved_minimum = _clearance_key(
@@ -289,6 +316,7 @@ def _pack_order(
     mesh_error: float,
     tolerance: float,
     max_candidate_positions: int,
+    obstacles: tuple[tuple[float, float, float, float], ...] = (),
 ) -> dict[int, tuple[float, float, int]] | None:
     protection_cells = ceil((search_gap / 2 + mesh_error + grid) / grid)
     global_minimum = -protection_cells
@@ -323,7 +351,13 @@ def _pack_order(
                     continue
                 for x in range(max_x + 1):
                     left = x + raster.minimum_x - global_minimum
-                    if 0 <= left < collision.shape[1] and collision[top, left] < 0.5:
+                    if (
+                        0 <= left < collision.shape[1]
+                        and collision[top, left] < 0.5
+                        and not _blocked(
+                            obstacles, x * grid, y * grid, raster.width, raster.depth, tolerance
+                        )
+                    ):
                         options.append(
                             (
                                 x * grid + raster.width,
@@ -357,8 +391,13 @@ def pack_projected_footprints(
     max_candidate_positions: int = 4_000_000,
     max_refinements: int = 20,
     max_order_attempts: int = 8,
+    obstacles: tuple[tuple[float, float, float, float], ...] = (),
 ) -> list[PrintPlacement]:
-    """Pack one plate by conservative raster search, then verify exact footprint distance."""
+    """Pack one plate by conservative raster search, then verify exact footprint distance.
+
+    ``obstacles`` are (x0, y0, x1, y1) plate rectangles that no footprint bounding box may
+    overlap, matching how rectangle packing treats build exclusions.
+    """
 
     if not footprints:
         return []
@@ -376,6 +415,10 @@ def pack_projected_footprints(
     width, depth = maximum_x - minimum_x, maximum_y - minimum_y
     positive("projected footprint region width", width)
     positive("projected footprint region depth", depth)
+    local_obstacles = tuple(
+        (x0 - minimum_x, y0 - minimum_y, x1 - minimum_x, y1 - minimum_y)
+        for x0, y0, x1, y1 in obstacles
+    )
     rasters = {
         (index, rotation): _rasterize(
             footprint,
@@ -399,6 +442,7 @@ def pack_projected_footprints(
             mesh_error=mesh_error,
             tolerance=tolerance,
             max_candidate_positions=max_candidate_positions,
+            obstacles=local_obstacles,
         )
         if candidate is None:
             continue
@@ -412,6 +456,7 @@ def pack_projected_footprints(
                 grid=grid,
                 tolerance=tolerance,
                 max_refinements=max_refinements,
+                obstacles=local_obstacles,
             )
         except ValueError:
             continue
@@ -429,4 +474,15 @@ def pack_projected_footprints(
     ]
     if minimum_projected_clearance(footprints, result, plate=0) < gap - tolerance:
         raise ValueError("projected-footprint placement failed final clearance validation")
+    for index, placement in enumerate(result):
+        bounds = placed_footprint(footprints[index], placement).bounds
+        if _blocked(
+            obstacles,
+            bounds[0],
+            bounds[1],
+            bounds[2] - bounds[0],
+            bounds[3] - bounds[1],
+            tolerance,
+        ):
+            raise ValueError("projected-footprint placement overlaps a reserved area")
     return result

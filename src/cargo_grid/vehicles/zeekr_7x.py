@@ -173,6 +173,7 @@ def extras_job(
         plate_builds=plates.plate_builds,
         prime_tower=plates.prime_tower,
         prime_tower_positions=plates.prime_tower_positions,
+        prime_tower_clearances=plates.prime_tower_clearances,
         placement_policy={
             "collection": "zeekr-7x",
             "minimum_model_gap_mm": job_gap,

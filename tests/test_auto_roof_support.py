@@ -21,9 +21,10 @@ from cargo_grid.cli import main
 from cargo_grid.export import BambuSettings, Material, export_job, write_3mf
 from cargo_grid.jobs import Design, Job, tile_design, tile_identity
 from cargo_grid.packing import PrimeTower, PrintPlacement
+from cargo_grid.parameters import Exclusion
 from cargo_grid.plates import (
-    H2D_AUTO_SUPPORT_MODEL_MAX_X,
-    H2D_AUTO_SUPPORT_TOWER,
+    AUTO_SUPPORT_TOWER_CLEARANCE_MM,
+    DEFAULT_PRIME_TOWER,
     H2D_AUTO_SUPPORT_TOWER_ORIGIN,
     needs_auto_support,
 )
@@ -37,6 +38,14 @@ from cargo_grid.roof_support import (
 )
 
 T = 1.92
+# Bambu's default tower is used, so none of these is written.
+TOWER_SETTINGS = (
+    "enable_prime_tower",
+    "prime_tower_width",
+    "prime_tower_brim_width",
+    "prime_tower_rib_wall",
+    "wipe_tower_rotation_angle",
+)
 H2D_PETG = "Bambu PETG Basic @BBL H2D 0.8 nozzle"
 H2D_PLA = "Bambu PLA Basic @BBL H2D 0.8 nozzle"
 MATERIALS = (Material(H2D_PETG, "PETG", "#637b70"), Material(H2D_PLA, "PLA", "#dddddd"))
@@ -172,7 +181,7 @@ def test_object_support_follows_female_roofs_and_existing_object_support(designs
 def test_one_plate_auto_job_writes_object_flags_tower_and_no_enforcers(designs, tmp_path):
     female, existing, plain = designs
     chosen = [female["tile"], plain["edge-x"], plain["plate"], existing["vertical-stop"]]
-    tower = PrimeTower(width=28, depth=100)
+    tower = PrimeTower()
     job = Job(
         chosen,
         BUILD,
@@ -184,7 +193,7 @@ def test_one_plate_auto_job_writes_object_flags_tower_and_no_enforcers(designs, 
             PrintPlacement(0, 140, 140, 0),
         ],
         prime_tower=tower,
-        prime_tower_positions={0: (293, 10)},
+        prime_tower_positions={0: (290.5, 8)},
     )
     manifest = json.loads(export_job(job, tmp_path / "job", stl=False, bambu=bambu()).read_text())
     with ZipFile(tmp_path / "job" / "job.3mf") as archive:
@@ -204,18 +213,12 @@ def test_one_plate_auto_job_writes_object_flags_tower_and_no_enforcers(designs, 
     assert flags[plain["plate"].name] == (None, None, ["normal_part"])
     assert project["enable_support"] == "0" and "support_type" not in project
     assert project["support_interface_filament"] == "2"
-    assert project["prime_tower_width"] == "28"
-    assert project["prime_tower_brim_width"] == "3"
-    assert project["prime_tower_rib_wall"] == "0"
-    assert project["wipe_tower_rotation_angle"] == "0"
-    assert project["wipe_tower_x"] == ["293"] and project["wipe_tower_y"] == ["10"]
+    # Bambu's default tower is used: only the per-plate position is written.
+    assert project["wipe_tower_x"] == ["290.5"] and project["wipe_tower_y"] == ["8"]
     overrides = set(project["different_settings_to_system"][0].split(";"))
-    assert {
-        "prime_tower_width",
-        "wipe_tower_x",
-        "wipe_tower_y",
-        "prime_tower_rib_wall",
-    } <= overrides
+    assert {"wipe_tower_x", "wipe_tower_y"} <= overrides
+    for key in TOWER_SETTINGS:
+        assert key not in project and key not in overrides
     export = manifest["export"]
     roof = export["roof_support"]
     assert roof["mode"] == "auto" and roof["global_enable_support"] is False
@@ -228,8 +231,10 @@ def test_one_plate_auto_job_writes_object_flags_tower_and_no_enforcers(designs, 
     ]
     assert set(roof["unsupported_designs"]) == {plain["edge-x"].name, plain["plate"].name}
     (plate,) = export["prime_tower"]["plates"]
-    assert plate["origin_mm"] == [293, 10]
-    assert plate["reserved_extrusion_bounds_mm"] == [284, 3.5, 325, 110]
+    assert plate["origin_mm"] == [290.5, 8]
+    assert plate["reserved_extrusion_bounds_mm"] == [283, 1, 325, 39.5]
+    assert "settings" not in export["prime_tower"]
+    assert export["prime_tower"]["tower"].startswith("Bambu default")
     assert export["plates"][0]["items"][0]["object_settings"] == OBJECT_AUTO_SUPPORT
 
 
@@ -245,7 +250,7 @@ def test_prime_tower_must_stay_on_the_plate_and_clear_of_models(
         BUILD,
         "part",
         print_placements=[PrintPlacement(0, 100, 20, 0)],
-        prime_tower=PrimeTower(width=30, depth=20),
+        prime_tower=PrimeTower(),
         prime_tower_positions={0: position},
     )
     with pytest.raises(ValueError, match=message):
@@ -261,7 +266,7 @@ def test_tower_positions_need_a_tower_and_valid_plates():
             [Design("box", Box(1, 1, 1), {})],
             BUILD,
             "part",
-            prime_tower=PrimeTower(30, 20),
+            prime_tower=PrimeTower(),
             prime_tower_positions={0: (float("nan"), 1)},
         )
 
@@ -350,11 +355,11 @@ def _corner(size):
     return Location(tuple(value / 2 for value in size))
 
 
-def test_h2d_auto_plan_reserves_a_tower_column_on_every_support_plate(stubbed_h2d):
+def test_h2d_auto_plan_reserves_a_tower_corner_on_every_support_plate(stubbed_h2d):
     default = h2d_dual_safe_catalogue_job(solid_bottom_mm=T)
     job = h2d_dual_safe_catalogue_job(solid_bottom_mm=T, auto_roof_support=True)
     assert default.prime_tower is None and default.prime_tower_positions == {}
-    assert job.prime_tower == H2D_AUTO_SUPPORT_TOWER
+    assert job.prime_tower == DEFAULT_PRIME_TOWER
     plates = {}
     for design, placement in zip(job.designs, job.print_placements):
         plates.setdefault(placement.plate, []).append((design, placement))
@@ -364,17 +369,19 @@ def test_h2d_auto_plan_reserves_a_tower_column_on_every_support_plate(stubbed_h2
         if any(stubbed_h2d(design) for design, _ in members)
     }
     assert set(job.prime_tower_positions) == tower_plates
-    x0, y0, x1, y1 = H2D_AUTO_SUPPORT_TOWER.footprint(*H2D_AUTO_SUPPORT_TOWER_ORIGIN)
-    assert (x0, y0, x1, y1) == (284, 3.5, 325, 310)
+    x0, y0, x1, y1 = DEFAULT_PRIME_TOWER.footprint(*H2D_AUTO_SUPPORT_TOWER_ORIGIN)
+    assert (x0, y0, x1, y1) == (283, 1, 325, 39.5)
     assert 25 <= x0 and x1 <= 325
+    clear = AUTO_SUPPORT_TOWER_CLEARANCE_MM
     for plate in tower_plates:
         assert job.prime_tower_positions[plate] == H2D_AUTO_SUPPORT_TOWER_ORIGIN
         for design, placement in plates[plate]:
             size = design.bambu_size
             width, depth = size[:2] if placement.rotation == 0 else size[1::-1]
             assert 6 - 1e-6 <= placement.y and placement.y + depth <= 314 + 1e-6
-            assert placement.x + width <= H2D_AUTO_SUPPORT_MODEL_MAX_X + 1e-6
-            assert placement.x + width + job.part_gap + 4 <= x0 + 1e-6
+            assert placement.x + width <= 320 + 1e-6
+            assert placement.x + width + clear <= x0 + 1e-6 or placement.y >= y1 + clear - 1e-6
+        assert job.prime_tower_clearances[plate] == clear
     # The 5x5 only fits one nozzle's area, so neither H2D plan includes it or maps a nozzle.
     for plan in (default, job):
         assert not any(
@@ -392,10 +399,14 @@ def test_h2d_auto_plan_reserves_a_tower_column_on_every_support_plate(stubbed_h2
     for plate, members in plates.items():
         if plate not in tower_plates:
             assert job.plate_builds[plate].exclusions[-1].x == 320
+        else:
+            assert job.plate_builds[plate].exclusions[-1] == Exclusion(
+                x0 - clear, 0, x1 - x0 + 2 * clear, y1 + clear
+            )
     assert {d.name for d in job.designs} == {d.name for d in default.designs}
 
 
-def test_plain_auto_catalogue_reserves_a_left_tower_column(stubbed_h2d):
+def test_plain_auto_catalogue_reserves_a_front_left_tower_corner(stubbed_h2d):
     build = BuildVolume(350, 320, 325)
     job = catalogue_module.catalogue_job(
         build,
@@ -404,12 +415,14 @@ def test_plain_auto_catalogue_reserves_a_left_tower_column(stubbed_h2d):
         auto_roof_support=True,
         packing_gap=2,
     )
-    assert job.prime_tower is not None and job.prime_tower.width == 28
+    assert job.prime_tower == DEFAULT_PRIME_TOWER
     (origin,) = set(job.prime_tower_positions.values())
     x0, y0, x1, y1 = job.prime_tower.footprint(*origin)
-    assert (x0, y0) == (0, 0) and y1 == pytest.approx(320)
+    assert (x0, y0) == (0, 0)
+    clear = AUTO_SUPPORT_TOWER_CLEARANCE_MM
     for design, placement in zip(job.designs, job.print_placements):
-        assert placement.x >= x1 + 2 + 4 - 1e-6
+        if placement.plate in job.prime_tower_positions:
+            assert placement.x >= x1 + clear - 1e-6 or placement.y >= y1 + clear - 1e-6
     supported_plates = {
         placement.plate
         for design, placement in zip(job.designs, job.print_placements)
@@ -422,7 +435,7 @@ def test_plain_auto_catalogue_reserves_a_left_tower_column(stubbed_h2d):
 @pytest.mark.slow
 def test_real_h2d_auto_plan_with_solid_bottom(tmp_path):
     job = h2d_dual_safe_catalogue_job(solid_bottom_mm=T, auto_roof_support=True)
-    assert max(p.plate for p in job.print_placements) + 1 == 28
+    assert max(p.plate for p in job.print_placements) + 1 == 26
     report = write_3mf(job, tmp_path / "auto.3mf", bambu=bambu())
     roof = report["roof_support"]
     assert len(job.designs) == 129
@@ -440,4 +453,4 @@ def test_real_h2d_auto_plan_with_solid_bottom(tmp_path):
         "vertical-tile-bracket",
         "rod",
     }
-    assert len(report["prime_tower"]["plates"]) == len(job.prime_tower_positions) == 24
+    assert len(report["prime_tower"]["plates"]) == len(job.prime_tower_positions) == 22
