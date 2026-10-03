@@ -3,6 +3,7 @@
 import argparse
 import json
 import sys
+from dataclasses import replace
 from math import floor
 from pathlib import Path
 
@@ -48,6 +49,20 @@ def _positive_mm(value: str) -> float:
         ) from error
     return millimeters
 
+
+def _nonnegative_mm(value: str) -> float:
+    try:
+        millimeters = float(value)
+        positive("dimension", millimeters, zero=True)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(
+            "enter a finite number of millimeters, 0 or greater"
+        ) from error
+    return millimeters
+
+
+H2D_PETG = "Bambu PETG Basic @BBL H2D 0.8 nozzle"
+H2D_PLA = "Bambu PLA Basic @BBL H2D 0.8 nozzle"
 
 LEGACY_OPTION_REPLACEMENTS = {
     "--build": "--build-width-mm MM --build-depth-mm MM --build-height-mm MM",
@@ -169,7 +184,28 @@ def _interface(args) -> Interface:
         args.tile_thickness_mm,
         args.fit_offset_mm,
         args.joint_style,
+        args.solid_bottom_thickness_mm,
     )
+
+
+def _check_solid_bottom(args, interface: Interface) -> None:
+    if not interface.solid_bottom_mm:
+        return
+    if args.command == "part" and args.family in ROD_FAMILIES:
+        raise ValueError(
+            f"a solid bottom applies only to tiles, edge/corner pieces and ramps; "
+            f"{args.family} is unchanged, so omit --solid-bottom-thickness-mm"
+        )
+    if any(
+        value is not None
+        for value in (
+            args.stack_count,
+            args.stack_gap_mm,
+            args.stack_interface_thickness_mm,
+            args.stack_material_slots,
+        )
+    ):
+        raise ValueError("stacking does not support --solid-bottom-thickness-mm yet")
 
 
 def _roof_support(args) -> RoofSupportSettings | None:
@@ -180,6 +216,7 @@ def _roof_support(args) -> RoofSupportSettings | None:
         args.roof_coverage,
         args.roof_nozzle_slots,
         args.roof_foot_expansion_mm,
+        args.roof_support_mode,
     )
     if not args.roof_support and not any(value is not None for value in supplied):
         return None
@@ -189,10 +226,17 @@ def _roof_support(args) -> RoofSupportSettings | None:
         raise ValueError("roof supports require --bambu; core 3MF has no native support semantics")
     if args.joint_style != "original":
         raise ValueError("roof supports require original roofed joints")
-    if args.command in ("catalogue", "extras") or (
-        args.command == "part" and args.family != "tile"
-    ):
-        raise ValueError("roof supports require a tile-only part or layout job")
+    mode = args.roof_support_mode or "painted"
+    if args.command == "extras" or (args.command == "catalogue" and mode == "painted"):
+        raise ValueError(
+            "roof supports require a part or layout job; catalogues and extras are not supported"
+            if mode == "painted"
+            else "auto roof support requires a part, layout or catalogue job; extras are not supported"
+        )
+    if mode == "auto" and args.roof_coverage is not None:
+        raise ValueError(
+            "--roof-coverage applies to painted roof support; auto support covers whole roofs"
+        )
     if any(
         value is not None
         for value in (
@@ -210,6 +254,7 @@ def _roof_support(args) -> RoofSupportSettings | None:
         tuple(args.roof_nozzle_slots) if args.roof_nozzle_slots is not None else None,
         coverage=args.roof_coverage or "critical",
         foot_expansion=args.roof_foot_expansion_mm,
+        mode=mode,
     )
 
 
@@ -224,14 +269,26 @@ def _bambu_settings(args, roof_support: RoofSupportSettings | None) -> BambuSett
                     "--h2d-dual-safe currently requires --nozzle-diameter-mm 0.8 "
                     "and --layer-height-mm 0.32"
                 )
-            if (
+            if roof_support is not None and roof_support.mode == "auto":
+                if (
+                    len(materials) != 2
+                    or [m.kind.upper() for m in materials] != ["PETG", "PLA"]
+                    or materials[0].name != H2D_PETG
+                    or materials[1].name != H2D_PLA
+                ):
+                    raise ValueError(
+                        "--h2d-dual-safe with auto roof support requires two official material "
+                        f'declarations: --material "{H2D_PETG}" PETG "#RRGGBB" '
+                        f'--material "{H2D_PLA}" PLA "#RRGGBB"'
+                    )
+            elif (
                 len(materials) != 1
                 or materials[0].kind.upper() != "PETG"
-                or materials[0].name != "Bambu PETG Basic @BBL H2D 0.8 nozzle"
+                or materials[0].name != H2D_PETG
             ):
                 raise ValueError(
                     "--h2d-dual-safe requires one official material declaration: "
-                    '--material "Bambu PETG Basic @BBL H2D 0.8 nozzle" PETG "#RRGGBB"'
+                    f'--material "{H2D_PETG}" PETG "#RRGGBB"'
                 )
             return BambuSettings(
                 materials,
@@ -275,7 +332,10 @@ def _stack_settings(args, bambu, build: BuildVolume, interface: Interface):
         raise ValueError("stacking is restricted to identical tile quantities")
     positive("stack gap", args.stack_gap_mm)
     stack_count = (
-        floor((build.usable[2] + args.stack_gap_mm + 1e-8) / (interface.height + args.stack_gap_mm))
+        floor(
+            (build.usable[2] + args.stack_gap_mm + 1e-8)
+            / (interface.body_height + args.stack_gap_mm)
+        )
         if args.stack_count == "auto"
         else int(args.stack_count)
     )
@@ -397,6 +457,16 @@ def parser() -> argparse.ArgumentParser:
             metavar="MM",
             help="socket offset in mm; nonzero changes the compatibility preset",
         )
+        p.add_argument(
+            "--solid-bottom-thickness-mm",
+            type=_nonnegative_mm,
+            default=0,
+            metavar="MM",
+            help=(
+                "closed floor added under tiles, edges, corners and ramps so X sockets and round "
+                "holes are blind from the top; 0 leaves them open; a multiple of layer height suits printing"
+            ),
+        )
         holes = p.add_mutually_exclusive_group()
         holes.add_argument(
             "--holes",
@@ -453,7 +523,16 @@ def parser() -> argparse.ArgumentParser:
         p.add_argument(
             "--roof-support",
             action="store_true",
-            help="add PETG/PLA support under retained west/south female roofs",
+            help="add PETG/PLA support under every retained female pocket roof in a part or layout job",
+        )
+        p.add_argument(
+            "--roof-support-mode",
+            choices=("painted", "auto"),
+            help=(
+                "painted (default): non-printing support enforcers under each female roof, part/layout only; "
+                "auto: object-scoped normal Auto support on parts with female roofs or existing "
+                "object support, also for catalogues, with a reserved prime tower on H2D plates"
+            ),
         )
         p.add_argument(
             "--roof-top-gap-mm",
@@ -714,6 +793,7 @@ def main(argv: list[str] | None = None) -> int:
         hole_diameter = _resolved_hole_diameter(args)
         build = _build_volume(args)
         interface = _interface(args)
+        _check_solid_bottom(args, interface)
         roof_support = _roof_support(args)
         bambu = _bambu_settings(args, roof_support)
         stack = _stack_settings(args, bambu, build, interface)
@@ -826,7 +906,7 @@ def main(argv: list[str] | None = None) -> int:
                         "--h2d-dual-safe requires the unmodified H2D build envelope: "
                         "--build-width-mm 350 --build-depth-mm 320 --build-height-mm 325"
                     )
-                if interface != Interface():
+                if replace(interface, solid_bottom_mm=0.0) != Interface():
                     raise ValueError(
                         "--h2d-dual-safe requires original joints, --unit-size-mm 60, "
                         "--tile-thickness-mm 13 and zero fit offset"
@@ -863,6 +943,8 @@ def main(argv: list[str] | None = None) -> int:
                     hole_diameter=hole_diameter,
                     hole_scope=args.hole_scope,
                     packing_gap=packing_gap,
+                    solid_bottom_mm=interface.solid_bottom_mm,
+                    auto_roof_support=bool(roof_support and roof_support.mode == "auto"),
                 )
             else:
                 job = catalogue_job(
@@ -871,6 +953,8 @@ def main(argv: list[str] | None = None) -> int:
                     hole_diameter=hole_diameter,
                     hole_scope=args.hole_scope,
                     orient_for_bambu=bool(bambu),
+                    auto_roof_support=bool(roof_support and roof_support.mode == "auto"),
+                    packing_gap=packing_gap,
                 )
         if not job.print_placements:
             job.part_gap = getattr(args, "packing_gap_mm", 2)
@@ -895,7 +979,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         if job.omitted:
             print(
-                f"WARNING: {len(job.omitted)} oversized accessories omitted; see manifest.",
+                f"WARNING: {len(job.omitted)} oversized designs omitted; see manifest.",
                 file=sys.stderr,
             )
         geometry_warning = interface.compatibility()["geometry_warning"]

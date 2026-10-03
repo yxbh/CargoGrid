@@ -2,7 +2,6 @@
 
 import json
 from collections import defaultdict
-from dataclasses import asdict
 from hashlib import sha256
 from math import hypot
 from types import SimpleNamespace
@@ -23,7 +22,7 @@ from cargo_grid.cli import main
 from cargo_grid.export import BambuSettings, Material, export_job
 from cargo_grid.jobs import Design
 from cargo_grid.packing import h2d_common_build
-from cargo_grid.parameters import BuildVolume, Exclusion, Interface
+from cargo_grid.parameters import BuildVolume, Exclusion, Interface, interface_parameters
 from cargo_grid.rods import Rod, RodBrace
 from cargo_grid.vehicles import zeekr_7x, zeekr_7x_rear_review
 from cargo_grid.vehicles.zeekr_7x import CONTOUR_GAP_MM, extras_job, variants
@@ -98,7 +97,7 @@ def _stand_in_contours(side_sizes=SIDE_CAP_SIZES, ramp_sizes=SOUTH_RAMP_SIZES):
     """Contour pieces with the real names and bounds, without their slow construction."""
 
     def designs(parameters):
-        interface = asdict(parameters.interface)
+        interface = interface_parameters(parameters.interface)
         caps = [
             Design(
                 f"zeekr_rear_{side}_{segment}_cap",
@@ -463,6 +462,42 @@ def test_cli_h2d_extras_routes_shared_printer_settings(
     assert settings["bambu"].printer_settings_id == "Bambu Lab H2D 0.8 nozzle"
 
 
+def test_cli_extras_accept_a_solid_bottom_for_every_piece(
+    tmp_path,
+    monkeypatch,
+    accessory_metadata_shape,
+    contour_stand_ins,
+):
+    captured = []
+    monkeypatch.setattr(cli, "export_job", lambda job, output, **_: captured.append(job) or output)
+    command = [
+        "extras",
+        COLLECTION,
+        *H2D_OPTIONS,
+        "--solid-bottom-thickness-mm",
+        "1.92",
+        "--output",
+        str(tmp_path / "set"),
+    ]
+    assert main(command) == 0
+    (job,) = captured
+    assert len(job.designs) == 19
+    assert {design.parameters["interface"]["solid_bottom_mm"] for design in job.designs} == {1.92}
+    solid_bottom = job.manifest_metadata["solid_bottom"]
+    assert solid_bottom["body_thickness_mm"] == pytest.approx(14.92)
+    assert "recheck clearance under the lift-out panel" in solid_bottom["note"]
+    standard_parts = job.manifest_metadata["assembly"]["standard_parts_printed_separately"]
+    assert {part["solid_bottom_thickness_mm"] for part in standard_parts} == {1.92}
+
+
+def test_extras_without_a_solid_bottom_record_no_solid_bottom(expansion_plan):
+    assert "solid_bottom" not in expansion_plan.manifest_metadata
+    assert expansion_plan.manifest_metadata["assembly"]["standard_parts_printed_separately"] == (
+        STANDARD_PARTS
+    )
+    assert all("solid_bottom_mm" not in d.parameters["interface"] for d in expansion_plan.designs)
+
+
 def test_cli_extras_outside_h2d_keeps_the_ordinary_and_contour_default_gaps(
     tmp_path,
     monkeypatch,
@@ -574,7 +609,7 @@ def test_cli_only_accepts_the_single_expansion_set_route(command, tmp_path, caps
 @pytest.mark.parametrize(
     "options,message",
     [
-        (["--roof-support"], "roof supports require a tile-only"),
+        (["--roof-support"], "catalogues and extras are not supported"),
         (
             [
                 "--stack-count",

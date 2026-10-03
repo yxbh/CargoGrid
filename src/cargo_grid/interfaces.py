@@ -143,13 +143,14 @@ def joining_tool(
     """Wall plus rounded dovetail, solving shared corner blends simultaneously."""
     scale = interface.unit_scale
     blend = interface.tile_join_blend_radius
-    wall = prism(rectangle(-25 * scale, -4 * scale, 50 * scale, 4 * scale), interface.height)
+    top = interface.body_height
+    wall = prism(rectangle(-25 * scale, -4 * scale, 50 * scale, 4 * scale), top)
     shape = wall.fuse(prism(dovetail_face(interface, depth=depth), ledge))
     shape = shape.fillet(
         blend,
         list(shape.edges().filter_by(Axis.Z)) + horizontal_edges(shape, ledge),
     )
-    return shape.fillet(blend, horizontal_edges(shape, interface.height))
+    return shape.fillet(blend, horizontal_edges(shape, top))
 
 
 def tile_join_tool(
@@ -177,9 +178,9 @@ def _tile_join_template(interface: Interface, depth: float, male: bool) -> Part:
     blend = interface.tile_join_blend_radius
     face = face.fillet_2d(blend, face.vertices())
     if not male:
-        return prism(face, interface.height + 2).moved(Location((0, 0, -1)))
-    shape = prism(face, interface.height)
-    return shape.fillet(blend, horizontal_edges(shape, interface.height))
+        return prism(face, interface.body_height + 2).moved(Location((0, 0, -1)))
+    shape = prism(face, interface.body_height)
+    return shape.fillet(blend, horizontal_edges(shape, interface.body_height))
 
 
 def full_height_part(
@@ -241,22 +242,24 @@ def full_height_part(
 
 @lru_cache(maxsize=16)
 def socket_entry_tool(interface: Interface) -> Part:
-    """Preserve the 3 mm entry roundover even where open edge pockets meet it."""
+    """Preserve the 3 mm entry roundover even where open edge pockets meet it.
+
+    Without a solid bottom the socket runs through the underside; with one, the
+    cutter stops on the floor at Z=solid_bottom_mm, keeping the socket depth.
+    """
     profile = x_profile(interface, offset=interface.fit_offset)
     half = interface.pitch / 2 + 5
-    carrier = prism(rectangle(-half, -half, 2 * half, 2 * half), interface.height + 1).moved(
-        Location((0, 0, -1))
+    top = interface.body_height
+    bottom = interface.solid_bottom_mm or -1.0
+    carrier = prism(rectangle(-half, -half, 2 * half, 2 * half), top - bottom).moved(
+        Location((0, 0, bottom))
     )
-    bore = prism(profile, interface.height + 3).moved(Location((0, 0, -2)))
+    bore = prism(profile, top - bottom + 2).moved(Location((0, 0, bottom - 1)))
     material = carrier.cut(bore)
-    rim = profile.outer_wire().moved(Location((0, 0, interface.height)))
+    rim = profile.outer_wire().moved(Location((0, 0, top)))
     material = material.fillet(
         interface.socket_entry_radius,
-        [
-            edge
-            for edge in horizontal_edges(material, interface.height)
-            if rim.distance_to(edge.center()) < 1e-5
-        ],
+        [edge for edge in horizontal_edges(material, top) if rim.distance_to(edge.center()) < 1e-5],
     )
     return Part(carrier.cut(material).solids())
 

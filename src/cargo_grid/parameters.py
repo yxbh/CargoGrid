@@ -1,6 +1,6 @@
 """Resolved millimeter dimensions, independent of printer and slicer profiles."""
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from math import isfinite
 from typing import Literal
 
@@ -26,12 +26,20 @@ class Interface:
     height: float = REFERENCE_TILE_THICKNESS_MM
     fit_offset: float = 0.0
     joint_style: JointStyle = "original"
+    solid_bottom_mm: float = 0.0
 
     def __post_init__(self) -> None:
         if self.joint_style not in ("full-height", "original"):
             raise ValueError("joint_style must be full-height or original")
         positive("pitch", self.pitch)
         positive("height", self.height)
+        positive("solid bottom thickness", self.solid_bottom_mm, zero=True)
+        object.__setattr__(self, "solid_bottom_mm", float(self.solid_bottom_mm))
+        if self.solid_bottom_mm and self.joint_style != "original":
+            raise ValueError(
+                "a solid bottom requires original roofed tile-edge joints; "
+                "full-height joints with a solid bottom are not supported"
+            )
         if self.pitch < 30 or self.height < 6:
             raise ValueError(
                 "unit size >= 30 mm and tile thickness >= 6 mm required by interface envelopes"
@@ -56,12 +64,17 @@ class Interface:
         )
 
     @property
+    def body_height(self) -> float:
+        """Overall body thickness: tile thickness plus any solid bottom below it."""
+        return self.height + self.solid_bottom_mm if self.solid_bottom_mm else self.height
+
+    @property
     def male_height(self) -> float:
-        return self.height if self.joint_style == "full-height" else self.height - 3.0
+        return self.body_height if self.joint_style == "full-height" else self.body_height - 3.0
 
     @property
     def female_opening_height(self) -> float:
-        return self.height if self.joint_style == "full-height" else self.height - 2.8
+        return self.body_height if self.joint_style == "full-height" else self.body_height - 2.8
 
     @property
     def plug_depth(self) -> float:
@@ -84,6 +97,24 @@ class Interface:
         return 3.0
 
     def compatibility(self) -> dict:
+        result = self._base_compatibility()
+        if self.solid_bottom_mm:
+            result["solid_bottom_mm"] = self.solid_bottom_mm
+            result["body_thickness_mm"] = self.body_height
+            result["solid_bottom_note"] = (
+                f"A {self.solid_bottom_mm:g} mm solid bottom closes the underside of X sockets and "
+                "round holes, which are blind from the top with their standard depth. Tile-edge "
+                "joints extend through it, so tile edges mate only with parts using the same "
+                "solid bottom; X attachments and rods keep their standard insertion."
+            )
+            result["geometry_warning"] = (
+                f"Solid-bottom parts are {self.body_height:g} mm thick and their tile edges match "
+                "only other parts with the same solid bottom; printed fit, flatness and dust "
+                "sealing require independent checks."
+            )
+        return result
+
+    def _base_compatibility(self) -> dict:
         return {
             "joint_style": self.joint_style,
             "experimental": self.joint_style == "full-height",
@@ -118,6 +149,14 @@ class Interface:
             ),
             "physical_fit_verified": False,
         }
+
+
+def interface_parameters(interface: Interface) -> dict:
+    """Serialized interface; an absent solid bottom keeps established identities unchanged."""
+    result = asdict(interface)
+    if not interface.solid_bottom_mm:
+        del result["solid_bottom_mm"]
+    return result
 
 
 @dataclass(frozen=True)

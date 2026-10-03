@@ -5,6 +5,53 @@ from dataclasses import dataclass
 from cargo_grid.parameters import BuildVolume, Exclusion, positive
 
 
+@dataclass(frozen=True)
+class PrimeTower:
+    """Rectangular Bambu prime tower (rib wall off, no rotation) and its reserved envelope.
+
+    ``width`` is a project-wide Bambu setting; each plate only chooses the tower origin, the
+    lower-left corner of the tower body. The brim is set explicitly because Bambu's automatic
+    tower brim grows with tower height. Local Bambu Studio slices of PETG/PLA H2D plates show a
+    PLA purge line starting 9 mm left of the origin and a depth that Bambu sizes from the
+    plate's height and purge volume, so ``depth`` reserves room for it to grow toward
+    positive Y. A rotated tower is not offered: Bambu's conflict check treats the
+    tower as unrotated and rejects models beside the actual rotated column.
+    """
+
+    width: float
+    depth: float
+    brim: float = 3.0
+    purge_lead: float = 9.0
+
+    def __post_init__(self) -> None:
+        positive("prime tower width", self.width)
+        positive("prime tower depth", self.depth)
+        positive("prime tower brim", self.brim, zero=True)
+        positive("prime tower purge lead", self.purge_lead, zero=True)
+
+    def footprint(self, x: float, y: float) -> tuple[float, float, float, float]:
+        """Reserved extrusion bounds (x0, y0, x1, y1) for a tower whose origin is (x, y).
+
+        Sliced towers also reached 1 mm past the brim on the right and twice the brim plus
+        0.5 mm below the origin, so the envelope includes those wipe and brim paths.
+        """
+        return (
+            x - self.purge_lead,
+            y - 2 * self.brim - 0.5,
+            x + self.width + self.brim + 1,
+            y + self.depth,
+        )
+
+    def bambu_settings(self) -> dict[str, str]:
+        return {
+            "enable_prime_tower": "1",
+            "prime_tower_rib_wall": "0",
+            "prime_tower_width": f"{self.width:g}",
+            "prime_tower_brim_width": f"{self.brim:g}",
+            "wipe_tower_rotation_angle": "0",
+        }
+
+
 def h2d_common_build() -> BuildVolume:
     """H2D shared nozzle reach with a further 5 mm model inset."""
     return BuildVolume(

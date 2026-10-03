@@ -50,6 +50,18 @@ For a floor that must fill an exact rectangle, use `layout`. Whole cells at the 
 uv run cargo-grid layout --build-width-mm 150 --build-depth-mm 150 --build-height-mm 50 --layout-width-mm 320 --layout-depth-mm 230 --filler-placement balanced --output outputs/exact-floor
 ```
 
+### Close the underside
+
+Add `--solid-bottom-thickness-mm` when you don't want dirt dropping through the mat. It adds a closed floor under the normal tile body, so the X sockets and round holes stop at that floor instead of going right through. This example adds 1.92 mm, six 0.32 mm layers; a whole number of your layer height is a sensible choice:
+
+```sh
+uv run cargo-grid part --build-width-mm 150 --build-depth-mm 150 --build-height-mm 50 --width-cells 2 --depth-cells 1 --solid-bottom-thickness-mm 1.92 --output outputs/solid-bottom
+```
+
+That tile is 14.92 mm thick. Socket and hole depths, plug depth and rod insertion are still measured from the top, so X attachments and rods don't change. The edge joints run down through the floor and their ledges and roofs move up with the top, so a solid-bottom tile only joins tiles, edges, corners and ramps made with the same value. Completed holes in edge and corner pieces get the same floor. The default, 0, leaves everything as it was.
+
+The option works with `part` (tiles, edges, corners and ramps), `layout`, `catalogue`, including `--h2d-dual-safe`, and `extras zeekr-7x`; the catalogue makes its X attachments, rods, braces and support rails as usual. It can't be combined with stacking or `--joint-style full-height`. In the Zeekr set, every 40 mm edge and rear-panel contour piece gets the floor; their outlines don't change, but the contour pieces sit that much higher than the version that was test-fitted, so recheck clearance under the lift-out panel. A vertical tile bracket's top-outward wall placement pushes its posts in from the tile's underside, so use a tile without a solid bottom there; the usual underside-outward placement works with either. How well the floor keeps dust out, and what it does to fit, flatness and strength, hasn't been tested.
+
 ## Browse and generate accessories
 
 At the standard 60/13 settings, the documented 350x320x325 mm build envelope fits 105 accessories: female and male ramps, attachment plates, five vertical tile brackets, eight normal stops, two angled stops, round-hole rods and upper braces, edge/corner pieces and separate support rails/connectors. The catalogue selects one perimeter form for each outward width to match its tiles: 10, 20 and 30 mm edges complete accepted boundary holes when the tile pattern has them. Holeless or interior-only tiles select plain perimeter parts at every width. A different unit size or build envelope can change what fits.
@@ -64,7 +76,7 @@ Generate one accessory with `part`:
 uv run cargo-grid part --family plate --width-cells 1 --depth-cells 1 --build-width-mm 150 --build-depth-mm 150 --build-height-mm 80 --output outputs/x-plate
 ```
 
-For a finishing strip, select its outward body width, excluding the male tabs. A standalone part follows the normal full 10 mm-hole tile pattern unless `--plain-edge` is given. `--complete-edge-holes` makes that choice explicit, and `--hole-diameter-mm` changes the matching tile and perimeter opening together:
+For a finishing strip, select its outward body width, excluding the male tabs. Faces that meet a tile or the next edge or corner piece use the same 1 mm rounds as tiles, so those seams close up like tile-to-tile seams; the outward face keeps a softer 3 mm round. A standalone part follows the normal full 10 mm-hole tile pattern unless `--plain-edge` is given. `--complete-edge-holes` makes that choice explicit, and `--hole-diameter-mm` changes the matching tile and perimeter opening together:
 
 ```sh
 uv run cargo-grid part --family edge-y --length-cells 2 --edge-outward-mm 30 --complete-edge-holes --build-width-mm 150 --build-depth-mm 150 --build-height-mm 50 --output outputs/wide-edge
@@ -86,15 +98,15 @@ The manifest lists anything omitted because it did not fit.
 
 ## Make the full H2D catalogue
 
-This standard-only command creates the documented H2D project: 25 tile sizes with the full 10 mm hole pattern and all 105 accessories. It packs them onto named, family-grouped plates, including `Rods and upper braces`; the manifest records the plate count. It requires 60 mm units, 13 mm thickness and zero fit offset. Perimeter parts are grouped by outward projection and their selected hole mode, while individual object names retain their edge direction, corner variant and connector sex.
+This standard-only command creates the documented H2D project: 24 tile sizes with the full 10 mm hole pattern and all 105 accessories. It packs them onto named, family-grouped plates, including `Rods and upper braces`; the manifest records the plate count. It requires 60 mm units, 13 mm thickness and zero fit offset; `--solid-bottom-thickness-mm` may be added. Perimeter parts are grouped by outward projection and their selected hole mode, while individual object names retain their edge direction, corner variant and connector sex.
 
 ```sh
 uv run cargo-grid catalogue --h2d-dual-safe --build-width-mm 350 --build-depth-mm 320 --build-height-mm 325 --bambu --material "Bambu PETG Basic @BBL H2D 0.8 nozzle" PETG "#637b70" --nozzle-diameter-mm 0.8 --layer-height-mm 0.32 --no-stl --output outputs/full-catalogue
 ```
 
-Open `outputs/full-catalogue/job.3mf` as a project. Common plates keep model bounds inside the H2D shared reach (X=25..325, Y=0..320, Z<=320) and add another 5 mm model inset. The default layout leaves at least 4 mm of XY clearance between actual parts. Fast rectangle-packed plates enforce this conservatively between model bounds; eligible perimeter groups use all-height projected model footprints only when their concave shapes reduce the plate count. The 306x306 mm 5x5 tile needs the wider left-nozzle area, so it gets its own `5x5 TILE - SINGLE NOZZLE ONLY - LEFT` plate and maps slot 1 to the left nozzle. Other plates use automatic `Auto For Match`. This clearance does not account for every possible brim, support or tower path and is not print approval; inspect the sliced project.
+Open `outputs/full-catalogue/job.3mf` as a project. Common plates keep model bounds inside the H2D shared reach (X=25..325, Y=0..320, Z<=320) and add another 5 mm model inset. The default layout leaves at least 4 mm of XY clearance between actual parts. Fast rectangle-packed plates enforce this conservatively between model bounds; eligible perimeter groups use all-height projected model footprints only when their concave shapes reduce the plate count. Every plate uses automatic `Auto For Match`. The 306x306 mm 5x5 tile is left out because it is wider than the 300 mm area both nozzles reach; the manifest lists it as omitted. To print one, make it with `part --width-cells 5 --depth-cells 5` and choose the nozzle yourself in Bambu Studio. This clearance does not account for every possible brim, support or tower path and is not print approval; inspect the sliced project.
 
-The project names the H2D 0.8 nozzle, 0.32 mm Balanced Strength process, Textured PEI plate and Bambu PETG Basic profile. Confirm those profiles and your loaded filament before slicing. The catalogue does not add PLA roof interfaces to tiles; the PETG/PLA roof-support job below remains a separate tile-only workflow.
+The project names the H2D 0.8 nozzle, 0.32 mm Balanced Strength process, Textured PEI plate and Bambu PETG Basic profile. Confirm those profiles and your loaded filament before slicing. The normal catalogue does not add PLA roof interfaces. [Auto roof support](#auto-roof-support-for-catalogues) is an opt-in variant that adds them.
 
 ## Make the Zeekr 7X expansion set
 
@@ -107,6 +119,8 @@ uv run cargo-grid extras zeekr-7x --h2d-dual-safe --build-width-mm 350 --build-d
 The H2D project keeps each family on its own named plates inside the common reach: `Zeekr 7X - Male 40mm edges`, `Zeekr 7X - Female 40mm edges`, `Zeekr 7X - Rear panel contour side caps`, and `Zeekr 7X - Rear panel south contour ramps 1` and `2` (the five ramps need two plates). Edge plates use the shared 4 mm H2D part clearance and contour plates keep 10 mm; `--packing-gap-mm` sets one clearance for every plate. Every plate uses automatic `Auto For Match` filament matching, and the manifest records the plates and placements.
 
 The set needs the standard 60 mm unit, 13 mm thickness, original joints, zero fit offset and full 10 mm hole pattern, because the contour pieces are measured for that tile field. For plain or other-diameter 40 mm strips, make them one at a time with `part --family edge-x --length-cells 4 --edge-outward-mm 40` (or `edge-y` for female) plus `--plain-edge` or `--hole-diameter-mm`. For another build envelope, omit `--h2d-dual-safe` and supply its dimensions: the set keeps every straight-edge length that fits, and stops with an error if a contour piece does not fit.
+
+Add `--solid-bottom-thickness-mm` to give every piece in the set a [solid bottom](#close-the-underside), and print the matching tiles and north edges with the same value. The measured outline stays the same, but every piece is that much thicker and sits that much higher than the version the user test-fitted, so recheck clearance under the lift-out panel before relying on it. The manifest records the thickness, and the contour piece names end in `_solid-bottom-<T>mm`.
 
 The 3MF is an unsliced project. Open it as a project, then slice and inspect every plate you plan to print.
 
@@ -211,7 +225,7 @@ Bambu projects request normal Auto support for female-pocket roofs and leave mal
 
 The receiving side of an original tile joint has a small bridge or ceiling over an open pocket. Cargo-Grid calls that ceiling the **roof**. If you print it without enough bridging performance, it can sag into the joint.
 
-For a two-nozzle PETG tile with a PLA contact interface, Cargo-Grid can add removable support under the west/south roofs:
+For a two-nozzle PETG part with a PLA contact interface, Cargo-Grid can add removable support under every female roof: tile west/south edges, female edge strips, the female sides of corners and female ramps. A `part` or `layout` job may mix these with male-only pieces, which just get no support request; a job with no female roof at all is refused. This tile example has two copies:
 
 ```sh
 uv run cargo-grid part --build-width-mm 350 --build-depth-mm 320 --build-height-mm 325 --build-margin-mm 37 --width-cells 2 --depth-cells 1 --copy-count 2 --bambu --material "Model PETG" PETG "#778877" --material "Interface PLA" PLA "#dddddd" --nozzle-diameter-mm 0.8 --layer-height-mm 0.32 --roof-support --output outputs/roof-job
@@ -235,8 +249,22 @@ Before printing:
 1. Check the printer, bed and PETG/PLA assignments.
 2. Slice and inspect the roof from below. The PLA interface must meet the bottom of the first PETG roof layer.
 3. Check that the protected X openings remain clear.
-4. On a full-hole 2x1 tile, support intentionally occupies the three round edge cutouts at (0,30), (30,0) and (90,0) during printing. Remove it through the open underside/female edge afterward.
+4. On a full-hole 2x1 tile, support intentionally occupies the three round edge cutouts at (0,30), (30,0) and (90,0) during printing. Female edges and corners with completed holes do the same at each female joint centre, and the manifest lists those openings. Remove it through the open underside/female edge afterward.
 5. Recheck support, brim, tower and warnings whenever the profile or material changes.
+
+### Auto roof support for catalogues
+
+`--roof-support-mode auto` lets the slicer find the supports instead of painting them. It works with `part`, `layout` and `catalogue`, including `--h2d-dual-safe`:
+
+```sh
+uv run cargo-grid catalogue --h2d-dual-safe --build-width-mm 350 --build-depth-mm 320 --build-height-mm 325 --solid-bottom-thickness-mm 1.92 --bambu --material "Bambu PETG Basic @BBL H2D 0.8 nozzle" PETG "#637b70" --material "Bambu PLA Basic @BBL H2D 0.8 nozzle" PLA "#dddddd" --nozzle-diameter-mm 0.8 --layer-height-mm 0.32 --roof-support --roof-support-mode auto --no-stl --output outputs/auto-support-catalogue
+```
+
+The project keeps the same PETG/PLA zero-contact settings as above, but leaves global support off. Normal Auto support is switched on for each object that has a female pocket roof (tiles, female edges and corner sides, female ramps) and for the stops, shallow brackets and rods that already ask for it. Everything else, such as male edges, male ramps, plates, angled stops and braces, prints without support. Auto support covers whole overhangs, not the small painted pads, and every support on those objects gets the PLA interface, including the bracket, stop and rod supports that were PETG-only before. That combination hasn't been tested on a real print.
+
+Each plate with supported parts uses PLA, so it gets a 28 mm-wide prime tower near the front of the right-hand side of the plate (X about 284..324). Both H2D nozzles reach it, and the models on that plate stay at X<=276.5. Auto support also spreads its first layer up to about 5 mm past each part, so those plates keep parts 8 mm apart instead of 4 and 6 mm from the front and back edges. The H2D catalogue needs 28 plates this way instead of 25.
+
+As with painted support, support may fill round holes beside the pocket roofs while printing, so remove it from the underside before assembly. Slice every plate and check the tower and support paths before printing.
 
 ## CLI reference
 
@@ -254,6 +282,7 @@ Common options:
 - `--build-width-mm`, `--build-depth-mm`, `--build-height-mm`: available X/Y/Z print space;
 - `--unit-size-mm`: cell size and matching nominal local-plane interface scale, default 60 mm;
 - `--tile-thickness-mm`: independent body thickness and connector insertion depth, default 13 mm;
+- `--solid-bottom-thickness-mm`: closed floor added under tiles, edges, corners and ramps, default 0 (off);
 - `--width-cells`, `--depth-cells`: one tile or two-axis accessory;
 - `--panel-height-cells`: bracket wall rows, separate from floor depth;
 - `--length-cells`: edge strips and support rails;
@@ -281,7 +310,7 @@ This alpha replaced several older option names:
 | `--nozzle`, `--layer-height`, `--hole-diameter` | `--nozzle-diameter-mm`, `--layer-height-mm`, `--hole-diameter-mm` |
 | `--accessory-height`, `--length`, `--variant` | `--stop-height-mm`, `--connector-length-mm`, `--variant-number` |
 
-See `--help` for build reservations/exclusions, stacking and advanced roof-support settings.
+See `--help` for build reservations/exclusions, stacking and advanced roof-support settings. Painted roof support can't be combined with catalogues, extras, stacking, full-height joints, or parts that Bambu turns over for printing (plates, brackets, stops and rods); auto mode also works with catalogues and those parts. Neither mode works with extras, stacking or full-height joints.
 
 ## Compatibility notes
 
@@ -315,13 +344,14 @@ design = tile_design(Tile(nx=2, ny=1))
 export_job(Job([design], BuildVolume(150, 150, 50), "part"), Path("outputs/python-job"))
 ```
 
-For a custom matching tile/X-joint set, pass the same `Interface` to each part. Round rods and braces instead have their own millimetre parameters; changing rod tile thickness adjusts only its insertion depth. The API keeps the stable `pitch` and `height` field names:
+For a custom matching tile/X-joint set, pass the same `Interface` to each part. Round rods and braces instead have their own millimetre parameters; changing rod tile thickness adjusts only its insertion depth. The API keeps the stable `pitch` and `height` field names, and `solid_bottom_mm` adds the optional closed floor:
 
 ```python
 from cargo_grid import Interface, Tile
 
 compact = Interface(pitch=30, height=13)
 solid_tile = Tile(nx=2, ny=1, interface=compact, hole_diameter=None)
+floored_tile = Tile(nx=2, ny=1, interface=Interface(solid_bottom_mm=1.92))
 ```
 
 Accessory example:

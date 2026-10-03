@@ -21,7 +21,7 @@ from cargo_grid.accessories import (
     make_accessory,
 )
 from cargo_grid.catalogue import BRACKET_DISPLAY_NAMES, accessory_variants
-from cargo_grid.parameters import DEFAULT_HOLE_DIAMETER_MM
+from cargo_grid.parameters import DEFAULT_HOLE_DIAMETER_MM, interface_parameters
 from cargo_grid.rods import Rod, RodBrace
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -183,6 +183,7 @@ def inventory() -> list[Item]:
 def gallery_item_parameters(spec: Accessory | Rod | RodBrace) -> dict:
     parameters = asdict(spec)
     if isinstance(spec, Accessory):
+        parameters["interface"] = interface_parameters(spec.interface)
         if spec.ramp_join == "female":
             del parameters["ramp_join"]
         if parameters["edge_outward"] == 10.0:
@@ -909,7 +910,7 @@ def write_gallery(
         "",
         "Outer-corner variants 1 and 2 are the two halves of the northwest mixed-sex corner; variant 3 is the whole northeast female/female L. Variants 4 and 5 are the two halves of the southeast mixed-sex corner; variant 6 is the whole southwest male/male L. Each half joins the tile itself, while the two diagonal faces simply butt together with no extra clip or connector.",
         "",
-        "Original edge/corner bodies and straight rail bodies use R3. Rail ends use smaller rounds where the shape or STEP export needs them. Plates and stops use R2. Ramps have R2 sides/noses and a broad R32 shelf blend, capped to retain 2 mm of flat shelf on thicker custom parts. Brackets use R3 at the thick front-to-slope transition, R2 on other thick edges and R1 around the thin bearing lip. Mating surfaces keep their own geometry.",
+        "Original edge/corner bodies use R3 on their free outward outline and the tile's R1 on faces that meet a tile or a neighbouring edge or corner piece. Straight rail bodies use R3. Rail ends use smaller rounds where the shape or STEP export needs them. Plates and stops use R2. Ramps have R2 sides/noses and a broad R32 shelf blend, capped to retain 2 mm of flat shelf on thicker custom parts. Brackets use R3 at the thick front-to-slope transition, R2 on other thick edges and R1 around the thin bearing lip. Mating surfaces keep their own geometry.",
         "",
         "Before packing, Bambu projects put plates broad-face-down at X=180, original brackets on their diagonal rear face, shallow brackets side-down at Y=-90, normal stops on their broad rear face and angled stops back-down at X=-135. STEP, STL and core 3MF keep source orientation. Female ramps, normal stops and shallow brackets turn on Auto support for that object; male ramps leave it off. Remove support from mating areas before assembly. Physical fit and support removal still need checking on a print.",
         "",

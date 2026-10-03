@@ -135,7 +135,7 @@ def test_invalid_stack_api_is_rejected_before_step_exports(block_job, bambu, tmp
 def test_tile_only_catalogue_still_rejects_roof_support(bambu, tmp_path):
     settings = BambuSettings(bambu.materials, 0.4, 0.2, RoofSupportSettings(0.2, 2, 0))
     job = Job([tile_design(Tile())], BuildVolume(150, 150, 50), "catalogue")
-    with pytest.raises(ValueError, match="tile-only part or layout"):
+    with pytest.raises(ValueError, match="part or layout job; catalogues"):
         export_job(job, tmp_path / "catalogue", bambu=settings)
     assert not (tmp_path / "catalogue").exists()
 

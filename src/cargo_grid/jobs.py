@@ -9,8 +9,8 @@ from build123d import Axis, Part
 
 from cargo_grid.footprints import ProjectedFootprint
 from cargo_grid.layout import Layout
-from cargo_grid.packing import PrintPlacement
-from cargo_grid.parameters import BuildVolume, Tile, count, positive
+from cargo_grid.packing import PrimeTower, PrintPlacement
+from cargo_grid.parameters import BuildVolume, Tile, count, interface_parameters, positive
 from cargo_grid.tiles import hole_placements, make_tile
 
 
@@ -92,6 +92,10 @@ class Job:
     projected_footprint_clearances: dict[int, float] = field(default_factory=dict)
     plate_builds: dict[int, BuildVolume] = field(default_factory=dict)
     manifest_metadata: dict = field(default_factory=dict)
+    prime_tower: PrimeTower | None = None
+    prime_tower_positions: dict[int, tuple[float, float]] = field(default_factory=dict)
+    # Per-plate tower-to-model clearance; plates not listed use the part gap.
+    prime_tower_clearances: dict[int, float] = field(default_factory=dict)
 
     def __post_init__(self):
         if not self.designs:
@@ -110,6 +114,19 @@ class Job:
                 for footprint in self.projected_footprints
             ):
                 raise ValueError("projected footprints must be ProjectedFootprint instances")
+        if self.prime_tower_positions and self.prime_tower is None:
+            raise ValueError("prime tower positions require a prime tower")
+        if self.prime_tower is not None and not isinstance(self.prime_tower, PrimeTower):
+            raise ValueError("prime_tower must be a PrimeTower")
+        if set(self.prime_tower_clearances) - set(self.prime_tower_positions):
+            raise ValueError("prime tower clearances need a prime tower position on that plate")
+        for clearance in self.prime_tower_clearances.values():
+            positive("prime tower clearance", clearance, zero=True)
+        for plate, position in self.prime_tower_positions.items():
+            if isinstance(plate, bool) or not isinstance(plate, int) or plate < 0:
+                raise ValueError("prime tower plates must be nonnegative integers")
+            if len(position) != 2 or not all(isfinite(value) for value in position):
+                raise ValueError("prime tower positions must be finite (x, y) pairs")
         if self.projected_footprint_clearances and self.projected_footprints is None:
             raise ValueError("projected footprint clearances require projected footprints")
         placement_plates = (
@@ -159,6 +176,7 @@ class Job:
 
 def tile_identity(tile: Tile) -> tuple[str, dict]:
     parameters = asdict(tile)
+    parameters["interface"] = interface_parameters(tile.interface)
     token = sha256(json.dumps(parameters, sort_keys=True).encode()).hexdigest()[:10]
     scope = f"_{tile.hole_scope}-holes" if tile.hole_diameter is not None else ""
     name = f"tile_{tile.nx}x{tile.ny}_{tile.interface.joint_style}{scope}_{token}"

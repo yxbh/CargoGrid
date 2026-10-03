@@ -43,7 +43,7 @@ from cargo_grid.accessories import (
 from cargo_grid.interfaces import socket_entry_tool, tile_join_tool, x_profile
 from cargo_grid.jobs import Design, Job, tile_design
 from cargo_grid.packing import h2d_common_build, pack_sizes
-from cargo_grid.parameters import Interface, Tile, positive
+from cargo_grid.parameters import Interface, Tile, interface_parameters, positive
 from cargo_grid.tiles import hole_placements
 
 ORIGINAL_RIGHT_WALL_STATIONS_MM = (
@@ -699,7 +699,7 @@ class RearReviewParameters:
         positive("east edge x", self.east_edge_x_mm)
         if self.traced_north_corner_radius_mm <= self.pen_offset_mm:
             raise ValueError("pen offset must be smaller than traced north corner radius")
-        if self.interface != Interface():
+        if replace(self.interface, solid_bottom_mm=0.0) != Interface():
             raise ValueError("Zeekr rear review requires the standard 60x13 original interface")
         if self.field_x_min_mm != -TEST_FIELD_WIDTH_MM / 2:
             raise ValueError("Zeekr rear review field must remain centred at x=0")
@@ -1012,7 +1012,7 @@ def _ramp_profile_wire(
 ) -> Wire:
     """Rounded filled-ramp section ending at an exact finished run."""
     positive("ramp run", run)
-    height = interface.height
+    height = interface.body_height
     carrier = _ramp_carrier_run_mm(run)
     nose_radius = min(RAMP_FREE_EDGE_RADIUS_MM, max(0.02, run * 0.15))
     flat_shelf = min(RAMP_MINIMUM_FLAT_SHELF_MM, max(0.02, carrier * 0.2))
@@ -1072,7 +1072,9 @@ def _hole_cutter(
     y: float,
     interface: Interface,
 ) -> Solid:
-    return Solid.make_cylinder(5, interface.height + 2).moved(Location((x, y, -1)))
+    # A solid bottom leaves completed openings blind from the top, as on tiles.
+    start = interface.solid_bottom_mm or -1.0
+    return Solid.make_cylinder(5, interface.body_height + 1 - start).moved(Location((x, y, start)))
 
 
 def _south_boundary_hole_centers(
@@ -1195,7 +1197,7 @@ def _south_ramp_shape(
         outside = Solid.make_box(
             width,
             parameters.interface.male_join_depth,
-            parameters.interface.height,
+            parameters.interface.body_height,
         )
         tab = Part(tool.intersect(outside).solids())
         part = part.fuse(tab)
@@ -1493,7 +1495,7 @@ def _side_outboard_edge(side: str, parameters: RearReviewParameters) -> Edge:
                 - TEST_FIELD_WIDTH_MM / 2
             ),
             assembly_y,
-            parameters.interface.height,
+            parameters.interface.body_height,
         )
         for assembly_y in np.linspace(
             parameters.field_assembly_y_min_mm,
@@ -1513,8 +1515,8 @@ def _side_socket_feasibility(
     outboard = _side_outboard_edge(side, parameters)
     split = parameters.assembly_y_mm(parameters.side_split_y_mm)
     seam = Edge.make_line(
-        (-100, split, interface.height),
-        (100, split, interface.height),
+        (-100, split, interface.body_height),
+        (100, split, interface.body_height),
     )
     hole_centers = (
         *_side_boundary_hole_centers(side, segment, parameters),
@@ -1531,11 +1533,9 @@ def _side_socket_feasibility(
     reports = []
     for center in _candidate_side_socket_centers(side, segment, parameters):
         cutter = socket_entry_tool(interface).moved(Location(center))
-        top = section(cutter, section_by=Plane.XY.offset(interface.height))
+        top = section(cutter, section_by=Plane.XY.offset(interface.body_height))
         hole_clearance = min(
-            cutter.distance_to(
-                Solid.make_cylinder(5, interface.height + 2).moved(Location((hole_x, hole_y, -1)))
-            )
+            cutter.distance_to(_hole_cutter(hole_x, hole_y, interface))
             for hole_x, hole_y in hole_centers
         )
         if side == "east":
@@ -1553,7 +1553,7 @@ def _side_socket_feasibility(
                     Solid.make_box(
                         interface.male_join_depth,
                         interface.pitch,
-                        interface.height,
+                        interface.body_height,
                     ).moved(
                         Location(
                             (
@@ -1783,7 +1783,7 @@ def _side_shape(
     body = Part(
         Solid.extrude(
             _side_body_face(side, local_y0, local_y1, parameters),
-            (0, 0, parameters.interface.height),
+            (0, 0, parameters.interface.body_height),
         ).wrapped
     )
     corner_samples: list[tuple[float, float]] = []
@@ -1800,7 +1800,7 @@ def _side_shape(
             outside = Solid.make_box(
                 parameters.interface.male_join_depth,
                 parameters.interface.pitch,
-                parameters.interface.height,
+                parameters.interface.body_height,
             ).moved(Location((0, y - parameters.interface.pitch / 2, 0)))
             tab = Part(tool.intersect(outside).solids())
             body = body.fuse(tab)
@@ -1918,7 +1918,7 @@ def _tile_datums(tile: Tile) -> dict:
             joint_style=tile.interface.joint_style,
             open_through_top=False,
         )
-    return {"underside_z": 0, "top_z": tile.interface.height, "joins": joins}
+    return {"underside_z": 0, "top_z": tile.interface.body_height, "joins": joins}
 
 
 def _named_tile_design(
@@ -1964,6 +1964,7 @@ def _north_design(
         shape,
         {
             **asdict(spec),
+            "interface": interface_parameters(spec.interface),
             "review_role": "vehicle-north finishing band",
             "connector_sex": "female",
             "vehicle_boundary": "NORTH",
@@ -1983,6 +1984,10 @@ def _north_design(
         ],
         mating_datums=datums,
     )
+
+
+def _solid_bottom_suffix(interface: Interface) -> str:
+    return f"_solid-bottom-{interface.solid_bottom_mm:g}mm" if interface.solid_bottom_mm else ""
 
 
 def _south_design(
@@ -2010,12 +2015,12 @@ def _south_design(
     hole_reports = _south_hole_feasibility(x, cells, parameters)
     hole_centers = tuple(report["center"] for report in hole_reports)
     return Design(
-        f"zeekr_rear_south_ramp_{index + 1}_{cells}cell",
+        f"zeekr_rear_south_ramp_{index + 1}_{cells}cell{_solid_bottom_suffix(interface)}",
         shape,
         {
             "family": "zeekr-rear-contour-ramp",
             "width_cells": cells,
-            "interface": asdict(interface),
+            "interface": interface_parameters(interface),
             "review_role": "vehicle-south contour ramp",
             "connector_sex": "male",
             "vehicle_boundary": "SOUTH",
@@ -2055,7 +2060,7 @@ def _south_design(
         ],
         mating_datums={
             "underside_z": 0,
-            "top_z": interface.height,
+            "top_z": interface.body_height,
             "ramp_direction": "-assembly Y toward tailgate/SOUTH",
             "mating_tile_edge": "canonical south female",
             "joins": joins,
@@ -2089,13 +2094,13 @@ def _side_design(
     candidate_feasibility = _side_socket_feasibility(side, segment, parameters)
     feasibility = [report for report in candidate_feasibility if report["meets_minimum_web"]]
     return Design(
-        f"zeekr_rear_{side}_{segment}_cap",
+        f"zeekr_rear_{side}_{segment}_cap{_solid_bottom_suffix(parameters.interface)}",
         shape,
         {
             "family": "zeekr-rear-contour-side",
             "side": side,
             "segment": segment,
-            "interface": asdict(parameters.interface),
+            "interface": interface_parameters(parameters.interface),
             "review_role": f"vehicle-{side} contour cap",
             "outline_inset_mm": parameters.outline_inset_mm,
             "aggregate_mating_run_mm": TEST_FIELD_DEPTH_MM,
@@ -2151,13 +2156,13 @@ def _side_design(
         ],
         mating_datums={
             "underside_z": 0,
-            "top_z": parameters.interface.height,
+            "top_z": parameters.interface.body_height,
             "mating_tile_edge": (
                 "tile canonical west female" if side == "west" else "tile canonical east male"
             ),
             "joins": joins,
             "accessory_socket_centers": tuple(
-                (x, y, parameters.interface.height) for x, y, _ in socket_centers
+                (x, y, parameters.interface.body_height) for x, y, _ in socket_centers
             ),
             "socket_cutter_origins": socket_centers,
             "accessory_socket_interface": (

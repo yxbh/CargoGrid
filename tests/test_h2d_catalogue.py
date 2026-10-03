@@ -17,9 +17,9 @@ from cargo_grid.catalogue import (
 from cargo_grid.cli import main
 from cargo_grid.export import BambuSettings, Material, _PreparedProject
 from cargo_grid.footprints import minimum_projected_clearance
-from cargo_grid.jobs import Design
+from cargo_grid.jobs import Design, tile_identity
 from cargo_grid.packing import PrintPlacement
-from cargo_grid.parameters import BuildVolume, Exclusion, Tile
+from cargo_grid.parameters import BuildVolume, Exclusion, Tile, interface_parameters
 from cargo_grid.rods import Rod, RodBrace
 from cargo_grid.tiles import hole_placements
 
@@ -195,6 +195,7 @@ def canonical_parameters(parameters):
 def accessory_parameters(spec):
     parameters = {"family": spec.family, **asdict(spec)}
     if isinstance(spec, Accessory):
+        parameters["interface"] = interface_parameters(spec.interface)
         if spec.panel_height_cells is None:
             del parameters["panel_height_cells"]
         if spec.ramp_join == "female":
@@ -223,7 +224,6 @@ PLATE_GROUPS = {
 
 
 PERIMETER_FAMILIES = {"edge-x", "edge-y", "corner-in", "corner-out"}
-EXCEPTION_PLATE_NAME = "5x5 TILE - SINGLE NOZZLE ONLY - LEFT"
 EXPECTED_GROUP_ORDER = [
     "Tiles",
     "Female ramps",
@@ -291,9 +291,7 @@ def _design_group(design):
 
 
 def _plan_layout(job):
-    exception_plate = job.print_placements[-1].plate
     layout = SimpleNamespace(
-        exception_plate=exception_plate,
         plate_count=max(placement.plate for placement in job.print_placements) + 1,
         groups=[],
         plate_groups=defaultdict(set),
@@ -319,22 +317,24 @@ def _plan_layout(job):
             perimeter_set["plates"].add(placement.plate)
             perimeter_set["names"].append(design.name)
             perimeter_set["connectors"].add(connector)
-        if placement.plate == exception_plate:
-            layout.groups.append(EXCEPTION_PLATE_NAME)
-        else:
-            layout.groups.append(group)
-            layout.plate_groups[placement.plate].add(group)
-            layout.group_plates[group].add(placement.plate)
+        layout.groups.append(group)
+        layout.plate_groups[placement.plate].add(group)
+        layout.group_plates[group].add(placement.plate)
     return layout
 
 
 def test_h2d_dual_safe_plan_keeps_full_family_inventory_and_hardware_zones(h2d_plan):
     job = h2d_plan.job
-    assert h2d_plan.measured == Counter(id(design) for design in job.designs)
-    required_tiles = {(x, y) for x in range(1, 6) for y in range(1, 6)}
-    assert Counter(tile_sizes(BuildVolume(350, 320, 325))) == Counter(required_tiles)
+    # Every planned design, and the omitted 5x5, is measured exactly once.
+    assert set(h2d_plan.measured.values()) == {1}
+    assert {id(design) for design in job.designs} <= set(h2d_plan.measured)
+    assert len(h2d_plan.measured) == len(job.designs) + len(job.omitted)
+    every_size = {(x, y) for x in range(1, 6) for y in range(1, 6)}
+    assert Counter(tile_sizes(BuildVolume(350, 320, 325))) == Counter(every_size)
+    # The 306 mm 5x5 only fits one nozzle's area, so the shared H2D plan leaves it out.
+    required_tiles = every_size - {(5, 5)}
     expected = Counter(
-        canonical_parameters(asdict(Tile(x, y, hole_diameter=10, hole_scope="full")))
+        canonical_parameters(tile_identity(Tile(x, y, hole_diameter=10, hole_scope="full"))[1])
         for x, y in required_tiles
     )
     expected.update(
@@ -346,22 +346,21 @@ def test_h2d_dual_safe_plan_keeps_full_family_inventory_and_hardware_zones(h2d_p
     assert len({design.name for design in job.designs}) == len(job.designs)
     assert len(job.designs) == len(job.print_placements)
     assert all(design.quantity == 1 for design in job.designs)
-    exception = job.designs[-1]
-    assert "family" not in exception.parameters
-    assert (exception.parameters["nx"], exception.parameters["ny"]) == (5, 5)
-    assert exception.parameters["hole_diameter"] == 10
-    assert exception.parameters["hole_scope"] == "full"
+    assert len(job.designs) == 24 + 105
+    (omitted,) = job.omitted
+    assert "family" not in omitted["parameters"]
+    assert (omitted["parameters"]["nx"], omitted["parameters"]["ny"]) == (5, 5)
+    assert "300 mm H2D common reach" in omitted["reason"]
+    assert job.placement_policy["omitted_tiles"] == [omitted["name"]]
 
 
-def test_h2d_dual_safe_plan_keeps_common_reach_and_a_left_nozzle_exception_plate(h2d_plan):
+def test_h2d_dual_safe_plan_keeps_every_plate_in_common_reach_without_manual_maps(h2d_plan):
     job = h2d_plan.job
     plate_count = h2d_plan.layout.plate_count
-    exception_plate = h2d_plan.layout.exception_plate
     assert (
         set(job.plate_names) == {p.plate for p in job.print_placements} == set(range(plate_count))
     )
     assert job.part_gap == H2D_DEFAULT_PART_CLEARANCE_MM
-    assert job.omitted == []
     assert job.placement_policy["common_reach_mm"] == {
         "min_x": 25,
         "max_x": 325,
@@ -369,10 +368,8 @@ def test_h2d_dual_safe_plan_keeps_common_reach_and_a_left_nozzle_exception_plate
         "max_y": 320,
         "max_z": 320,
     }
-    assert job.plate_names[exception_plate] == EXCEPTION_PLATE_NAME
-    assert exception_plate == plate_count - 1
+    assert not any("5x5" in name for name in job.plate_names.values())
     assert set(job.plate_builds) == set(range(plate_count))
-    assert job.plate_builds[exception_plate] == BuildVolume(325, 320, 320, margin=5)
     assert all(
         job.plate_builds[plate]
         == BuildVolume(
@@ -385,15 +382,10 @@ def test_h2d_dual_safe_plan_keeps_common_reach_and_a_left_nozzle_exception_plate
                 Exclusion(320, 0, 30, 320),
             ),
         )
-        for plate in range(exception_plate)
+        for plate in range(plate_count)
     )
-    assert job.plate_settings == {
-        exception_plate: {
-            "filament_map_mode": "Manual",
-            "filament_maps": "1",
-            "filament_volume_maps": "0",
-        }
-    }
+    assert job.plate_settings == {}
+    assert "exception" not in job.placement_policy
     assert job.placement_policy["minimum_model_gap_mm"] == 4
     assert job.placement_policy["minimum_actual_part_xy_clearance_mm"] == 4
 
@@ -437,7 +429,7 @@ def test_h2d_dual_safe_plan_groups_families_on_named_plates(h2d_plan):
         for group in perimeter_sets.values()
     )
     actual_group_order = []
-    for plate in range(layout.exception_plate):
+    for plate in range(layout.plate_count):
         group = next(iter(layout.plate_groups[plate]))
         if not actual_group_order or actual_group_order[-1] != group:
             actual_group_order.append(group)
@@ -445,11 +437,10 @@ def test_h2d_dual_safe_plan_groups_families_on_named_plates(h2d_plan):
     assert job.placement_policy["perimeter_grouping"] == "outward width and boundary-hole mode"
 
 
-@pytest.mark.parametrize("group", [*EXPECTED_GROUP_ORDER, EXCEPTION_PLATE_NAME])
+@pytest.mark.parametrize("group", EXPECTED_GROUP_ORDER)
 def test_h2d_dual_safe_posed_solids_stay_in_reach_with_rectangle_gaps(h2d_plan, group):
     job = h2d_plan.job
     layout = h2d_plan.layout
-    exception_plate = layout.exception_plate
     plates = {
         placement.plate
         for placement, member_group in zip(job.print_placements, layout.groups)
@@ -470,14 +461,8 @@ def test_h2d_dual_safe_posed_solids_stay_in_reach_with_rectangle_gaps(h2d_plan, 
         bounds = (placement.x, placement.x + width, placement.y, placement.y + depth, height)
         assert bounds[4] <= 320 + 1e-6
         by_plate[placement.plate].append(bounds)
-        if placement.plate == exception_plate:
-            assert bounds[0] >= 5 - 1e-6 and bounds[1] <= 320 + 1e-6
-            assert bounds[2] >= 5 - 1e-6 and bounds[3] <= 315 + 1e-6
-        else:
-            assert bounds[0] >= 30 - 1e-6 and bounds[1] <= 320 + 1e-6
-            assert bounds[2] >= 5 - 1e-6 and bounds[3] <= 315 + 1e-6
-    if exception_plate in plates:
-        assert len(by_plate[exception_plate]) == 1
+        assert bounds[0] >= 30 - 1e-6 and bounds[1] <= 320 + 1e-6
+        assert bounds[2] >= 5 - 1e-6 and bounds[3] <= 315 + 1e-6
     for plate, rectangles in by_plate.items():
         if plate == nested_plate:
             continue

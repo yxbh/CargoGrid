@@ -66,7 +66,7 @@ If a separate CAD workbench is needed, use its documented interpreter and launch
 
 - Keep original roofed joints and experimental open-through tile-edge joints clearly separated.
 - Confirm the default full 10 mm hole pattern or a `--no-holes` opt-out; roof support remains opt-in.
-- Confirm roof support appears only under retained west/south female roofs.
+- Confirm roof support appears only under retained female pocket roofs (tile west/south edges and female edges, corners and ramps), and that male-only pieces get none.
 - Recheck support, brim and tower paths after profile changes.
 - Record printer, nozzle, layer height, materials, fit, roof finish, support removal and flatness for any physical trial.
 

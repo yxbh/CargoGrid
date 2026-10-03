@@ -1,6 +1,7 @@
 """Zeekr 7X expansion set built from shared CargoGrid geometry."""
 
 from collections import Counter
+from dataclasses import replace
 from math import floor
 from typing import Literal
 
@@ -47,11 +48,11 @@ def variants(
     ]
 
 
-def standard_rear_panel_parts() -> list[dict]:
+def standard_rear_panel_parts(solid_bottom_mm: float = 0.0) -> list[dict]:
     """Ordinary catalogue parts that complete the rear panel; not part of this set."""
     rows = round(rear_panel.TEST_FIELD_DEPTH_MM / Interface().pitch)
     lengths = sorted(Counter(rear_panel.TEST_TILE_MODULES).items(), reverse=True)
-    return [
+    parts = [
         *(
             {"family": "tile", "width_cells": cells, "depth_cells": rows, "quantity": quantity}
             for cells, quantity in lengths
@@ -66,6 +67,10 @@ def standard_rear_panel_parts() -> list[dict]:
             for cells, quantity in lengths
         ),
     ]
+    if solid_bottom_mm:
+        for part in parts:
+            part["solid_bottom_thickness_mm"] = solid_bottom_mm
+    return parts
 
 
 def _plates(
@@ -102,7 +107,7 @@ def extras_job(
     """Build the whole expansion set: 40 mm straight edges plus rear-panel contour pieces."""
     if interface.joint_style != "original":
         raise ValueError("Zeekr 7X extras require original roofed tile-edge joints")
-    if interface != Interface():
+    if replace(interface, solid_bottom_mm=0.0) != Interface():
         raise ValueError(
             "the Zeekr 7X expansion set requires the standard 60 mm unit, "
             "13 mm tile thickness and zero fit offset"
@@ -135,7 +140,7 @@ def extras_job(
     if not edges:
         raise ValueError("no supported designs fit the configured build envelope")
 
-    parameters = rear_panel.RearReviewParameters()
+    parameters = rear_panel.RearReviewParameters(interface=interface)
     side_caps, south_ramps = rear_panel.rear_panel_designs(parameters)
     for design in side_caps + south_ramps:
         size = design.size
@@ -218,7 +223,9 @@ def extras_job(
                 "east_cap": "female",
                 "south_ramps": "male",
                 "north_edges": "standard 30 mm female edge-y strips",
-                "standard_parts_printed_separately": standard_rear_panel_parts(),
+                "standard_parts_printed_separately": standard_rear_panel_parts(
+                    interface.solid_bottom_mm
+                ),
                 "outline_footprint_mm": (
                     2 * parameters.east_edge_x_mm,
                     parameters.centre_depth_mm,
@@ -241,6 +248,22 @@ def extras_job(
             "limitations": (
                 "No general vehicle-fit, strength, flatness or service guarantee. "
                 "Print the documented standard tiles and 30 mm north edges separately."
+            ),
+            **(
+                {
+                    "solid_bottom": {
+                        "solid_bottom_mm": interface.solid_bottom_mm,
+                        "body_thickness_mm": interface.body_height,
+                        "note": (
+                            f"Every piece has a {interface.solid_bottom_mm:g} mm closed floor "
+                            "and sits that much higher than the test-fitted version; recheck "
+                            "clearance under the lift-out panel. Print the matching tiles and "
+                            "north edges with the same solid bottom."
+                        ),
+                    }
+                }
+                if interface.solid_bottom_mm
+                else {}
             ),
         },
     )

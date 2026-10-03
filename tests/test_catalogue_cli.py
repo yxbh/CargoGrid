@@ -200,7 +200,10 @@ def test_cli_unique_hole_configurations_export_manifest(extra, diameter, scope, 
     assert main(command) == 0
     manifest = json.loads((output / "manifest.json").read_text())
     design = manifest["designs"][0]
-    assert design["parameters"] == asdict(Tile(1, 1, hole_diameter=diameter, hole_scope=scope))
+    assert (
+        design["parameters"]
+        == tile_identity(Tile(1, 1, hole_diameter=diameter, hole_scope=scope))[1]
+    )
     assert sum(hole["accepted"] for hole in design["hole_placements"]) == holes
     assert (output / f"{design['name']}.step").is_file()
     assert not list(output.glob("*.stl"))
