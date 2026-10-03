@@ -98,6 +98,8 @@ BAMBU_PRINT_ROTATIONS = {
     "vertical-tile-bracket": 135.0,
     "lock-45": -135.0,
     "plate": 180.0,
+    # Rail ends' undersides slope up to the end, so they print on the flat bearing face.
+    "support-end": 180.0,
 }
 BAMBU_OBJECT_SETTINGS = {
     "rod": {"enable_support": "1", "support_type": "normal(auto)"},

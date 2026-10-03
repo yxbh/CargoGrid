@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 from build123d import import_step
 from test_export import _project_facts
+from test_prepared_export import stl_triangles
 
 from cargo_grid import BuildVolume
 from cargo_grid import catalogue as catalogue_module
@@ -158,6 +159,128 @@ def test_shallow_brackets_apply_side_down_y_rotation_and_record_it(nx, tmp_path)
         and abs(face.bounding_box().max.Z) < 1e-5
     )
     assert bed_area == pytest.approx(3136.052586000847, abs=0.002)
+
+
+def _section_area(shape, z, slab=0.001):
+    """Horizontal cross-section area at height z, from a thin slab intersection."""
+    from build123d import Box, Location
+
+    box = shape.bounding_box()
+    cutter = Box(box.size.X + 2, box.size.Y + 2, slab).moved(
+        Location((box.center().X, box.center().Y, z))
+    )
+    return sum(solid.volume for solid in shape.intersect(cutter).solids()) / slab
+
+
+def _placed_mesh_bed_area(path):
+    """Area of the 3MF mesh triangles lying on the lowest Z of the placed object."""
+    with ZipFile(path) as archive:
+        root = ET.fromstring(archive.read("3D/3dmodel.model"))
+    mesh = root.find(".//{*}mesh")
+    vertices = np.array(
+        [[float(v.get(k)) for k in ("x", "y", "z")] for v in mesh.find("{*}vertices")]
+    )
+    triangles = np.array(
+        [[int(t.get(k)) for k in ("v1", "v2", "v3")] for t in mesh.find("{*}triangles")]
+    )
+    placement = root.find("./{*}build/{*}item").get("transform")
+    if placement:
+        numbers = np.array(list(map(float, placement.split())))
+        vertices = vertices @ numbers[:9].reshape(3, 3) + numbers[9:]
+    bed = vertices[triangles]
+    bed = bed[np.max(np.abs(bed[:, :, 2] - vertices[:, 2].min()), axis=1) < 1e-5]
+    return np.linalg.norm(np.cross(bed[:, 1] - bed[:, 0], bed[:, 2] - bed[:, 0]), axis=1).sum() / 2
+
+
+@pytest.mark.parametrize("variant", [1, 2, 3, 4])
+def test_rail_ends_print_on_their_flat_bearing_face(variant, tmp_path):
+    from build123d import Location
+
+    design = accessory_design(Accessory("support-end", variant=variant))
+    assert design.recommended_print_rotation_x == 180
+    assert design.recommended_print_rotation_y is None
+    assert design.apply_orientation_to_bambu
+    assert design.bambu_object_settings == {}
+    assert design.bambu_size == pytest.approx(design.size)
+    posed = design.bambu_shape
+    posed = posed.moved(Location(-posed.bounding_box().min))
+    height = posed.bounding_box().size.Z
+    first_layer = 0.2
+    heights = (first_layer, *(height * k / 20 for k in range(1, 20)), height - first_layer)
+    sections = {z: _section_area(posed, z) for z in heights}
+    largest = max(sections.values())
+    # The flip maps z to height - z, so height - 0.2 is the model-orientation first layer,
+    # where the sloped underside leaves only 30-50% of the largest section on the bed.
+    assert sections[first_layer] >= 0.75 * largest
+    assert sections[first_layer] > sections[height - first_layer] + 0.25 * largest
+
+    path = tmp_path / "job.3mf"
+    result = write_3mf(Job([design], BuildVolume(350, 320, 325), "part"), path, bambu=BAMBU)
+    item = result["plates"][0]["items"][0]
+    assert "object_settings" not in item
+    transform = item["source_to_project_transform"]
+    assert transform["rotation_x_degrees"] == 180 and transform["applied_to_mesh"]
+    assert "rotation_y_degrees" not in transform
+    assert item["size_mm"] == pytest.approx(design.bambu_size)
+    _, _, volumes = _project_facts(path)
+    assert volumes[0][-1][4] == pytest.approx(0, abs=1e-5)
+    assert volumes[0][-1][5] == pytest.approx(25, abs=0.02)
+    assert _placed_mesh_bed_area(path) >= 0.7 * largest
+
+
+def test_rail_end_source_exports_keep_model_orientation(tmp_path):
+    design = accessory_design(Accessory("support-end", variant=1))
+    bed = {}
+    for backend in (None, BAMBU):
+        folder = tmp_path / ("core" if backend is None else "bambu")
+        manifest = json.loads(
+            export_job(
+                Job([design], BuildVolume(350, 320, 325), "part"), folder, bambu=backend
+            ).read_text()
+        )
+        source = import_step(folder / f"{design.name}.step").bounding_box()
+        assert (source.min.Z, source.max.Z) == pytest.approx((-25, 0), abs=1e-5)
+        assert (source.min.Y, source.max.Y) == pytest.approx((0, 120), abs=1e-5)
+        z = stl_triangles(folder / f"{design.name}.stl")[:, :, 2]
+        assert (z.min(), z.max()) == pytest.approx((-25, 0), abs=1e-4)
+        recommendation = manifest["designs"][0]["recommended_print_orientation"]
+        assert recommendation["rotations"] == [{"axis": "X", "degrees": 180}]
+        assert recommendation["applied_to_exports"] == {
+            "step": False,
+            "stl": False,
+            "core_3mf": False,
+            "bambu_3mf": backend is not None,
+        }
+        item = manifest["export"]["plates"][0]["items"][0]
+        assert ("source_to_project_transform" in item) == (backend is not None)
+        bed[backend is not None] = _placed_mesh_bed_area(folder / "job.3mf")
+    # The plain 3MF keeps the sloped underside down; the Bambu project uses the flat face.
+    assert bed[True] > 2.5 * bed[False]
+
+
+def test_straight_rails_and_connectors_keep_model_orientation():
+    from cargo_grid.accessories import (
+        required_bambu_object_settings,
+        required_bambu_print_rotation,
+        required_bambu_print_rotation_y,
+    )
+    from cargo_grid.catalogue import accessory_identity_parameters
+
+    straight = [
+        *(Accessory("support", nx=n) for n in range(1, 6)),
+        *(Accessory("support-bit", length=n) for n in (20, 30, 40, 50)),
+    ]
+    for spec in straight:
+        parameters = accessory_identity_parameters(spec)
+        assert required_bambu_print_rotation(parameters) is None
+        assert required_bambu_print_rotation_y(parameters) is None
+        assert required_bambu_object_settings(parameters) == {}
+    for spec in (Accessory("support", nx=1), Accessory("support-bit", length=20)):
+        design = accessory_design(spec)
+        assert design.recommended_print_rotation_x is None
+        assert design.recommended_print_rotation_y is None
+        assert not design.apply_orientation_to_bambu
+        assert design.bambu_shape is design.shape
 
 
 def test_transformed_catalogue_packing_respects_exclusions_and_quantity(tmp_path):

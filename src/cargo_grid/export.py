@@ -59,7 +59,7 @@ BAMBU_PROCESS_DEFAULTS = {
 UNSUPPORTED_COMBINATIONS = {
     "roof_support_with_stacking": "Roof supports and stacked separator jobs cannot be combined.",
     "roof_support_with_catalogues": "Roof supports require a part or layout job; catalogues and extras are not supported.",
-    "roof_support_with_bambu_oriented_models": "Roof supports cannot include models that Bambu export re-orients (plates, brackets, stops, angled stops and rods).",
+    "roof_support_with_bambu_oriented_models": "Roof supports cannot include models that Bambu export re-orients (plates, brackets, stops, angled stops, rods and rail ends).",
     "roof_support_with_full_height": "Roof supports require original roofed joints.",
     "stacked_catalogues": "Stack repeated part/layout tile quantities, not mixed catalogue samples.",
 }
@@ -322,7 +322,16 @@ def _validate_request(job: Job, bambu: BambuSettings | None, stack: StackSetting
             and design.apply_orientation_to_bambu
             and (stack or (bambu.roof_support and bambu.roof_support.mode == "painted"))
         ):
-            raise ValueError("Bambu-oriented models cannot use stacking or roof support")
+            raise ValueError(
+                f"Bambu-oriented models cannot use stacking or roof support: {design.name} "
+                "is turned over for printing"
+                + (
+                    ""
+                    if stack
+                    else "; painted roof support needs parts in model orientation, so use "
+                    "--roof-support-mode auto or export this part in a separate job"
+                )
+            )
         name = design.name
         if (
             not isinstance(name, str)

@@ -249,12 +249,18 @@ def test_job_without_female_roofs_is_rejected():
         validate_roof_job(job, RoofSupportSettings(), LAYER)
 
 
-def test_oriented_models_stay_out_of_roof_jobs(tmp_path):
-    job = one_plate_job(
-        [tile_design(Tile(1, 1)), accessory_design(Accessory("plate"))], [(20, 20), (110, 20)]
-    )
-    with pytest.raises(ValueError, match="Bambu-oriented models cannot use stacking or roof"):
+@pytest.mark.parametrize(
+    "spec", [Accessory("plate"), Accessory("support-end", variant=1)], ids=["plate", "rail-end"]
+)
+def test_oriented_models_stay_out_of_roof_jobs(spec, tmp_path):
+    oriented = accessory_design(spec)
+    job = one_plate_job([tile_design(Tile(1, 1)), oriented], [(20, 20), (110, 20)])
+    with pytest.raises(
+        ValueError, match="Bambu-oriented models cannot use stacking or roof"
+    ) as error:
         write_3mf(job, tmp_path / "plate.3mf", bambu=bambu())
+    assert oriented.name in str(error.value)
+    assert "--roof-support-mode auto" in str(error.value)
     assert not (tmp_path / "plate.3mf").exists()
 
 
@@ -274,6 +280,7 @@ def test_full_height_designs_stay_out_of_roof_jobs():
     [
         (["--family", "edge-x"], "no retained original female pocket roofs"),
         (["--family", "plate"], "Bambu-oriented models"),
+        (["--family", "support-end", "--variant-number", "3"], "Bambu-oriented models"),
     ],
 )
 def test_cli_rejects_parts_without_supportable_roofs(extra, message, tmp_path, capsys):

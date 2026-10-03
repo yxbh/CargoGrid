@@ -91,7 +91,7 @@ uv run cargo-grid part --family edge-y --length-cells 2 --edge-outward-mm 30 --c
 
 The same options work for `edge-x`, `corner-in` and `corner-out` at every width. If no edge hole of the chosen size fits, the piece is made plain, or you get an error if you asked for holes with `--complete-edge-holes`.
 
-In Bambu projects, attachment plates are flipped over (X=180 degrees) so the flat plate sits on the bed and the X plugs point up. The STEP, STL and plain 3MF files keep the model orientation.
+In Bambu projects, attachment plates are flipped over (X=180 degrees) so the flat plate sits on the bed and the X plugs point up. Rail ends are flipped the same way: their underside slopes up toward the end, so they print on their flat top (the face the mat rests on) instead of balancing on the short flat part of the underside. Straight rails and connectors look the same either way up and print as modelled. The STEP, STL and plain 3MF files keep the model orientation.
 
 Bambu projects set the slicer's Slice gap closing radius to 0.01 mm and Resolution to 0.003 mm. These only affect slicing, not the model files. Check the sliced result with the printer and material profiles you plan to use.
 
@@ -271,7 +271,7 @@ Before printing:
 uv run cargo-grid catalogue --h2d-dual-safe --build-width-mm 350 --build-depth-mm 320 --build-height-mm 325 --solid-bottom-thickness-mm 1.92 --bambu --material "Bambu PETG Basic @BBL H2D 0.8 nozzle" PETG "#637b70" --material "Bambu PLA Basic @BBL H2D 0.8 nozzle" PLA "#dddddd" --nozzle-diameter-mm 0.8 --layer-height-mm 0.32 --roof-support --roof-support-mode auto --no-stl --output outputs/auto-support-catalogue
 ```
 
-The project keeps the same PETG/PLA zero-contact settings as above, but leaves global support off. Normal Auto support is switched on for each object that has a female pocket roof (tiles, female edges and corner sides, female ramps) and for the stops, shallow brackets and rods that already ask for it. Everything else, such as male edges, male ramps, plates, angled stops and braces, prints without support. Auto support covers whole overhangs, not just the small painted pads. Every support on those objects gets the PLA interface, including the stop, bracket and rod supports, which are all PETG without this option. That combination hasn't been tested on a real print.
+The project keeps the same PETG/PLA zero-contact settings as above, but leaves global support off. Normal Auto support is switched on for each object that has a female pocket roof (tiles, female edges and corner sides, female ramps) and for the stops, shallow brackets and rods that already ask for it. Everything else, such as male edges, male ramps, plates, angled stops, braces, rails and rail ends, prints without support. Auto support covers whole overhangs, not just the small painted pads. Every support on those objects gets the PLA interface, including the stop, bracket and rod supports, which are all PETG without this option. That combination hasn't been tested on a real print.
 
 Each plate with supported parts uses PLA, so it needs a prime tower. The project uses Bambu Studio's default tower and only sets where it goes: the front-right corner on the H2D, inside X 283..325 and Y 1..39.5, where both nozzles reach it. Parts on that plate stay at least 6.5 mm away from that corner. Auto support also spreads its first layer up to about 5 mm past each part, so those plates keep parts 8 mm apart and 6 mm from the front and back edges. The H2D catalogue then needs 26 plates (25 without auto support).
 
@@ -310,7 +310,7 @@ Older option names such as `--cells`, `--pitch` and `--quantity` are rejected wi
 
 See `--help` for build reservations and excluded areas, stacking and more roof-support settings.
 
-Roof support in either mode can't be used with stacking or `--joint-style full-height`. The default painted mode only works with `part` and `layout`, and not with parts that Bambu turns over for printing (plates, brackets, stops, angled stops and rods). Auto mode also works with `catalogue`, `extras` and those parts.
+Roof support in either mode can't be used with stacking or `--joint-style full-height`. The default painted mode only works with `part` and `layout`, and not with parts that Bambu turns over for printing (plates, brackets, stops, angled stops, rods and rail ends). Auto mode also works with `catalogue`, `extras` and those parts.
 
 ## Compatibility notes
 
