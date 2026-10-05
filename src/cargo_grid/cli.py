@@ -33,10 +33,13 @@ from cargo_grid.parameters import (
     count,
     positive,
 )
+from cargo_grid.pull_handle_set import extras_job as pull_handle_extras_job
 from cargo_grid.rods import ROD_FAMILIES, Rod, RodBrace
 from cargo_grid.roof_support import RoofSupportSettings, check_roof_job_kind
 from cargo_grid.stacking import StackSettings
 from cargo_grid.vehicles import zeekr_7x
+
+EXTRAS_RECIPES = ("zeekr-7x", "pull-handle")
 
 
 def _positive_mm(value: str) -> float:
@@ -235,6 +238,20 @@ def _check_solid_bottom(args, interface: Interface) -> None:
         raise ValueError("stacking does not support --solid-bottom-thickness-mm yet")
 
 
+def _check_pull_handle_options(args, roof_support: RoofSupportSettings | None) -> None:
+    if roof_support is not None:
+        raise ValueError(
+            "the pull-handle set has no tile-edge pocket roofs, and the strap-bar handle "
+            "already has its own object support; omit --roof-support"
+        )
+    if (
+        getattr(args, "holes", None) is not None
+        or getattr(args, "hole_diameter_mm", None) is not None
+        or args.hole_scope != "full"
+    ):
+        raise ValueError("round-hole options apply to tiles; the pull-handle set has no tiles")
+
+
 def _roof_support(args) -> RoofSupportSettings | None:
     supplied = (
         args.roof_top_gap_mm,
@@ -396,11 +413,12 @@ def parser() -> argparse.ArgumentParser:
         )
         if command == "extras":
             p.add_argument(
-                "vehicle",
-                choices=("zeekr-7x",),
+                "recipe",
+                choices=EXTRAS_RECIPES,
                 help=(
-                    "Zeekr 7X expansion set: 40 mm straight edges plus the measured "
-                    "rear-panel contour caps and ramps"
+                    "zeekr-7x: Zeekr 7X expansion set of 40 mm straight edges plus the measured "
+                    "rear-panel contour caps and ramps; pull-handle: two-unit X-plug pull "
+                    "handle with and without a strap bar"
                 ),
             )
         for axis, meaning in (
@@ -939,19 +957,29 @@ def main(argv: list[str] | None = None) -> int:
                     )
                 positive("H2D packing gap", packing_gap)
             if args.command == "extras":
-                job = zeekr_7x.extras_job(
-                    build,
-                    interface=interface,
-                    hole_diameter=hole_diameter,
-                    hole_scope=args.hole_scope,
-                    placement_build=(h2d_common_build() if args.h2d_dual_safe else None),
-                    edge_gap=packing_gap,
-                    contour_gap=(
-                        zeekr_7x.CONTOUR_GAP_MM if requested_gap is None else requested_gap
-                    ),
-                    auto_roof_support=bool(roof_support and roof_support.mode == "auto"),
-                    **({"layer_height_mm": bambu.layer_height} if bambu else {}),
-                )
+                if args.recipe == "pull-handle":
+                    _check_pull_handle_options(args, roof_support)
+                    job = pull_handle_extras_job(
+                        build,
+                        interface=interface,
+                        placement_build=(h2d_common_build() if args.h2d_dual_safe else None),
+                        gap=packing_gap,
+                        orient_for_bambu=bool(bambu),
+                    )
+                else:
+                    job = zeekr_7x.extras_job(
+                        build,
+                        interface=interface,
+                        hole_diameter=hole_diameter,
+                        hole_scope=args.hole_scope,
+                        placement_build=(h2d_common_build() if args.h2d_dual_safe else None),
+                        edge_gap=packing_gap,
+                        contour_gap=(
+                            zeekr_7x.CONTOUR_GAP_MM if requested_gap is None else requested_gap
+                        ),
+                        auto_roof_support=bool(roof_support and roof_support.mode == "auto"),
+                        **({"layer_height_mm": bambu.layer_height} if bambu else {}),
+                    )
                 if args.h2d_dual_safe:
                     job.placement_policy.update(
                         name="H2D dual-nozzle safe",

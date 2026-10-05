@@ -158,6 +158,20 @@ Assemble the tile row west to east as 4x4, 4x4, 2x4, 4x4, 4x4, with tile male ed
 
 The outline comes from tape measurements and pen traces of one car's rear panel; the [geometry reference](docs/geometry.md#rear-panel-contour-pieces) lists the source parameters. It was checked with one test fit in that car, which doesn't guarantee a fit in yours. Check your own panel, slicer setup and printed parts before making a full set.
 
+## Make the pull handle set
+
+`extras pull-handle` makes a handle for sliding an assembled floor in and out of a ute tray, car boot or truck bed. It isn't part of the main catalogue. At the standard 60 mm unit the handle is two units wide and one deep and plugs into two neighbouring X sockets. Its grip is 24 mm deep and 18 mm thick, 62 mm above the mat, over an 88 x 40 mm hand opening. The set has one of each version on its own named plate: one with a front strap bar whose 30 x 8 mm slot takes a 25 mm strap or a cord, and one without.
+
+```bash
+uv run cargo-grid extras pull-handle --h2d-dual-safe --build-width-mm 350 --build-depth-mm 320 --build-height-mm 325 --bambu --material "Bambu PETG Basic @BBL H2D 0.8 nozzle" PETG "#637b70" --nozzle-diameter-mm 0.8 --layer-height-mm 0.32 --no-stl --output outputs/pull-handle-set
+```
+
+For 0.4 mm nozzles, use `--nozzle-diameter-mm 0.4 --layer-height-mm 0.24` and `--material "Bambu PETG Basic @BBL H2D 0.4 nozzle" PETG "#637b70"`, as for the catalogue.
+
+Each version is placed where it needs the least support. The strap-bar handle lies on its front, resting on the grip and strap-bar edges, with Auto support for that object; clean the support off the plugs before fitting. The other handle prints grip-down without support, but that puts the layer lines across its posts, the weaker direction for a sideways pull. For another printer, omit `--h2d-dual-safe` and give its build space.
+
+The grip, posts and hand opening are sized for a hand, so they don't change with unit size. Instead the handle takes the fewest whole cells that are at least 120 x 60 mm, with an X plug in every cell: 4 x 2 cells at 30 mm units, 3 x 2 at 45 mm. Tile thickness sets the plug depth, as on other X attachments. `--h2d-dual-safe` still needs the standard settings. The command rejects hole, solid-bottom and roof-support options, because the handles have none of those features. An earlier strap-bar prototype printed in the same pose plugged into a tile well and its support came off cleanly. This version's taller hand opening, the version without the strap bar, other unit sizes and thicknesses, how firmly the plugs hold and how hard you can pull haven't been tested. The plugs are held only by their fit, so don't lift the floor by the handle. There's no load rating.
+
 ## Round-hole rods and upper braces
 
 Rods fit the mat's round holes, with a collar resting on its top. Choose 120 or 240 mm above-mat height; the peg adds another 12 mm at standard tile thickness. Upper braces connect two Ø10 mm shafts at 60 or 120 mm centres. That spacing stays in physical millimetres when unit size changes.
@@ -294,7 +308,7 @@ uv run cargo-grid layout --help
 uv run cargo-grid catalogue --help
 ```
 
-`part` makes one design, `layout` fills a rectangle you give it, `catalogue` makes every design that fits your build volume, and `extras zeekr-7x` makes the Zeekr 7X expansion set.
+`part` makes one design, `layout` fills a rectangle you give it, `catalogue` makes every design that fits your build volume, `extras zeekr-7x` makes the Zeekr 7X expansion set and `extras pull-handle` makes the pull handle set.
 
 Common options:
 

@@ -1164,6 +1164,7 @@ def export_job(
                     "vertical-tile-bracket",
                     "lock-45",
                     "vertical-stop",
+                    "pull-handle",
                 ),
             )
             if family != "tile":

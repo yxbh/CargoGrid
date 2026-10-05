@@ -22,18 +22,26 @@ def _tool():
 
 def test_variants_cover_each_set_floor_and_nozzle_once():
     variants = _tool().variants()
-    assert len(variants) == 2 * 2 * len(H2D_PROFILES)
+    assert len(variants) == (2 * 2 + 1) * len(H2D_PROFILES)
     assert len({variant.name for variant in variants}) == len(variants)
     for variant in variants:
         args = parser().parse_args([*variant.arguments, "--output", "unused"])
         profiles = H2D_PROFILES[args.nozzle_diameter_mm]
         assert args.h2d_dual_safe and args.bambu and args.no_stl
-        assert args.roof_support and args.roof_support_mode == "auto"
         assert args.layer_height_mm == profiles.layer_height_mm
+        assert variant.name.split("_")[:2] == ["CargoGrid", "H2D"]
+        if args.command == "extras" and args.recipe == "pull-handle":
+            assert variant.name == (
+                f"CargoGrid_H2D_Pull-Handle-Set_{args.nozzle_diameter_mm:g}mm-Nozzle"
+            )
+            assert not args.roof_support and args.roof_support_mode is None
+            assert [material[0] for material in args.material] == [profiles.petg]
+            assert args.solid_bottom_thickness_mm == 0
+            continue
+        assert args.roof_support and args.roof_support_mode == "auto"
         assert [material[0] for material in args.material] == [profiles.petg, profiles.pla]
         assert variant.name.endswith(f"_Auto-Support_{args.nozzle_diameter_mm:g}mm-Nozzle")
         assert ("_Solid-Bottom-1.92mm_" in variant.name) == (args.solid_bottom_thickness_mm > 0)
-        assert variant.name.split("_")[:2] == ["CargoGrid", "H2D"]
         assert ("Zeekr" in variant.name) == (args.command == "extras")
 
 
@@ -67,6 +75,35 @@ def test_writes_named_files_and_replaces_only_on_request(monkeypatch, tmp_path, 
     }
     assert {path.name for path in tmp_path.iterdir()} == expected
     assert f"{first.name}: 2 plates, 3 parts" in capsys.readouterr().out
+
+
+def test_every_variant_belongs_to_one_named_set():
+    tool = _tool()
+    variants = tool.variants()
+    assert {variant.set_name for variant in variants} == set(tool.SET_NAMES)
+    for variant in variants:
+        assert variant.name.split("_")[2] == variant.set_name
+
+
+def test_set_filter_builds_only_the_chosen_sets(monkeypatch, tmp_path, capsys):
+    tool = _tool()
+    monkeypatch.setattr(tool, "generate", _fake_generate)
+    other = next(v for v in tool.variants() if v.set_name != "Pull-Handle-Set")
+    untouched = tool.destinations(tmp_path, other)["job.3mf"]
+    untouched.write_text("old")
+    assert tool.main(["--output", str(tmp_path), "--set", "Pull-Handle-Set"]) == 0
+    handles = [v for v in tool.variants() if v.set_name == "Pull-Handle-Set"]
+    assert len(handles) == len(H2D_PROFILES)
+    expected = {
+        path.name for variant in handles for path in tool.destinations(tmp_path, variant).values()
+    }
+    assert {path.name for path in tmp_path.iterdir()} == expected | {untouched.name}
+    assert untouched.read_text() == "old"
+    capsys.readouterr()
+    assert tool.main(["--output", str(tmp_path), "--dry-run", "--set", "Full-Catalogue"]) == 0
+    listed = capsys.readouterr().out.splitlines()
+    assert len(listed) == 2 * len(H2D_PROFILES)
+    assert all(line.startswith("CargoGrid_H2D_Full-Catalogue_") for line in listed)
 
 
 def test_failed_variant_leaves_the_output_folder_untouched(monkeypatch, tmp_path):
