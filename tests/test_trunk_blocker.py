@@ -1,6 +1,7 @@
 """Experimental blocker native-CAD geometry and export boundaries."""
 
 import json
+from math import floor
 from pathlib import Path
 from xml.etree import ElementTree as ET
 from zipfile import ZipFile
@@ -8,9 +9,22 @@ from zipfile import ZipFile
 import numpy as np
 import pytest
 from build123d import Align, Axis, Box, GeomType, Location, Part, Pos, Shape, ShapeList, import_step
+from OCP.BRepAdaptor import BRepAdaptor_Surface
 
 from cargo_grid import TrunkBlockerSpec, prepared
 from cargo_grid.accessories import make_bidirectional_panel_connector
+from cargo_grid.cli import H2D_PROFILES
+from cargo_grid.export import write_3mf
+from cargo_grid.jobs import Design, Job
+from cargo_grid.packing import PrimeTower, PrintPlacement, TowerClearance, h2d_common_build
+from cargo_grid.plates import (
+    AUTO_SUPPORT_TOWER_CLEARANCE_MM,
+    BAMBU_TOWER_MARGIN_MM,
+    H2D_SHARED_REACH_X_MM,
+    H2D_TOWER_LEFT_CLEARANCE_MM,
+    TOWER_BACK_ALLOWANCE_MM,
+    BambuTowerEstimate,
+)
 from cargo_grid.trunk_blocker import (
     BASE_ANCHOR_CENTRES_Y_MM,
     CONNECTOR_CENTRES_ABOVE_PUSHER_FLOOR_MM,
@@ -18,16 +32,21 @@ from cargo_grid.trunk_blocker import (
     DIMENSIONS,
     FREE_EDGE_RADIUS_MM,
     MOVING_TOOTH_STATIONS_MM,
+    PRONG_LOCK_CLIP_DIMENSIONS,
     SCREW_AXES_MM,
     make_trunk_blocker_parts,
+    make_trunk_blocker_prong_lock_clip,
 )
 from cargo_grid.trunk_blocker_export import (
     _disassembly_proofs,
+    _edge_continuity_counts,
     _guide_proofs,
     _pusher_bed_proofs,
     _ratchet_proofs,
     _rounding_proofs,
     export_trunk_blocker,
+    prepare_trunk_blocker_print_job,
+    trunk_blocker_h2d_settings,
 )
 
 
@@ -45,6 +64,112 @@ def _symmetric_difference_volume(first, second) -> float:
     )
 
 
+@pytest.mark.parametrize("nozzle_diameter_mm", H2D_PROFILES)
+@pytest.mark.parametrize("material_count", [1, 2])
+def test_print_job_uses_default_tower_only_for_multi_material_plates(
+    tmp_path,
+    material_count,
+    nozzle_diameter_mm,
+):
+    tallest_part_mm = 120.2500001
+    bambu = trunk_blocker_h2d_settings(
+        nozzle_diameter_mm,
+        dual_material=material_count > 1,
+    )
+    profile = H2D_PROFILES[nozzle_diameter_mm]
+    assert bambu.nozzle == nozzle_diameter_mm
+    assert bambu.layer_height == profile.layer_height_mm
+    assert bambu.printer_settings_id == profile.printer
+    assert bambu.print_settings_id == profile.process
+    assert tuple(material.name for material in bambu.materials) == (
+        (profile.petg, profile.pla) if material_count > 1 else (profile.petg,)
+    )
+    build = h2d_common_build()
+    job = prepare_trunk_blocker_print_job(
+        Job(
+            [Design("blocker test box", Box(20, 20, tallest_part_mm), {})],
+            build,
+            "trunk-blocker-test",
+            part_gap=4,
+            print_placements=[PrintPlacement(0, 85, 5, 0)],
+            plate_builds={0: build},
+        ),
+        material_counts_by_plate={0: material_count},
+        nozzle_diameter_mm=nozzle_diameter_mm,
+    )
+    project = tmp_path / f"tower-{nozzle_diameter_mm:g}-{material_count}.3mf"
+    write_3mf(
+        job,
+        project,
+        bambu=bambu,
+    )
+    with ZipFile(project) as archive:
+        settings = json.loads(archive.read("Metadata/project_settings.config"))
+    overrides = set(settings["different_settings_to_system"][0].split(";"))
+    tower_keys = {"enable_prime_tower", "wipe_tower_x", "wipe_tower_y"}
+
+    if material_count == 1:
+        assert job.prime_tower is None
+        assert job.prime_tower_positions == {}
+        assert tower_keys.isdisjoint(settings)
+        assert tower_keys.isdisjoint(overrides)
+    else:
+        estimate = BambuTowerEstimate(profile.layer_height_mm)
+        side = estimate.side_mm(tallest_part_mm)
+        brim = estimate.brim_mm(tallest_part_mm)
+        limit = H2D_SHARED_REACH_X_MM[1]
+        expected_x = floor((limit - BAMBU_TOWER_MARGIN_MM - side) * 100) / 100
+        expected_reach = PrimeTower(
+            brim,
+            brim,
+            limit - expected_x,
+            side + brim + TOWER_BACK_ALLOWANCE_MM,
+        )
+        expected_clearance = TowerClearance(
+            H2D_TOWER_LEFT_CLEARANCE_MM,
+            AUTO_SUPPORT_TOWER_CLEARANCE_MM,
+            AUTO_SUPPORT_TOWER_CLEARANCE_MM,
+            AUTO_SUPPORT_TOWER_CLEARANCE_MM,
+        )
+        assert job.prime_tower == expected_reach
+        assert set(job.prime_tower_positions) == {0}
+        assert job.prime_tower_positions[0] == pytest.approx((expected_x, BAMBU_TOWER_MARGIN_MM))
+        assert job.prime_tower_reaches == {0: expected_reach}
+        assert job.prime_tower_clearances == {0: expected_clearance}
+        x, y = job.prime_tower_positions[0]
+        x0, y0, x1, y1 = job.tower_bounds(0)
+        assert x0 >= H2D_SHARED_REACH_X_MM[0]
+        assert y0 >= 0
+        assert y1 <= build.y
+        assert x1 == pytest.approx(limit)
+        assert y == BAMBU_TOWER_MARGIN_MM
+        assert x + BAMBU_TOWER_MARGIN_MM + side <= limit
+        assert limit - (x + BAMBU_TOWER_MARGIN_MM + side) < 0.011
+        assert x0 - expected_clearance.left >= 85 + 20
+        assert settings["wipe_tower_x"] == [f"{x:g}"]
+        assert settings["wipe_tower_y"] == [f"{y:g}"]
+        assert {"wipe_tower_x", "wipe_tower_y"} <= overrides
+        assert "enable_prime_tower" not in settings
+        assert "enable_prime_tower" not in overrides
+        if nozzle_diameter_mm == 0.4:
+            assert (x, y) == pytest.approx((281.42, 15.0))
+            assert (x0, y0, x1, y1) == pytest.approx((273.42, 7.0, 325.0, 52.57693534037844))
+
+
+def test_trunk_blocker_h2d_settings_rejects_unlisted_nozzle():
+    with pytest.raises(ValueError, match="must be one of: 0.8, 0.4 mm"):
+        trunk_blocker_h2d_settings(0.6, dual_material=True)
+
+
+def test_trunk_blocker_h2d_settings_defaults_to_tested_0p8_profile():
+    settings = trunk_blocker_h2d_settings(dual_material=False)
+    profile = H2D_PROFILES[0.8]
+    assert settings.nozzle == 0.8
+    assert settings.layer_height == profile.layer_height_mm
+    assert settings.printer_settings_id == profile.printer
+    assert settings.print_settings_id == profile.process
+
+
 def test_approved_parts_are_three_valid_native_solids():
     base, pusher, keeper = make_trunk_blocker_parts()
     assert [part.label for part in (base, pusher, keeper)] == [
@@ -57,14 +182,27 @@ def test_approved_parts_are_three_valid_native_solids():
         for part in (base, pusher, keeper)
     )
     assert DIMENSIONS.wall_thickness == 8
-    assert tuple(pusher.bounding_box().size) == pytest.approx((60, 144.8, 120.25))
-    assert pusher.bounding_box().min.Y == pytest.approx(-44.8)
+    assert tuple(pusher.bounding_box().size) == pytest.approx((60, 138.3, 120.25))
+    assert pusher.bounding_box().min.Y == pytest.approx(-38.3)
     assert pusher.bounding_box().min.Z == pytest.approx(5.1)
     assert pusher.bounding_box().max.Z == pytest.approx(125.35)
     assert base.bounding_box().min.Z == pytest.approx(-12.8)
-    assert tuple(base.bounding_box().size)[:2] == pytest.approx((60, 132))
+    assert tuple(base.bounding_box().size)[:2] == pytest.approx((60, 120))
+    assert base.bounding_box().min.Y == pytest.approx(10)
+    assert base.bounding_box().max.Y == pytest.approx(130)
+    assert keeper.bounding_box().min.Y == pytest.approx(31)
+    assert keeper.bounding_box().max.Y == pytest.approx(49)
     assert DIMENSIONS.extension == pytest.approx(48)
-    assert len(SCREW_AXES_MM) == 4
+    assert DIMENSIONS.prong_shortening == pytest.approx(6.5)
+    assert DIMENSIONS.flexible_beam_length == pytest.approx(65.5)
+    assert DIMENSIONS.keeper_back_shift == pytest.approx(3)
+    assert SCREW_AXES_MM == (
+        (-26.0, 35.5),
+        (26.0, 35.5),
+        (-26.0, 44.5),
+        (26.0, 44.5),
+    )
+    assert _overlap_volume(base, keeper) < 1e-6
 
 
 def test_base_has_two_identical_60_mm_pitch_underbody_anchors():
@@ -99,7 +237,7 @@ def test_front_connectors_reuse_shared_native_panel_brep():
     source = make_bidirectional_panel_connector()
     assert source.bounding_box().min.Z == pytest.approx(-12.8)
     assert source.bounding_box().max.Z == pytest.approx(2)
-    front_y = -DIMENSIONS.wall_thickness
+    front_y = -DIMENSIONS.wall_thickness + DIMENSIONS.pusher_y_offset
     for height in CONNECTOR_CENTRES_ABOVE_PUSHER_FLOOR_MM:
         connector = source.rotate(Axis.X, -90).moved(
             Location(
@@ -115,26 +253,26 @@ def test_front_connectors_reuse_shared_native_panel_brep():
         assert _overlap_volume(connector, pusher) == pytest.approx(connector.volume)
 
 
-def test_moving_wall_thickens_outward_without_moving_rear_datum():
+def test_compact_pusher_offset_preserves_wall_thickness():
     _, pusher, _ = make_trunk_blocker_parts(TrunkBlockerSpec(extension_mm=0))
     wall_only = pusher.intersect(
-        Location((20, -20, 64))
+        Location((20, -2, 64))
         * Box(
             5,
-            22,
+            10,
             2,
             align=(Align.MIN, Align.MIN, Align.MIN),
         )
     )
     bounds = Part(wall_only.solids()).bounding_box()
-    assert bounds.min.Y == pytest.approx(-8)
-    assert bounds.max.Y == pytest.approx(0)
+    assert bounds.min.Y == pytest.approx(-1.5)
+    assert bounds.max.Y == pytest.approx(6.5)
     assert bounds.size.Y == pytest.approx(DIMENSIONS.wall_thickness)
 
 
 def test_outer_fingers_have_three_equal_pitch_exposed_teeth():
     _, pusher, _ = make_trunk_blocker_parts(TrunkBlockerSpec(extension_mm=0))
-    assert MOVING_TOOTH_STATIONS_MM == (104.0, 112.0, 120.0)
+    assert MOVING_TOOTH_STATIONS_MM == (97.5, 105.5, 113.5)
     outer_edge = DIMENSIONS.outer_centre + DIMENSIONS.outer_width / 2
     for side in (-1, 1):
         x0, x1 = sorted(
@@ -152,8 +290,96 @@ def test_outer_fingers_have_three_equal_pitch_exposed_teeth():
         exposed = pusher.intersect(cutter)
         assert len(exposed.solids()) == 3
         lock_planes = sorted(solid.bounding_box().max.Y for solid in exposed.solids())
+        assert lock_planes == pytest.approx((104.5, 112.5, 120.5))
         assert np.diff(lock_planes) == pytest.approx((8, 8))
         assert all(solid.bounding_box().size.Z == pytest.approx(14) for solid in exposed.solids())
+
+
+def test_centre_squeeze_tab_continues_centre_prong_and_clip_has_one_side_bed_face():
+    _, pusher, _ = make_trunk_blocker_parts()
+    for side in (-1, 1):
+        side_x = side * DIMENSIONS.centre_width / 2
+        continuous_side_faces = []
+        for face in pusher.faces():
+            if face.geom_type != GeomType.PLANE:
+                continue
+            bounds = face.bounding_box()
+            if (
+                bounds.min.X == pytest.approx(side_x, abs=1e-6)
+                and bounds.max.X == pytest.approx(side_x, abs=1e-6)
+                and bounds.max.Y > DIMENSIONS.pad_start - 24
+            ):
+                continuous_side_faces.append(face)
+        assert len(continuous_side_faces) == 1
+        bounds = continuous_side_faces[0].bounding_box()
+        assert bounds.max.X == pytest.approx(side_x, abs=1e-6)
+        assert bounds.max.Y == pytest.approx(
+            DIMENSIONS.pad_start
+            + DIMENSIONS.pad_length
+            + DIMENSIONS.pusher_y_offset
+            - TrunkBlockerSpec().extension_mm
+            - DETAIL_EDGE_RADIUS_MM
+        )
+        assert bounds.max.Z > DIMENSIONS.pad_top
+
+    clip = make_trunk_blocker_prong_lock_clip()
+    assert clip.is_valid and len(clip.solids()) == 1
+    bed_y = clip.bounding_box().min.Y
+    bed_faces = [
+        face
+        for face in clip.faces()
+        if face.geom_type == GeomType.PLANE
+        and face.normal_at().Y < -0.99
+        and face.bounding_box().min.Y == pytest.approx(bed_y, abs=1e-6)
+        and face.bounding_box().max.Y == pytest.approx(bed_y, abs=1e-6)
+    ]
+    assert len(bed_faces) == 1
+    assert bed_faces[0].area == pytest.approx(486.31699101150593)
+    assert bed_faces[0].bounding_box().min.Z == pytest.approx(6.6)
+    assert bed_faces[0].bounding_box().max.Z == pytest.approx(50.5)
+    assert PRONG_LOCK_CLIP_DIMENSIONS.leg_lateral_clearance == 0
+    assert PRONG_LOCK_CLIP_DIMENSIONS.side_clearance == pytest.approx(0.05)
+    assert PRONG_LOCK_CLIP_DIMENSIONS.top_clearance == pytest.approx(0.05)
+    assert (
+        DIMENSIONS.pad_inner
+        - DIMENSIONS.centre_width / 2
+        - 2 * PRONG_LOCK_CLIP_DIMENSIONS.leg_lateral_clearance
+    ) == pytest.approx(6.3)
+    assert PRONG_LOCK_CLIP_DIMENSIONS.collar_y_clearance == pytest.approx(0.1)
+    assert PRONG_LOCK_CLIP_DIMENSIONS.collar_rear_y_clearance == pytest.approx(0.8)
+    assert (
+        PRONG_LOCK_CLIP_DIMENSIONS.collar_y_clearance
+        + PRONG_LOCK_CLIP_DIMENSIONS.collar_rear_y_clearance
+    ) == pytest.approx(0.9)
+    assert (DIMENSIONS.pad_start - PRONG_LOCK_CLIP_DIMENSIONS.collar_y_clearance) == pytest.approx(
+        106.4
+    )
+    assert (
+        DIMENSIONS.pad_start
+        + DIMENSIONS.pad_length
+        + PRONG_LOCK_CLIP_DIMENSIONS.collar_rear_y_clearance
+    ) == pytest.approx(118.3)
+    assert PRONG_LOCK_CLIP_DIMENSIONS.loop_inner_width == 24
+    assert PRONG_LOCK_CLIP_DIMENSIONS.loop_inner_height == 19
+    assert (
+        DIMENSIONS.locking_engagement - PRONG_LOCK_CLIP_DIMENSIONS.side_clearance
+    ) == pytest.approx(2.95)
+    assert (
+        PRONG_LOCK_CLIP_DIMENSIONS.loop_outer_width - PRONG_LOCK_CLIP_DIMENSIONS.loop_inner_width
+    ) / 2 == pytest.approx(6)
+    assert PRONG_LOCK_CLIP_DIMENSIONS.loop_bottom_band == pytest.approx(7)
+    assert (
+        PRONG_LOCK_CLIP_DIMENSIONS.loop_outer_height
+        - PRONG_LOCK_CLIP_DIMENSIONS.loop_bottom_band
+        - PRONG_LOCK_CLIP_DIMENSIONS.loop_inner_height
+    ) == pytest.approx(5)
+    cylindrical_radii = [
+        BRepAdaptor_Surface(face.wrapped).Cylinder().Radius()
+        for face in clip.faces()
+        if face.geom_type == GeomType.CYLINDER
+    ]
+    assert sum(radius == pytest.approx(3) for radius in cylindrical_radii) == 8
+    assert _edge_continuity_counts(clip).get("C0", 0) == 0
 
 
 @pytest.mark.slow
@@ -191,8 +417,8 @@ def test_matched_ratchet_ramps_contact_and_clear_through_one_pitch():
     assert sweep["minimum_sampled_release_margin_mm"] > 0.69
     end = proof["end_retention_and_release"]
     assert end["last_lock_extension_mm"] == 48
-    assert end["carrier_contact_extension_mm"] == 52
-    assert end["controlled_overtravel_after_last_lock_mm"] == 4
+    assert end["carrier_contact_extension_mm"] == 49
+    assert end["controlled_overtravel_after_last_lock_mm"] == 1
     assert end["carrier_contact_is_lock_position"] is False
     assert end["maximum_required_inward_cam_displacement_mm"] < 3.01
     assert end["released_overlap_after_0p001_mm_beyond_contact_mm3"] > 0.01
@@ -213,7 +439,8 @@ def test_approved_outer_assembly_shift_preserves_released_clearances():
     assert DIMENSIONS.release_stroke == 3.7
     assert DIMENSIONS.pad_inner == 11.3
     assert DIMENSIONS.pad_outer == 20.3
-    assert DIMENSIONS.pad_start == 113
+    assert DIMENSIONS.pad_reference_start == 113
+    assert DIMENSIONS.pad_start == 106.5
     assert DIMENSIONS.pad_length == 11
     released_finger_inner = (
         DIMENSIONS.outer_centre - DIMENSIONS.outer_width / 2 - DIMENSIONS.release_stroke
@@ -228,18 +455,57 @@ def test_plain_front_centre_guides_bound_rigid_yaw_without_preloading_fingers():
     parts = make_trunk_blocker_parts()
     _, pusher, _ = parts
     proof = _guide_proofs(parts)
-    assert DIMENSIONS.guide_start == 4
-    assert DIMENSIONS.guide_end == 45
+    assert DIMENSIONS.guide_start == 13.5
+    assert DIMENSIONS.guide_end == 48
     assert proof["architecture"] == "two plain rectangular side walls"
-    assert proof["span_y_mm"] == [4, 45]
+    assert proof["span_y_mm"] == [13.5, 48]
     assert proof["wall_width_mm"] == pytest.approx(2.35)
-    assert proof["wall_length_mm"] == pytest.approx(41)
+    assert proof["wall_length_mm"] == pytest.approx(34.5)
     assert proof["exposed_height_mm"] == pytest.approx(11.85)
     assert proof["uniform_top_z_mm"] == pytest.approx(16.85)
     assert proof["inward_caps_or_overhangs"] is False
     assert proof["centre_channel_width_mm"] == pytest.approx(10.2)
     assert proof["centre_finger_clearance_each_side_mm"] == pytest.approx(0.1)
     assert proof["fully_released_outer_finger_clearance_mm"] == pytest.approx(0.15)
+    outer = proof["outer_prong_guides"]
+    assert DIMENSIONS.finger_guide_clearance == pytest.approx(0.1)
+    assert DIMENSIONS.outer_guide_inner == pytest.approx(20.4)
+    assert outer["span_y_mm"] == [12, 48]
+    assert outer["inner_faces_x_mm"] == pytest.approx([-20.4, 20.4])
+    assert outer["nominal_relaxed_clearance_each_side_mm"] == pytest.approx(0.1)
+    assert outer["released_tooth_tip_clearance_mm"] == pytest.approx(0.3)
+    assert outer["inward_caps_or_overhangs"] is False
+    assert all(row["inner_working_face_count"] == 1 for row in outer["pads"])
+    assert all(row["continuous_top_plane_count"] == 1 for row in outer["pads"])
+    assert all(row["x24_wall_face_remnant_count"] == 0 for row in outer["pads"])
+    assert all(row["wall_junction_cylinder_count"] == 0 for row in outer["pads"])
+    assert all(row["inner_working_face_edge_continuities"] == {"G1": 4} for row in outer["pads"])
+    assert outer["front_planar_face_count"] == 1
+    assert np.array(outer["front_planar_face_bounds_mm"])[:, 0] == pytest.approx([-28, 28])
+    assert outer["front_x24_edge_count"] == 0
+    assert outer["x24_pad_region_c0_seam_edges"] == []
+    assert [row["face_count"] for row in outer["front_top_r2_rounds"]] == [1, 1]
+    unification = outer["same_domain_unification"]
+    assert unification["before_face_count"] == unification["after_face_count"]
+    assert unification["before_edge_count"] == unification["after_edge_count"]
+    assert unification["after_face_count"] == unification["reunified_face_count"]
+    assert unification["after_edge_count"] == unification["reunified_edge_count"]
+    assert unification["reunified_symmetric_brep_difference_mm3"] < 1e-6
+    for row in outer["pads"]:
+        bounds = np.array(row["inner_working_face_bounds_mm"])
+        assert bounds[:, 1] == pytest.approx([12, 48])
+        assert bounds[:, 2] == pytest.approx([6, 15.85])
+    play = proof["rigid_last_lock_play_comparison"]
+    assert play["extension_mm"] == 48
+    assert play["tooth_stations_y_mm"] == pytest.approx([56, 64, 72])
+    before = play["centre_guide_only"]
+    after = play["centre_and_outer_guides"]
+    assert before["nominal_peak_to_peak_lateral_translation_mm"] == pytest.approx(0.2)
+    assert after["nominal_peak_to_peak_lateral_translation_mm"] == pytest.approx(0.2)
+    assert after["maximum_yaw_degrees"] < before["maximum_yaw_degrees"]
+    assert [
+        row["peak_to_peak_lateral_play_mm"] for row in after["tooth_station_yaw_excursions"]
+    ] == pytest.approx([0.2897996179, 0.3789687311, 0.4681378443])
     seat = proof["guide_static_keeper_seat"]
     assert seat["keeper_underside_z_mm"] == pytest.approx(16.85)
     assert seat["surface_contact_expected"] is True
@@ -255,7 +521,7 @@ def test_plain_front_centre_guides_bound_rigid_yaw_without_preloading_fingers():
     assert vertical["total_nominal_clearance_mm"] == pytest.approx(0.2)
     assert all(overlap < 1e-6 for overlap in vertical["former_pad_region_overlap_volumes_mm3"])
     assert np.array(vertical["flat_floor_passage_ranges_x_mm"]) == pytest.approx(
-        np.array([[-20.8, -7.45], [-5.1, 5.1], [7.45, 20.8]])
+        np.array([[-20.4, -7.45], [-5.1, 5.1], [7.45, 20.4]])
     )
     for x0, x1 in ((-20.3, -11.3), (-5, 5), (11.3, 20.3)):
         probe = Location((x0, 25, 4)) * Box(
@@ -269,7 +535,7 @@ def test_plain_front_centre_guides_bound_rigid_yaw_without_preloading_fingers():
         assert section.bounding_box().max.Z == pytest.approx(16.75)
         assert section.bounding_box().size.Z == pytest.approx(11.65)
     assert proof["selected_front_edge_to_guide_start_land_mm"] == pytest.approx(1.5)
-    assert proof["minimum_continuous_centre_overlap_mm"] == pytest.approx(41)
+    assert proof["minimum_continuous_centre_overlap_mm"] == pytest.approx(34.5)
     assert proof["rigid_centre_finger_guide_only_yaw_limit_degrees"] < 0.5
     assert all(row["missing_from_base_mm3"] < 1e-6 for row in proof["walls"])
 
@@ -284,7 +550,7 @@ def test_pusher_bed_facing_underside_is_coplanar_with_fingers(released):
     assert proof["world_bed_plane_z_mm"] == pytest.approx(5.1)
     assert proof["downward_planar_face_count_within_0p5_mm"] == 1
     face = proof["downward_planar_faces_within_0p5_mm"][0]
-    assert face["area_mm2"] > 3300
+    assert face["area_mm2"] > 3200
     assert np.array(face["bounds_mm"])[:, 2] == pytest.approx([5.1, 5.1], abs=1e-6)
     assert proof["minimum_vertical_gap_to_base_floor_mm"] == pytest.approx(0.1)
     assert proof["minimum_vertical_gap_to_mat_z0_mm"] == pytest.approx(5.1)
@@ -308,7 +574,8 @@ def test_tall_squeeze_pads_clear_normal_travel_and_require_keeper_off_for_remova
     assert revision["pad_count"] == 3
     assert DIMENSIONS.pad_height == 24
     assert revision["pad_height_mm"] == 24
-    assert revision["pad_width_mm"] == 9
+    assert revision["outer_pad_width_mm"] == 9
+    assert revision["centre_pad_width_mm"] == 10
     assert revision["pad_length_mm"] == 11
     assert revision["finger_height_mm"] == pytest.approx(11.65)
     assert revision["finger_top_above_pusher_floor_mm"] == pytest.approx(11.4)
@@ -318,11 +585,10 @@ def test_tall_squeeze_pads_clear_normal_travel_and_require_keeper_off_for_remova
     assert revision["pad_top_edge_radius_mm"] == 1
     assert revision["base_brep_difference_from_short_pad_revision_mm3"] < 1e-6
     assert revision["pusher_brep_difference_outside_pad_top_regions_mm3"] < 1e-6
-    assert revision["translated_pad_brep_difference_mm3"] < 1e-6
     assert revision["middle_pad_root_overlap_mm3"] > 0
     assert revision["middle_pad_missing_from_pusher_mm3"] < 1e-6
     assert len(revision["outer_pad_release_sweep"]) == 38
-    assert revision["minimum_outer_to_middle_pad_clearance_mm"] == pytest.approx(3.1)
+    assert revision["minimum_outer_to_middle_pad_clearance_mm"] == pytest.approx(2.6)
     assert all(
         overlap < 1e-6
         for row in revision["outer_pad_release_sweep"]
@@ -331,7 +597,7 @@ def test_tall_squeeze_pads_clear_normal_travel_and_require_keeper_off_for_remova
 
     normal = proof["normal_adjustment"]
     assert normal["extension_range_mm"] == [0, 48]
-    assert normal["minimum_pad_to_keeper_longitudinal_gap_mm"] == 19
+    assert normal["minimum_pad_to_keeper_longitudinal_gap_mm"] == 16
     assert len(normal["poses_checked"]) == 14
     assert all(row["base_overlap_volume_mm3"] < 1e-6 for row in normal["poses_checked"])
     assert all(row["keeper_overlap_volume_mm3"] < 1e-6 for row in normal["poses_checked"])
@@ -339,10 +605,10 @@ def test_tall_squeeze_pads_clear_normal_travel_and_require_keeper_off_for_remova
     installed = proof["keeper_installed_withdrawal"]
     assert installed["supported"] is False
     assert installed["last_lock_extension_mm"] == 48
-    assert installed["carrier_contact_extension_mm"] == 52
-    assert installed["controlled_overtravel_after_last_lock_mm"] == 4
+    assert installed["carrier_contact_extension_mm"] == 49
+    assert installed["controlled_overtravel_after_last_lock_mm"] == 1
     assert installed["carrier_contact_is_lock_position"] is False
-    assert installed["first_checked_blocking_overrun_mm"] == pytest.approx(4.001)
+    assert installed["first_checked_blocking_overrun_mm"] == pytest.approx(1.001)
     assert installed["blocking_overlap_volume_mm3"] > 0.01
     removed = proof["keeper_removed_withdrawal"]
     assert removed["supported"] is True
@@ -357,9 +623,9 @@ def test_tooth_carriers_stop_overtravel_even_when_released():
         TrunkBlockerSpec(48, released_illustration=True)
     )
     for pusher, stop in ((relaxed, keeper), (released, released_keeper)):
-        before = pusher.moved(Location((0, -3.999, 0)))
-        contact = pusher.moved(Location((0, -4.0, 0)))
-        beyond = pusher.moved(Location((0, -4.001, 0)))
+        before = pusher.moved(Location((0, -0.999, 0)))
+        contact = pusher.moved(Location((0, -1.0, 0)))
+        beyond = pusher.moved(Location((0, -1.001, 0)))
         assert _overlap_volume(before, stop) < 1e-6
         assert _overlap_volume(contact, stop) < 1e-6
         assert contact.distance_to(stop) < 1e-9
@@ -444,7 +710,7 @@ def test_feature_ordered_rounding_preserves_working_regions_and_finger_sections(
     radius_counts = proof["cylindrical_face_radius_counts_mm"]
     assert radius_counts["fixed_base"]["2"] >= 36
     assert radius_counts["moving_wall"]["2"] >= 33
-    assert radius_counts["moving_wall"]["1"] == 55
+    assert radius_counts["moving_wall"]["1"] == 53
     assert radius_counts["short_screwed_keeper"]["1"] >= 6
     assert all(counts["G1"] > 0 for counts in proof["adjacent_edge_continuity_counts"].values())
     sections = proof["finger_cross_sections"]
@@ -554,7 +820,7 @@ def test_complete_export_is_native_step_first_and_refuses_overwrite(tmp_path: Pa
     assert ratchet["profile"]["full_release_tip_clearance_mm"] == pytest.approx(0.7)
     assert len(ratchet["backload_contact_positions"]) == 7
     disassembly = manifest["geometry"]["adjustment_and_disassembly"]
-    assert disassembly["normal_adjustment"]["minimum_pad_to_keeper_longitudinal_gap_mm"] == 19
+    assert disassembly["normal_adjustment"]["minimum_pad_to_keeper_longitudinal_gap_mm"] == 16
     assert disassembly["keeper_installed_withdrawal"]["supported"] is False
     assert disassembly["keeper_removed_withdrawal"]["supported"] is True
     assert manifest["export"]["primary_format"] == "STEP"

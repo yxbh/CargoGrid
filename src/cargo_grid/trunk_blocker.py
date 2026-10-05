@@ -7,6 +7,7 @@ shared bidirectional native-BREP panel connector.
 """
 
 from dataclasses import dataclass
+from functools import lru_cache
 from math import atan, cos, degrees, isfinite, radians, sin, sqrt, tan
 
 from build123d import (
@@ -25,12 +26,22 @@ from build123d import (
     Plane,
     Polygon,
     Pos,
+    RectangleRounded,
     Spline,
     ThreePointArc,
     Wire,
     extrude,
     fillet,
 )
+from OCP.BRep import BRep_Builder, BRep_Tool
+from OCP.GeomAbs import GeomAbs_C0, GeomAbs_G1
+from OCP.OCP.collections import (
+    IndexedDataMap_TopoDS_Shape_List_TopoDS_Shape_TopTools_ShapeMapHasher,
+)
+from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
+from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE
+from OCP.TopExp import TopExp
+from OCP.TopoDS import TopoDS
 
 from cargo_grid.accessories import make_bidirectional_panel_connector
 
@@ -38,12 +49,14 @@ from cargo_grid.accessories import make_bidirectional_panel_connector
 @dataclass(frozen=True)
 class TrunkBlockerDimensions:
     width: float = 60.0
-    base_length: float = 132.0
+    base_start: float = 10.0
+    base_length: float = 120.0
     floor: float = 5.0
     floor_gap: float = 0.35
     wall_height: float = 120.0
     wall_thickness: float = 8.0
-    finger_length: float = 124.0
+    finger_reference_length: float = 124.0
+    prong_shortening: float = 6.5
     outer_width: float = 9.0
     outer_centre: float = 15.8
     centre_width: float = 10.0
@@ -65,15 +78,17 @@ class TrunkBlockerDimensions:
     moving_tooth_root: float = 17.8
     moving_tooth_depth: float = 6.0
     tooth_height: float = 14.0
+    moving_tooth_reference_stations: tuple[float, float, float] = (104.0, 112.0, 120.0)
     ratchet_ramp_radial_per_axial: float = 4.0 / 3.0
     rack_lock_offset: float = 0.7
     moving_lock_offset: float = 0.5
     tooth_tip_land: float = 2.0
-    moving_carrier_start: float = 98.0
-    moving_carrier_end: float = 123.0
+    moving_carrier_reference_start: float = 98.0
+    moving_carrier_reference_end: float = 123.0
     release_stroke: float = 3.7
-    release_transition_end: float = 96.0
-    keeper_start: float = 28.0
+    release_transition_reference_end: float = 96.0
+    keeper_reference_start: float = 28.0
+    keeper_back_shift: float = 3.0
     keeper_length: float = 18.0
     keeper_gap: float = 0.5
     keeper_roof_bottom: float = 22.0
@@ -82,13 +97,14 @@ class TrunkBlockerDimensions:
     keeper_outer_inner: float = 17.2
     pad_inner: float = 11.3
     pad_outer: float = 20.3
-    pad_start: float = 113.0
+    pad_reference_start: float = 113.0
     pad_length: float = 11.0
     pad_height: float = 24.0
     guide_inner: float = 5.1
     guide_outer: float = 7.45
-    guide_start: float = 4.0
-    guide_end: float = 45.0
+    guide_start: float = 13.5
+    guide_reference_end: float = 45.0
+    outer_guide_start: float = 12.0
     guide_top: float = 16.85
     keeper_seat_z: float = 16.85
     keeper_width: float = 61.6
@@ -107,6 +123,90 @@ class TrunkBlockerDimensions:
     anchor_lobe_centre: float = 14.344
     anchor_lobe_radius: float = 7.856
     anchor_notch_radius: float = 6.215
+
+    @property
+    def base_end(self) -> float:
+        return self.base_start + self.base_length
+
+    @property
+    def finger_length(self) -> float:
+        return self.finger_reference_length - self.prong_shortening
+
+    @property
+    def moving_tooth_stations(self) -> tuple[float, float, float]:
+        return tuple(
+            station - self.prong_shortening for station in self.moving_tooth_reference_stations
+        )
+
+    @property
+    def rack_tooth_stations(self) -> tuple[float, ...]:
+        return tuple(
+            self.moving_tooth_reference_stations[0] - self.extension + index * self.pitch
+            for index in range(self.positions + 2)
+        )
+
+    @property
+    def moving_carrier_start(self) -> float:
+        return self.moving_carrier_reference_start - self.prong_shortening
+
+    @property
+    def moving_carrier_end(self) -> float:
+        return self.moving_carrier_reference_end - self.prong_shortening
+
+    @property
+    def release_transition_end(self) -> float:
+        return self.release_transition_reference_end - self.prong_shortening
+
+    @property
+    def keeper_start(self) -> float:
+        return self.keeper_reference_start + self.keeper_back_shift
+
+    @property
+    def keeper_end(self) -> float:
+        return self.keeper_start + self.keeper_length
+
+    @property
+    def pad_start(self) -> float:
+        return self.pad_reference_start - self.prong_shortening
+
+    @property
+    def guide_end(self) -> float:
+        return self.guide_reference_end + self.keeper_back_shift
+
+    @property
+    def finger_guide_clearance(self) -> float:
+        return self.guide_inner - self.centre_width / 2
+
+    @property
+    def outer_guide_inner(self) -> float:
+        return self.outer_centre + self.outer_width / 2 + self.finger_guide_clearance
+
+    @property
+    def outer_guide_end(self) -> float:
+        return self.guide_end
+
+    @property
+    def outer_guide_tool_end(self) -> float:
+        return self.outer_guide_end + DETAIL_EDGE_RADIUS_MM
+
+    @property
+    def outer_guide_tool_outer(self) -> float:
+        return self.rack_wall_inner + 2 * DETAIL_EDGE_RADIUS_MM
+
+    @property
+    def screw_axes(self) -> tuple[tuple[float, float], ...]:
+        return tuple(
+            (x, y + self.keeper_back_shift)
+            for x, y in ((-26.0, 32.5), (26.0, 32.5), (-26.0, 41.5), (26.0, 41.5))
+        )
+
+    @property
+    def pusher_y_offset(self) -> float:
+        return self.prong_shortening
+
+    @property
+    def flexible_beam_length(self) -> float:
+        return self.release_transition_end - self.reinforcement_length
 
     @property
     def extension(self) -> float:
@@ -202,8 +302,9 @@ class TrunkBlockerDimensions:
 
 DIMENSIONS = TrunkBlockerDimensions()
 BASE_ANCHOR_CENTRES_Y_MM = DIMENSIONS.base_anchor_centres_y
-MOVING_TOOTH_STATIONS_MM = (104.0, 112.0, 120.0)
-SCREW_AXES_MM = ((-26.0, 32.5), (26.0, 32.5), (-26.0, 41.5), (26.0, 41.5))
+MOVING_TOOTH_STATIONS_MM = DIMENSIONS.moving_tooth_stations
+RACK_TOOTH_STATIONS_MM = DIMENSIONS.rack_tooth_stations
+SCREW_AXES_MM = DIMENSIONS.screw_axes
 CONNECTOR_CENTRES_ABOVE_PUSHER_FLOOR_MM = (30.0, 90.0)
 FREE_EDGE_RADIUS_MM = 2.0
 DETAIL_EDGE_RADIUS_MM = 1.0
@@ -231,6 +332,35 @@ class TrunkBlockerSpec:
             raise ValueError("released illustration must be a boolean")
 
 
+@dataclass(frozen=True)
+class TrunkBlockerProngLockClipDimensions:
+    side_clearance: float = 0.05
+    leg_lateral_clearance: float = 0.0
+    top_clearance: float = 0.05
+    floor_clearance: float = 0.6
+    bar_start: float = 101.0
+    bar_thickness: float = 3.0
+    lift_wing_overhang: float = 2.0
+    round_radius: float = 1.0
+    collar_y_clearance: float = 0.1
+    collar_rear_y_clearance: float = 0.8
+    collar_rear_bar_thickness: float = 3.0
+    leg_root_relief_height: float = 2.5
+    loop_depth: float = 8.0
+    loop_outer_width: float = 36.0
+    loop_outer_height: float = 31.0
+    loop_inner_width: float = 24.0
+    loop_inner_height: float = 19.0
+    loop_outer_corner_radius: float = 4.0
+    loop_inner_corner_radius: float = 5.0
+    loop_inner_edge_radius: float = 3.0
+    loop_bar_overlap: float = 1.9
+    loop_bottom_band: float = 7.0
+
+
+PRONG_LOCK_CLIP_DIMENSIONS = TrunkBlockerProngLockClipDimensions()
+
+
 def _block(x0: float, x1: float, y0: float, y1: float, z0: float, z1: float) -> Part:
     return Pos(x0, y0, z0) * Box(
         x1 - x0,
@@ -246,6 +376,100 @@ def _prism(points: list[tuple[float, float]], z0: float, height: float) -> Part:
         amount=height,
         dir=(0, 0, 1),
     )
+
+
+def _clip_locating_wall(
+    side: int,
+    *,
+    y0: float,
+    y1: float,
+    z0: float,
+    transition_start: float,
+    transition_end: float,
+    centre_outer: float,
+    gap_outer: float,
+    lateral_clearance: float,
+    root_clearance: float,
+) -> Part:
+    inner_wide = centre_outer + lateral_clearance
+    outer_wide = gap_outer - lateral_clearance
+    inner_narrow = centre_outer + root_clearance
+    outer_narrow = gap_outer - root_clearance
+    points = {
+        "inner_bottom": (inner_wide, y0, z0),
+        "outer_bottom": (outer_wide, y0, z0),
+        "outer_transition_start": (outer_wide, y0, transition_start),
+        "outer_transition_end": (outer_narrow, y0, transition_end),
+        "inner_transition_end": (inner_narrow, y0, transition_end),
+        "inner_transition_start": (inner_wide, y0, transition_start),
+    }
+    edges = []
+    for edge in (
+        Line(points["inner_bottom"], points["outer_bottom"]),
+        Line(points["outer_bottom"], points["outer_transition_start"]),
+        Spline(
+            points["outer_transition_start"],
+            points["outer_transition_end"],
+            tangents=((0, 0, 1), (0, 0, 1)),
+        ),
+        Line(points["outer_transition_end"], points["inner_transition_end"]),
+        Spline(
+            points["inner_transition_end"],
+            points["inner_transition_start"],
+            tangents=((0, 0, -1), (0, 0, -1)),
+        ),
+        Line(points["inner_transition_start"], points["inner_bottom"]),
+    ):
+        edges.extend(edge.edges())
+    wall = extrude(Face(Wire(edges)), amount=y1 - y0, dir=(0, 1, 0))
+    return wall if side == 1 else wall.mirror(Plane.YZ)
+
+
+def _clip_rear_crossbar(
+    *,
+    y0: float,
+    y1: float,
+    z0: float,
+    z1: float,
+    transition_start: float,
+    transition_end: float,
+    gap_outer: float,
+    lateral_clearance: float,
+    root_clearance: float,
+) -> Part:
+    outer_wide = gap_outer - lateral_clearance
+    outer_narrow = gap_outer - root_clearance
+    points = {
+        "left_bottom": (-outer_wide, y0, z0),
+        "right_bottom": (outer_wide, y0, z0),
+        "right_transition_start": (outer_wide, y0, transition_start),
+        "right_transition_end": (outer_narrow, y0, transition_end),
+        "right_top": (outer_narrow, y0, z1),
+        "left_top": (-outer_narrow, y0, z1),
+        "left_transition_end": (-outer_narrow, y0, transition_end),
+        "left_transition_start": (-outer_wide, y0, transition_start),
+    }
+    edges = []
+    for edge in (
+        Line(points["left_bottom"], points["right_bottom"]),
+        Line(points["right_bottom"], points["right_transition_start"]),
+        Spline(
+            points["right_transition_start"],
+            points["right_transition_end"],
+            tangents=((0, 0, 1), (0, 0, 1)),
+        ),
+        Line(points["right_transition_end"], points["right_top"]),
+        Line(points["right_top"], points["left_top"]),
+        Line(points["left_top"], points["left_transition_end"]),
+        Spline(
+            points["left_transition_end"],
+            points["left_transition_start"],
+            tangents=((0, 0, -1), (0, 0, -1)),
+        ),
+        Line(points["left_transition_start"], points["left_bottom"]),
+    ):
+        edges.extend(edge.edges())
+    return extrude(Face(Wire(edges)), amount=y1 - y0, dir=(0, 1, 0))
 
 
 def _axis_bounds(edge: Edge, axis: str) -> tuple[float, float]:
@@ -280,6 +504,57 @@ def _fillet_exact(
     if not rounded.is_valid or len(rounded.solids()) != 1:
         raise ValueError(f"{feature} fillet did not produce one valid solid")
     return rounded
+
+
+def _c0_edges(part: Part) -> list[Edge]:
+    edge_faces = IndexedDataMap_TopoDS_Shape_List_TopoDS_Shape_TopTools_ShapeMapHasher()
+    TopExp.MapShapesAndAncestors_s(
+        part.wrapped,
+        TopAbs_EDGE,
+        TopAbs_FACE,
+        edge_faces,
+    )
+    result = []
+    for index in range(1, edge_faces.Extent() + 1):
+        faces = edge_faces.FindFromIndex(index)
+        if faces.Extent() != 2:
+            continue
+        edge = TopoDS.Edge(edge_faces.FindKey(index))
+        if (
+            BRep_Tool.Continuity_s(
+                edge,
+                TopoDS.Face(faces.First()),
+                TopoDS.Face(faces.Last()),
+            )
+            == GeomAbs_C0
+        ):
+            result.append(Edge(edge))
+    return result
+
+
+def _mark_geometrically_tangent_edges(part: Part) -> None:
+    edge_faces = IndexedDataMap_TopoDS_Shape_List_TopoDS_Shape_TopTools_ShapeMapHasher()
+    TopExp.MapShapesAndAncestors_s(
+        part.wrapped,
+        TopAbs_EDGE,
+        TopAbs_FACE,
+        edge_faces,
+    )
+    builder = BRep_Builder()
+    for edge in _c0_edges(part):
+        faces = edge_faces.FindFromKey(edge.wrapped)
+        if faces.Extent() != 2:
+            continue
+        first = Face(TopoDS.Face(faces.First()))
+        second = Face(TopoDS.Face(faces.Last()))
+        point = edge.center()
+        if abs(abs(first.normal_at(point).dot(second.normal_at(point))) - 1) < 1e-6:
+            builder.Continuity(
+                edge.wrapped,
+                first.wrapped,
+                second.wrapped,
+                GeomAbs_G1,
+            )
 
 
 def _round_finger(
@@ -397,12 +672,132 @@ def _guide_wall(
     )
 
 
+@lru_cache(maxsize=4)
+def _outer_guide_pad(
+    side: int,
+    d: TrunkBlockerDimensions = DIMENSIONS,
+) -> Part:
+    x0, x1 = sorted((side * d.outer_guide_inner, side * d.outer_guide_tool_outer))
+    pad = _block(
+        x0,
+        x1,
+        d.base_start,
+        d.outer_guide_tool_end,
+        d.floor,
+        d.guide_top,
+    )
+    inner_overlap_x = side * (d.outer_guide_inner + DETAIL_EDGE_RADIUS_MM)
+    overlap_x0, overlap_x1 = sorted((inner_overlap_x, side * d.outer_guide_tool_outer))
+    pad += _block(
+        overlap_x0,
+        overlap_x1,
+        d.outer_guide_start + DETAIL_EDGE_RADIUS_MM,
+        d.outer_guide_end - DETAIL_EDGE_RADIUS_MM,
+        d.floor - d.finger_guide_clearance,
+        d.floor + d.finger_guide_clearance,
+    )
+    return pad
+
+
+def _outer_guide_floor_relief(
+    side: int,
+    d: TrunkBlockerDimensions = DIMENSIONS,
+) -> Part:
+    radius = DETAIL_EDGE_RADIUS_MM
+    inner = side * d.outer_guide_inner
+    solid_centre_x = side * (d.outer_guide_inner + radius)
+    passage_x = side * (d.outer_guide_inner - radius)
+    x0, x1 = sorted((inner, solid_centre_x))
+    relief_end = d.outer_guide_tool_end + radius
+    length = relief_end - d.base_start
+    corner = _block(
+        x0,
+        x1,
+        d.base_start,
+        relief_end,
+        d.floor,
+        d.floor + radius,
+    )
+    tangent_quarter = (
+        Cylinder(
+            radius,
+            length,
+            align=(Align.CENTER, Align.CENTER, Align.MIN),
+        )
+        .rotate(Axis.X, -90)
+        .moved(Location((solid_centre_x, d.base_start, d.floor + radius)))
+    )
+    intrusion_x0, intrusion_x1 = sorted((passage_x, inner))
+    intrusion = _block(
+        intrusion_x0,
+        intrusion_x1,
+        d.base_start,
+        relief_end,
+        d.floor,
+        d.floor + radius,
+    )
+    return intrusion + corner.cut(tangent_quarter)
+
+
+def _unify_same_domain(part: Part) -> Part:
+    unifier = ShapeUpgrade_UnifySameDomain(part.wrapped, True, True, False)
+    unifier.Build()
+    unified_shape = Part(unifier.Shape())
+    unified = Part(unified_shape.solids())
+    if not unified.is_valid or len(unified.solids()) != 1:
+        raise ValueError("same-domain base unification failed")
+    return unified
+
+
+def _mark_outer_guide_tangency(
+    part: Part,
+    d: TrunkBlockerDimensions = DIMENSIONS,
+) -> None:
+    edge_faces = IndexedDataMap_TopoDS_Shape_List_TopoDS_Shape_TopTools_ShapeMapHasher()
+    TopExp.MapShapesAndAncestors_s(
+        part.wrapped,
+        TopAbs_EDGE,
+        TopAbs_FACE,
+        edge_faces,
+    )
+    builder = BRep_Builder()
+    marked = 0
+    for edge in part.edges():
+        bounds = edge.bounding_box()
+        if not any(
+            _lies_at(edge, "X", side * d.outer_guide_inner) for side in (-1, 1)
+        ) or not _lies_at(edge, "Z", d.floor + DETAIL_EDGE_RADIUS_MM):
+            continue
+        if (
+            bounds.min.Y < d.outer_guide_start - EDGE_SELECTION_TOLERANCE_MM
+            or bounds.max.Y > d.outer_guide_end + EDGE_SELECTION_TOLERANCE_MM
+        ):
+            continue
+        for index in range(1, edge_faces.Extent() + 1):
+            if not edge_faces.FindKey(index).IsSame(edge.wrapped):
+                continue
+            faces = edge_faces.FindFromIndex(index)
+            if faces.Size() != 2:
+                raise ValueError("outer-guide tangent edge must have two adjacent faces")
+            builder.Continuity(
+                TopoDS.Edge(edge_faces.FindKey(index)),
+                TopoDS.Face(faces.First()),
+                TopoDS.Face(faces.Last()),
+                GeomAbs_G1,
+            )
+            marked += 1
+            break
+    if marked != 2:
+        raise ValueError(f"expected two outer-guide floor tangencies, found {marked}")
+
+
 def _make_base(
     d: TrunkBlockerDimensions = DIMENSIONS,
     *,
     round_edges: bool = True,
+    unify_same_domain: bool = True,
 ) -> Part:
-    base = _block(-d.width / 2, d.width / 2, 0.5, 0.5 + d.base_length, 0, d.floor)
+    base = _block(-d.width / 2, d.width / 2, d.base_start, d.base_end, 0, d.floor)
     anchor_centres = d.base_anchor_centres_y
     for centre_y in anchor_centres:
         base += _analytic_anchor(d, centre_y)
@@ -426,7 +821,29 @@ def _make_base(
     base = fillet(root, radius=d.anchor_end_radius)
     for side in (-1, 1):
         x0, x1 = sorted((side * d.rack_wall_inner, side * d.width / 2))
-        base += _block(x0, x1, 0.5, 0.5 + d.base_length, d.floor - 0.1, d.rack_height)
+        base += _block(x0, x1, d.base_start, d.base_end, d.floor - 0.1, d.rack_height)
+        base += _outer_guide_pad(side, d)
+    if round_edges:
+        perimeter = [
+            edge
+            for edge in base.edges()
+            if edge.geom_type == GeomType.LINE
+            and edge.bounding_box().min.Z >= -EDGE_SELECTION_TOLERANCE_MM
+            and (
+                _lies_at(edge, "X", -d.width / 2)
+                or _lies_at(edge, "X", d.width / 2)
+                or _lies_at(edge, "Y", d.base_start)
+                or _lies_at(edge, "Y", d.base_end)
+            )
+        ]
+        base = _fillet_exact(
+            base,
+            perimeter,
+            radius=FREE_EDGE_RADIUS_MM,
+            expected=20,
+            feature="fixed-base R2 outer perimeter",
+        )
+    for side in (-1, 1):
         x0, x1 = sorted((side * d.rack_carrier_inner, side * d.rack_carrier_outer))
         base += _block(
             x0,
@@ -436,8 +853,7 @@ def _make_base(
             d.floor - 0.1,
             d.pusher_z + d.tooth_height,
         )
-        for index in range(d.positions + 2):
-            station = MOVING_TOOTH_STATIONS_MM[0] - d.extension + index * d.pitch
+        for station in d.rack_tooth_stations:
             base += _rack_tooth(side, station, d)
         base += _guide_wall(side, d)
     for x, y in SCREW_AXES_MM:
@@ -452,25 +868,43 @@ def _make_base(
             align=(Align.CENTER, Align.CENTER, Align.MIN),
         )
     if round_edges:
-        perimeter = [
-            edge
-            for edge in base.edges()
-            if edge.geom_type == GeomType.LINE
-            and edge.bounding_box().min.Z >= -EDGE_SELECTION_TOLERANCE_MM
-            and (
-                _lies_at(edge, "X", -d.width / 2)
-                or _lies_at(edge, "X", d.width / 2)
-                or _lies_at(edge, "Y", 0.5)
-                or _lies_at(edge, "Y", 0.5 + d.base_length)
-            )
-        ]
+        outer_guide_edges = []
+        for edge in base.edges():
+            if edge.geom_type != GeomType.LINE:
+                continue
+            bounds = edge.bounding_box()
+            for side in (-1, 1):
+                inner = side * d.outer_guide_inner
+                root = side * d.rack_wall_inner
+                if (
+                    _lies_at(edge, "X", inner)
+                    and (_lies_at(edge, "Z", d.floor) or _lies_at(edge, "Z", d.guide_top))
+                    and bounds.min.Y >= d.outer_guide_start - EDGE_SELECTION_TOLERANCE_MM
+                    and bounds.max.Y <= d.outer_guide_tool_end + EDGE_SELECTION_TOLERANCE_MM
+                    or _lies_at(edge, "Y", d.outer_guide_tool_end)
+                    and _lies_at(edge, "X", inner)
+                    or _lies_at(edge, "Y", d.outer_guide_tool_end)
+                    and (_lies_at(edge, "Z", d.floor) or _lies_at(edge, "Z", d.guide_top))
+                    and bounds.min.X >= min(inner, root) - EDGE_SELECTION_TOLERANCE_MM
+                    and bounds.max.X <= max(inner, root) + EDGE_SELECTION_TOLERANCE_MM
+                    or _lies_at(edge, "Y", d.outer_guide_tool_end)
+                    and _lies_at(edge, "X", root)
+                ):
+                    outer_guide_edges.append(edge)
+                    break
         base = _fillet_exact(
             base,
-            perimeter,
-            radius=FREE_EDGE_RADIUS_MM,
-            expected=20,
-            feature="fixed-base R2 outer perimeter",
+            outer_guide_edges,
+            radius=DETAIL_EDGE_RADIUS_MM,
+            expected=12,
+            feature="merged outer-guide R1 exposed edge",
         )
+        for side in (-1, 1):
+            base = base.cut(_outer_guide_floor_relief(side, d))
+    if unify_same_domain:
+        base = _unify_same_domain(base)
+    if round_edges:
+        _mark_outer_guide_tangency(base, d)
     base.label = "fixed_base_analytic_anchor_candidate"
     base.color = Color(0.19, 0.39, 0.50)
     return base
@@ -539,9 +973,10 @@ def _squeeze_pad(
     centre_x: float,
     d: TrunkBlockerDimensions = DIMENSIONS,
     *,
+    width: float | None = None,
     round_edges: bool = True,
 ) -> Part:
-    width = d.pad_outer - d.pad_inner
+    width = d.pad_outer - d.pad_inner if width is None else width
     pad = _block(
         centre_x - width / 2,
         centre_x + width / 2,
@@ -616,6 +1051,22 @@ def _make_pusher_body(
             d.pusher_bed_bottom,
             d.tooth_height,
         )
+        if round_edges:
+            carrier_inner_x = side * (d.outer_centre - d.outer_width / 2) - shift
+            carrier = _fillet_exact(
+                carrier,
+                [
+                    edge
+                    for edge in carrier.edges()
+                    if edge.geom_type == GeomType.LINE
+                    and _lies_at(edge, "X", carrier_inner_x)
+                    and _lies_at(edge, "Z", d.tooth_height)
+                    and _span(edge, "Y") > 1
+                ],
+                radius=DETAIL_EDGE_RADIUS_MM,
+                expected=1,
+                feature="moving-carrier inner-top R1 clip fit",
+            )
         pusher += carrier
         for station in MOVING_TOOTH_STATIONS_MM:
             pusher += _moving_tooth(side, station, shift, d)
@@ -624,7 +1075,12 @@ def _make_pusher_body(
             d,
             round_edges=round_edges,
         )
-    pusher += _squeeze_pad(0, d, round_edges=round_edges)
+    pusher += _squeeze_pad(
+        0,
+        d,
+        width=d.centre_width,
+        round_edges=round_edges,
+    )
     for x, width in (
         (-d.outer_centre, d.outer_width),
         (0, d.centre_width),
@@ -706,9 +1162,9 @@ def _make_pusher(
         spec.released_illustration,
         d,
         round_edges=round_edges,
-    ).moved(Location((0, -spec.extension_mm, d.pusher_z)))
+    ).moved(Location((0, d.pusher_y_offset - spec.extension_mm, d.pusher_z)))
     node = make_bidirectional_panel_connector()
-    front_y = -d.wall_thickness - spec.extension_mm
+    front_y = -d.wall_thickness + d.pusher_y_offset - spec.extension_mm
     for height in CONNECTOR_CENTRES_ABOVE_PUSHER_FLOOR_MM:
         connector = node.rotate(Axis.X, -90).moved(
             Location((-d.width / 2, front_y, d.pusher_z + height + d.width / 2))
@@ -810,3 +1266,197 @@ def make_trunk_blocker_parts(
         if not part.is_valid or len(part.solids()) != 1 or part.volume <= 0:
             raise ValueError(f"expected one valid connected solid: {part.label}")
     return base, pusher, keeper
+
+
+def make_trunk_blocker_prong_lock_clip(
+    spec: TrunkBlockerSpec = TrunkBlockerSpec(),
+    clip_dimensions: TrunkBlockerProngLockClipDimensions = PRONG_LOCK_CLIP_DIMENSIONS,
+) -> Part:
+    """Build the removable three-tab lock clip; defaults are undimpled v10b #1."""
+
+    if not isinstance(spec, TrunkBlockerSpec):
+        raise ValueError("spec must be a TrunkBlockerSpec")
+    if spec.released_illustration:
+        raise ValueError("the prong lock clip seats only on an unsqueezed moving wall")
+    if not isinstance(clip_dimensions, TrunkBlockerProngLockClipDimensions):
+        raise ValueError("clip_dimensions must be a TrunkBlockerProngLockClipDimensions")
+
+    d = DIMENSIONS
+    c = clip_dimensions
+    bar_start = c.bar_start - d.prong_shortening
+    tab_start = d.pad_start
+    tab_end = d.pad_start + d.pad_length
+    bar_end = tab_start - c.collar_y_clearance
+    collar_rear_start = tab_end + c.collar_rear_y_clearance
+    collar_rear_end = collar_rear_start + c.collar_rear_bar_thickness
+    centre_prong_outer = d.centre_width / 2
+    nominal_gap = d.pad_inner - centre_prong_outer
+    tine_width = nominal_gap - 2 * c.leg_lateral_clearance
+    tine_length = bar_end - bar_start
+    tine_bottom = d.floor + c.floor_clearance - d.pusher_z
+    tine_depth = d.tooth_height + c.top_clearance - tine_bottom
+    if min(tine_width, tine_length, tine_depth, c.bar_thickness) <= 0:
+        raise ValueError("prong lock clip dimensions must leave positive material")
+    if not 0 < c.round_radius < min(tine_width, c.bar_thickness) / 2:
+        raise ValueError("prong lock clip radius does not fit its smallest section")
+    if c.lift_wing_overhang <= 0:
+        raise ValueError("prong lock clip lift-wing overhang must be positive")
+    if not (
+        d.moving_carrier_start < bar_start < bar_end < tab_start and collar_rear_start > tab_end
+    ):
+        raise ValueError("prong lock clip collar must bracket the centre squeeze tab")
+    if not (
+        -0.5 < c.leg_lateral_clearance <= c.side_clearance
+        and 0 < c.side_clearance < nominal_gap / 2
+    ):
+        raise ValueError("prong lock clip lateral and root clearances do not fit the tab gaps")
+    if not (
+        0 < c.collar_y_clearance < c.round_radius
+        and 0 < c.collar_rear_y_clearance < c.round_radius
+        and c.collar_rear_bar_thickness > 2 * c.round_radius
+        and 0 < c.leg_root_relief_height < d.finger_top - tine_bottom
+    ):
+        raise ValueError("prong lock clip collar dimensions do not fit the squeeze tabs")
+    if not 0 < c.loop_depth <= bar_end - bar_start:
+        raise ValueError("prong lock clip loop must stay within the carrier band")
+    if (
+        c.loop_outer_width <= c.loop_inner_width
+        or c.loop_outer_height <= c.loop_inner_height
+        or not 0 < c.loop_bar_overlap < c.bar_thickness
+        or c.loop_bottom_band <= 0
+        or c.loop_bottom_band + c.loop_inner_height >= c.loop_outer_height
+    ):
+        raise ValueError("prong lock clip loop must leave positive band sections")
+    if not (
+        c.loop_inner_edge_radius < c.loop_depth / 2
+        and c.loop_outer_corner_radius < min(c.loop_outer_width, c.loop_outer_height) / 2
+        and c.loop_inner_corner_radius < min(c.loop_inner_width, c.loop_inner_height) / 2
+    ):
+        raise ValueError("prong lock clip loop radii do not fit")
+
+    bar_bottom = d.tooth_height + c.top_clearance
+    bar_outer = d.pad_outer + c.lift_wing_overhang
+    if bar_outer > d.moving_tip - c.side_clearance:
+        raise ValueError("prong lock clip lift wings must leave the tooth tips exposed")
+    clip = _block(
+        -bar_outer,
+        bar_outer,
+        bar_start,
+        bar_end,
+        bar_bottom,
+        bar_bottom + c.bar_thickness,
+    )
+    clip += _block(
+        -d.pad_inner + c.side_clearance,
+        d.pad_inner - c.side_clearance,
+        bar_start,
+        bar_end,
+        tine_bottom,
+        bar_bottom + c.bar_thickness,
+    )
+    clip -= _block(
+        -centre_prong_outer - c.side_clearance,
+        centre_prong_outer + c.side_clearance,
+        bar_start - 0.1,
+        bar_end + 0.1,
+        tine_bottom - 0.1,
+        d.finger_top + c.top_clearance,
+    )
+    locating_transition_end = d.finger_top - c.leg_root_relief_height
+    locating_transition_start = locating_transition_end - 2 * c.round_radius
+    for side in (-1, 1):
+        root_x0, root_x1 = sorted(
+            (
+                side * (centre_prong_outer + c.side_clearance),
+                side * (d.pad_inner - c.side_clearance),
+            )
+        )
+        clip += _block(
+            root_x0,
+            root_x1,
+            bar_end - 0.1,
+            collar_rear_start + 0.1,
+            tine_bottom,
+            bar_bottom + c.bar_thickness,
+        )
+        clip += _clip_locating_wall(
+            side,
+            y0=bar_start,
+            y1=collar_rear_start + 0.1,
+            z0=tine_bottom,
+            transition_start=locating_transition_start,
+            transition_end=locating_transition_end,
+            centre_outer=centre_prong_outer,
+            gap_outer=d.pad_inner,
+            lateral_clearance=c.leg_lateral_clearance,
+            root_clearance=c.side_clearance,
+        )
+    clip += _clip_rear_crossbar(
+        y0=collar_rear_start,
+        y1=collar_rear_end,
+        z0=tine_bottom,
+        z1=bar_bottom + c.bar_thickness,
+        transition_start=locating_transition_start,
+        transition_end=locating_transition_end,
+        gap_outer=d.pad_inner,
+        lateral_clearance=c.leg_lateral_clearance,
+        root_clearance=c.side_clearance,
+    )
+    clip = clip.clean()
+    loop_outer_bottom = bar_bottom + c.bar_thickness - c.loop_bar_overlap
+    loop_inner_bottom = loop_outer_bottom + c.loop_bottom_band
+    loop_back = bar_start + c.loop_depth
+    loop_outer = Pos(0, 0, loop_outer_bottom + c.loop_outer_height / 2) * (
+        Plane.XZ.offset(-loop_back)
+        * RectangleRounded(
+            c.loop_outer_width,
+            c.loop_outer_height,
+            c.loop_outer_corner_radius,
+        )
+    )
+    loop_inner = Pos(0, 0, loop_inner_bottom + c.loop_inner_height / 2) * (
+        Plane.XZ.offset(-loop_back)
+        * RectangleRounded(
+            c.loop_inner_width,
+            c.loop_inner_height,
+            c.loop_inner_corner_radius,
+        )
+    )
+    clip += extrude(loop_outer - loop_inner, amount=c.loop_depth)
+    clip = clip.clean()
+    inner_half_width = c.loop_inner_width / 2
+    inner_top = loop_inner_bottom + c.loop_inner_height
+    inner_edges = [
+        edge
+        for edge in _c0_edges(clip)
+        if edge.bounding_box().min.X >= inner_half_width * -1 - EDGE_SELECTION_TOLERANCE_MM
+        and edge.bounding_box().max.X <= inner_half_width + EDGE_SELECTION_TOLERANCE_MM
+        and edge.bounding_box().min.Z >= loop_inner_bottom - EDGE_SELECTION_TOLERANCE_MM
+        and edge.bounding_box().max.Z <= inner_top + EDGE_SELECTION_TOLERANCE_MM
+        and (_lies_at(edge, "Y", bar_start) or _lies_at(edge, "Y", loop_back))
+    ]
+    clip = _fillet_exact(
+        clip,
+        inner_edges,
+        radius=c.loop_inner_edge_radius,
+        expected=16,
+        feature="prong-lock clip R3 finger opening",
+    )
+    exterior_edges = _c0_edges(clip)
+    clip = _fillet_exact(
+        clip,
+        exterior_edges,
+        radius=c.round_radius,
+        expected=94,
+        feature="prong-lock clip final-body R1 exterior",
+    )
+    _mark_geometrically_tangent_edges(clip)
+    if _c0_edges(clip):
+        raise ValueError("prong lock clip retains an unrounded exterior edge")
+    if not clip.is_valid or len(clip.solids()) != 1 or clip.volume <= 0:
+        raise ValueError("prong lock clip must be one valid positive-volume solid")
+
+    clip = clip.moved(Location((0, d.pusher_y_offset - spec.extension_mm, d.pusher_z)))
+    clip.label = "PRONG_LOCK_CLIP"
+    clip.color = Color(0.58, 0.24, 0.72)
+    return clip

@@ -5,7 +5,7 @@ import json
 from collections import Counter
 from dataclasses import replace
 from itertools import permutations
-from math import atan2, degrees
+from math import atan2, degrees, floor
 from pathlib import Path
 from tempfile import TemporaryFile
 from xml.etree import ElementTree as ET
@@ -40,8 +40,20 @@ from OCP.TopoDS import TopoDS
 
 from cargo_grid._version import __version__
 from cargo_grid.accessories import make_bidirectional_panel_connector
+from cargo_grid.cli import H2D_PROFILES, H2DProfiles
+from cargo_grid.export import BambuSettings, Material
+from cargo_grid.jobs import Job
 from cargo_grid.meshes import write_stl
+from cargo_grid.packing import PrimeTower, TowerClearance, h2d_common_build
 from cargo_grid.parameters import Tile
+from cargo_grid.plates import (
+    AUTO_SUPPORT_TOWER_CLEARANCE_MM,
+    BAMBU_TOWER_MARGIN_MM,
+    H2D_SHARED_REACH_X_MM,
+    H2D_TOWER_LEFT_CLEARANCE_MM,
+    TOWER_BACK_ALLOWANCE_MM,
+    BambuTowerEstimate,
+)
 from cargo_grid.prepared import PreparedShape
 from cargo_grid.tiles import make_tile
 from cargo_grid.trunk_blocker import (
@@ -51,6 +63,7 @@ from cargo_grid.trunk_blocker import (
     DIMENSIONS,
     FREE_EDGE_RADIUS_MM,
     MOVING_TOOTH_STATIONS_MM,
+    RACK_TOOTH_STATIONS_MM,
     SCREW_AXES_MM,
     TrunkBlockerSpec,
     _block,
@@ -61,8 +74,10 @@ from cargo_grid.trunk_blocker import (
     _make_pusher_body,
     _moving_tooth,
     _outer_finger,
+    _outer_guide_pad,
     _rack_tooth,
     _squeeze_pad,
+    _unify_same_domain,
     make_trunk_blocker_parts,
 )
 
@@ -73,6 +88,124 @@ CORE = f"{{{CORE_NAMESPACE}}}"
 PART_NAMES = ("fixed_base", "moving_wall", "short_screwed_keeper")
 CONNECTOR_PROOF_TOLERANCE_MM = 1e-5
 VOLUME_TOLERANCE_MM3 = 1e-6
+
+
+def _trunk_blocker_h2d_profile(nozzle_diameter_mm: float) -> H2DProfiles:
+    profile = H2D_PROFILES.get(nozzle_diameter_mm)
+    if profile is None:
+        choices = ", ".join(f"{nozzle:g}" for nozzle in H2D_PROFILES)
+        raise ValueError(f"trunk-blocker H2D nozzle must be one of: {choices} mm")
+    return profile
+
+
+def trunk_blocker_h2d_settings(
+    nozzle_diameter_mm: float = 0.8,
+    *,
+    dual_material: bool,
+) -> BambuSettings:
+    """Use one of the official H2D profile pairs for a blocker print project."""
+    profile = _trunk_blocker_h2d_profile(nozzle_diameter_mm)
+    materials = (Material(profile.petg, "PETG", "#637B70"),)
+    if dual_material:
+        materials += (Material(profile.pla, "PLA", "#DDDDDD"),)
+    return BambuSettings(
+        materials,
+        nozzle=nozzle_diameter_mm,
+        layer_height=profile.layer_height_mm,
+        printer_settings_id=profile.printer,
+        print_settings_id=profile.process,
+        bed_type="Textured PEI Plate",
+        machine_nozzle_count=2,
+        printer_model="Bambu Lab H2D",
+    )
+
+
+def prepare_trunk_blocker_print_job(
+    job: Job,
+    *,
+    material_counts_by_plate: dict[int, int],
+    nozzle_diameter_mm: float = 0.8,
+) -> Job:
+    """Reserve Bambu's default H2D tower only on plates using multiple materials."""
+    profile = _trunk_blocker_h2d_profile(nozzle_diameter_mm)
+    if job.print_placements is None:
+        raise ValueError("trunk-blocker print jobs need explicit placements")
+    plates = {placement.plate for placement in job.print_placements}
+    if set(material_counts_by_plate) != plates:
+        raise ValueError("material counts must cover exactly the placed trunk-blocker plates")
+    if any(
+        isinstance(count, bool) or not isinstance(count, int) or count < 1
+        for count in material_counts_by_plate.values()
+    ):
+        raise ValueError("plate material counts must be positive integers")
+    if (
+        job.prime_tower is not None
+        or job.prime_tower_positions
+        or job.prime_tower_reaches
+        or job.prime_tower_clearances
+    ):
+        raise ValueError("trunk-blocker print jobs must not supply a prime tower")
+
+    tower_plates = {plate for plate, count in material_counts_by_plate.items() if count > 1}
+    if not tower_plates:
+        return job
+
+    positions = {}
+    reaches = {}
+    clearances = {}
+    for plate in sorted(tower_plates):
+        build = job.plate_builds.get(plate, job.build)
+        if build != h2d_common_build():
+            raise ValueError("multi-material blocker plates require the H2D common build")
+        height = max(
+            design.bambu_size[2]
+            for design, placement in zip(job.designs, job.print_placements, strict=True)
+            if placement.plate == plate
+        )
+        position, reach, clearance = _h2d_tower_reservation(
+            height,
+            profile.layer_height_mm,
+        )
+        positions[plate] = position
+        reaches[plate] = reach
+        clearances[plate] = clearance
+
+    return replace(
+        job,
+        prime_tower=PrimeTower(
+            max(reach.left for reach in reaches.values()),
+            max(reach.front for reach in reaches.values()),
+            max(reach.right for reach in reaches.values()),
+            max(reach.back for reach in reaches.values()),
+        ),
+        prime_tower_positions=positions,
+        prime_tower_reaches=reaches,
+        prime_tower_clearances=clearances,
+    )
+
+
+def _h2d_tower_reservation(
+    height_mm: float,
+    layer_height_mm: float,
+) -> tuple[tuple[float, float], PrimeTower, TowerClearance]:
+    estimate = BambuTowerEstimate(layer_height_mm)
+    side = estimate.side_mm(height_mm)
+    brim = estimate.brim_mm(height_mm)
+    limit = H2D_SHARED_REACH_X_MM[1]
+    x = floor((limit - BAMBU_TOWER_MARGIN_MM - side) * 100) / 100
+    reach = PrimeTower(
+        brim,
+        brim,
+        limit - x,
+        side + brim + TOWER_BACK_ALLOWANCE_MM,
+    )
+    clearance = TowerClearance(
+        H2D_TOWER_LEFT_CLEARANCE_MM,
+        AUTO_SUPPORT_TOWER_CLEARANCE_MM,
+        AUTO_SUPPORT_TOWER_CLEARANCE_MM,
+        AUTO_SUPPORT_TOWER_CLEARANCE_MM,
+    )
+    return (x, BAMBU_TOWER_MARGIN_MM), reach, clearance
 
 
 def _sha256(path: Path) -> str:
@@ -213,7 +346,7 @@ def _edge_continuity_counts(shape) -> dict[str, int]:
 
 
 def _finger_section_areas(pusher: Part, spec: TrunkBlockerSpec) -> dict:
-    section_y = 50.0 - spec.extension_mm
+    section_y = 50.0 + DIMENSIONS.pusher_y_offset - spec.extension_mm
     cross_section = section(
         pusher,
         section_by=Plane(
@@ -368,7 +501,7 @@ def _right_ratchet_feature(
         Location(
             (
                 -inward_deflection_mm,
-                -extension_mm - forward_phase_mm,
+                DIMENSIONS.pusher_y_offset - extension_mm - forward_phase_mm,
                 DIMENSIONS.pusher_z,
             )
         )
@@ -379,13 +512,12 @@ def _right_rack() -> Part:
     rack = _block(
         DIMENSIONS.rack_root,
         DIMENSIONS.width / 2,
-        0.5,
-        0.5 + DIMENSIONS.base_length,
+        DIMENSIONS.base_start,
+        DIMENSIONS.base_end,
         DIMENSIONS.floor - 0.1,
         DIMENSIONS.rack_height,
     )
-    for index in range(DIMENSIONS.positions + 2):
-        station = MOVING_TOOTH_STATIONS_MM[0] - DIMENSIONS.extension + index * DIMENSIONS.pitch
+    for station in RACK_TOOTH_STATIONS_MM:
         rack += _rack_tooth(1, station, DIMENSIONS)
     return rack
 
@@ -438,11 +570,13 @@ def _required_inward_deflection(rack: Part, phase_mm: float) -> float:
 
 
 def _carrier_stop_proofs(base: Part, keeper: Part, pitch_sweep: list[dict]) -> dict:
-    contact_overtravel = DIMENSIONS.moving_carrier_start - (
-        DIMENSIONS.extension + DIMENSIONS.keeper_start + DIMENSIONS.keeper_length
+    contact_overtravel = (
+        DIMENSIONS.moving_carrier_start
+        + DIMENSIONS.pusher_y_offset
+        - (DIMENSIONS.extension + DIMENSIONS.keeper_end)
     )
-    if abs(contact_overtravel - 4.0) > CONNECTOR_PROOF_TOLERANCE_MM:
-        raise ValueError("moving carrier no longer reaches the keeper at 4 mm overtravel")
+    if contact_overtravel <= 0:
+        raise ValueError("moving carrier stop must remain beyond the last lock")
 
     required_by_phase = {
         round(row["forward_phase_mm"], 10): row["required_inward_deflection_mm"]
@@ -450,7 +584,8 @@ def _carrier_stop_proofs(base: Part, keeper: Part, pitch_sweep: list[dict]) -> d
     }
     ratcheting_path = []
     maximum_required_deflection = 0.0
-    for index in range(41):
+    overtravel_sample_count = int(round(contact_overtravel * 10))
+    for index in range(overtravel_sample_count + 1):
         overtravel = index / 10
         required = required_by_phase[round(overtravel, 10)]
         maximum_required_deflection = max(maximum_required_deflection, required)
@@ -478,7 +613,7 @@ def _carrier_stop_proofs(base: Part, keeper: Part, pitch_sweep: list[dict]) -> d
             )
         if overtravel < contact_overtravel and keeper_overlap >= VOLUME_TOLERANCE_MM3:
             raise ValueError("moving carrier reaches the keeper before 4 mm overtravel")
-        if overtravel == contact_overtravel:
+        if abs(overtravel - contact_overtravel) < CONNECTOR_PROOF_TOLERANCE_MM:
             if (
                 keeper_overlap >= VOLUME_TOLERANCE_MM3
                 or pusher.distance_to(keeper) > CONNECTOR_PROOF_TOLERANCE_MM
@@ -498,7 +633,7 @@ def _carrier_stop_proofs(base: Part, keeper: Part, pitch_sweep: list[dict]) -> d
 
     released_end = _make_pusher(TrunkBlockerSpec(DIMENSIONS.extension, released_illustration=True))
     released_path = []
-    for index in range(41):
+    for index in range(overtravel_sample_count + 1):
         overtravel = index / 10
         pusher = released_end.moved(Location((0, -overtravel, 0)))
         base_overlap = _shape_volume(pusher.intersect(base))
@@ -507,7 +642,7 @@ def _carrier_stop_proofs(base: Part, keeper: Part, pitch_sweep: list[dict]) -> d
             raise ValueError("fully released overtravel path intersects the fixed base")
         if overtravel < contact_overtravel and keeper_overlap >= VOLUME_TOLERANCE_MM3:
             raise ValueError("fully released carrier reaches the keeper before 4 mm overtravel")
-        if overtravel == contact_overtravel:
+        if abs(overtravel - contact_overtravel) < CONNECTOR_PROOF_TOLERANCE_MM:
             if (
                 keeper_overlap >= VOLUME_TOLERANCE_MM3
                 or pusher.distance_to(keeper) > CONNECTOR_PROOF_TOLERANCE_MM
@@ -540,8 +675,8 @@ def _carrier_stop_proofs(base: Part, keeper: Part, pitch_sweep: list[dict]) -> d
             carrier = _block(
                 x0,
                 x1,
-                DIMENSIONS.moving_carrier_start - final_extension,
-                DIMENSIONS.moving_carrier_end - final_extension,
+                DIMENSIONS.moving_carrier_start + DIMENSIONS.pusher_y_offset - final_extension,
+                DIMENSIONS.moving_carrier_end + DIMENSIONS.pusher_y_offset - final_extension,
                 DIMENSIONS.pusher_z,
                 DIMENSIONS.pusher_z + DIMENSIONS.tooth_height,
             )
@@ -696,10 +831,11 @@ def _ratchet_proofs(parts: tuple[Part, Part, Part], spec: TrunkBlockerSpec) -> d
         },
         "end_retention_and_release": carrier_stop,
         "end_retention_note": (
-            "The last locking station remains 48 mm. The two moving tooth carriers reach "
-            "the solid keeper at 52 mm and block further overtravel in relaxed, cammed and "
-            "released states; 52 mm is not another locking station. Complete withdrawal "
-            "requires removing the keeper."
+            f"The last locking station remains {DIMENSIONS.extension:g} mm. The two moving "
+            f"tooth carriers reach the solid keeper at "
+            f"{carrier_stop['carrier_contact_extension_mm']:g} mm and block further overtravel "
+            "in relaxed, cammed and released states; the contact is not another locking "
+            "station. Complete withdrawal requires removing the keeper."
         ),
         "load_note": (
             "Contact area is measured per tooth. The geometry does not establish simultaneous "
@@ -710,13 +846,125 @@ def _ratchet_proofs(parts: tuple[Part, Part, Part], spec: TrunkBlockerSpec) -> d
 
 def _guide_proofs(parts: tuple[Part, Part, Part]) -> dict:
     base, pusher, keeper = parts
+    ununified_base = _make_base(unify_same_domain=False)
+    reunified_base = _unify_same_domain(base)
+    unification = {
+        "before_face_count": len(ununified_base.faces()),
+        "before_edge_count": len(ununified_base.edges()),
+        "after_face_count": len(base.faces()),
+        "after_edge_count": len(base.edges()),
+        "reunified_face_count": len(reunified_base.faces()),
+        "reunified_edge_count": len(reunified_base.edges()),
+        "reunified_symmetric_brep_difference_mm3": _symmetric_difference_volume(
+            base,
+            reunified_base,
+        ),
+    }
+    if (
+        unification["after_face_count"] != unification["reunified_face_count"]
+        or unification["after_edge_count"] != unification["reunified_edge_count"]
+        or unification["reunified_symmetric_brep_difference_mm3"] >= VOLUME_TOLERANCE_MM3
+    ):
+        raise ValueError("final base retains adjacent same-domain faces or edges")
+
+    front_faces = [
+        face
+        for face in base.faces()
+        if face.geom_type == GeomType.PLANE
+        and abs(face.bounding_box().min.Y - DIMENSIONS.base_start) < CONNECTOR_PROOF_TOLERANCE_MM
+        and abs(face.bounding_box().max.Y - DIMENSIONS.base_start) < CONNECTOR_PROOF_TOLERANCE_MM
+    ]
+    if len(front_faces) != 1:
+        raise ValueError("base front is split into more than one planar face")
+
+    edge_faces = IndexedDataMap_TopoDS_Shape_List_TopoDS_Shape_TopTools_ShapeMapHasher()
+    TopExp.MapShapesAndAncestors_s(
+        base.wrapped,
+        TopAbs_EDGE,
+        TopAbs_FACE,
+        edge_faces,
+    )
+
+    def continuity_for(edge) -> str:
+        for index in range(1, edge_faces.Extent() + 1):
+            if not edge_faces.FindKey(index).IsSame(edge.wrapped):
+                continue
+            faces = edge_faces.FindFromIndex(index)
+            if faces.Size() != 2:
+                return "single_face_or_seam"
+            continuity = BRep_Tool.Continuity_s(
+                TopoDS.Edge(edge_faces.FindKey(index)),
+                TopoDS.Face(faces.First()),
+                TopoDS.Face(faces.Last()),
+            )
+            return str(continuity).rsplit("GeomAbs_", 1)[-1]
+        raise ValueError("base edge is absent from the edge-to-face map")
+
+    front_root_edge_count = 0
+    root_seam_rows = []
+    for side in (-1, 1):
+        root_x = side * DIMENSIONS.rack_wall_inner
+        for edge in base.edges():
+            bounds = edge.bounding_box()
+            if (
+                abs(bounds.min.X - root_x) >= CONNECTOR_PROOF_TOLERANCE_MM
+                or abs(bounds.max.X - root_x) >= CONNECTOR_PROOF_TOLERANCE_MM
+            ):
+                continue
+            continuity = continuity_for(edge)
+            if bounds.max.Y <= DIMENSIONS.outer_guide_start + CONNECTOR_PROOF_TOLERANCE_MM:
+                front_root_edge_count += 1
+            if (
+                bounds.min.Y
+                < DIMENSIONS.outer_guide_tool_end
+                + DETAIL_EDGE_RADIUS_MM
+                - CONNECTOR_PROOF_TOLERANCE_MM
+                and continuity == "C0"
+            ):
+                root_seam_rows.append(
+                    {
+                        "side": side,
+                        "bounds_mm": _bounds(edge),
+                        "continuity": continuity,
+                    }
+                )
+    if front_root_edge_count or root_seam_rows:
+        raise ValueError("base retains an X=+/-24 seam in the outer-guide region")
+
+    front_top_round_rows = []
+    for side in (-1, 1):
+        root_x = side * DIMENSIONS.rack_wall_inner
+        candidates = []
+        for face in base.faces():
+            bounds = face.bounding_box()
+            if (
+                face.geom_type != GeomType.CYLINDER
+                or bounds.min.Y > DIMENSIONS.base_start + CONNECTOR_PROOF_TOLERANCE_MM
+                or bounds.max.Y < DIMENSIONS.outer_guide_start - CONNECTOR_PROOF_TOLERANCE_MM
+                or bounds.min.Z
+                > DIMENSIONS.guide_top - FREE_EDGE_RADIUS_MM + CONNECTOR_PROOF_TOLERANCE_MM
+                or bounds.max.Z < DIMENSIONS.guide_top - CONNECTOR_PROOF_TOLERANCE_MM
+                or not bounds.min.X < root_x < bounds.max.X
+            ):
+                continue
+            candidates.append(face)
+        if len(candidates) != 1:
+            raise ValueError("front-top R2 is split at the rack-wall/guide junction")
+        front_top_round_rows.append(
+            {
+                "side": side,
+                "face_count": len(candidates),
+                "bounds_mm": _bounds(candidates[0]),
+            }
+        )
+
     guide_rows = []
     for side in (-1, 1):
         exposed = _guide_wall(side).intersect(
-            Location((-DIMENSIONS.width / 2, 0, DIMENSIONS.floor))
+            Location((-DIMENSIONS.width / 2, DIMENSIONS.base_start, DIMENSIONS.floor))
             * Box(
                 DIMENSIONS.width,
-                DIMENSIONS.base_length + 1,
+                DIMENSIONS.base_length,
                 DIMENSIONS.guide_top - DIMENSIONS.floor + 0.1,
                 align=(Align.MIN, Align.MIN, Align.MIN),
             )
@@ -731,6 +979,102 @@ def _guide_proofs(parts: tuple[Part, Part, Part]) -> dict:
                 "bounds_mm": _bounds(exposed_tool),
                 "exposed_volume_mm3": exposed_tool.volume,
                 "missing_from_base_mm3": missing,
+            }
+        )
+
+    outer_guide_rows = []
+    for side in (-1, 1):
+        raw_tool = _outer_guide_pad(side)
+        inner_x = side * DIMENSIONS.outer_guide_inner
+        root_x = side * DIMENSIONS.rack_wall_inner
+        inner_faces = [
+            face
+            for face in base.faces()
+            if face.geom_type == GeomType.PLANE
+            and abs(face.bounding_box().min.X - inner_x) < CONNECTOR_PROOF_TOLERANCE_MM
+            and abs(face.bounding_box().max.X - inner_x) < CONNECTOR_PROOF_TOLERANCE_MM
+            and face.bounding_box().min.Z
+            >= DIMENSIONS.floor + DETAIL_EDGE_RADIUS_MM - CONNECTOR_PROOF_TOLERANCE_MM
+            and face.bounding_box().min.Y
+            <= DIMENSIONS.outer_guide_start + CONNECTOR_PROOF_TOLERANCE_MM
+            and face.bounding_box().max.Y
+            >= DIMENSIONS.outer_guide_end - CONNECTOR_PROOF_TOLERANCE_MM
+        ]
+        top_faces = [
+            face
+            for face in base.faces()
+            if face.geom_type == GeomType.PLANE
+            and abs(face.bounding_box().min.Z - DIMENSIONS.guide_top) < CONNECTOR_PROOF_TOLERANCE_MM
+            and abs(face.bounding_box().max.Z - DIMENSIONS.guide_top) < CONNECTOR_PROOF_TOLERANCE_MM
+            and face.bounding_box().min.Y
+            <= DIMENSIONS.outer_guide_start + CONNECTOR_PROOF_TOLERANCE_MM
+            and face.bounding_box().max.Y
+            >= DIMENSIONS.outer_guide_end - CONNECTOR_PROOF_TOLERANCE_MM
+            and (
+                side < 0
+                and face.bounding_box().min.X <= root_x + CONNECTOR_PROOF_TOLERANCE_MM
+                and face.bounding_box().max.X
+                >= inner_x - DETAIL_EDGE_RADIUS_MM - CONNECTOR_PROOF_TOLERANCE_MM
+                or side > 0
+                and face.bounding_box().max.X >= root_x - CONNECTOR_PROOF_TOLERANCE_MM
+                and face.bounding_box().min.X
+                <= inner_x + DETAIL_EDGE_RADIUS_MM + CONNECTOR_PROOF_TOLERANCE_MM
+            )
+        ]
+        wall_face_remnants = [
+            face
+            for face in base.faces()
+            if face.geom_type == GeomType.PLANE
+            and abs(face.bounding_box().min.X - root_x) < CONNECTOR_PROOF_TOLERANCE_MM
+            and abs(face.bounding_box().max.X - root_x) < CONNECTOR_PROOF_TOLERANCE_MM
+            and face.bounding_box().min.Y
+            < DIMENSIONS.outer_guide_end - CONNECTOR_PROOF_TOLERANCE_MM
+            and face.bounding_box().max.Y > DIMENSIONS.base_start + CONNECTOR_PROOF_TOLERANCE_MM
+        ]
+        wall_junction_cylinders = [
+            face
+            for face in base.faces()
+            if face.geom_type == GeomType.CYLINDER
+            and face.bounding_box().min.Y
+            < DIMENSIONS.outer_guide_end - CONNECTOR_PROOF_TOLERANCE_MM
+            and face.bounding_box().max.Y
+            > DIMENSIONS.outer_guide_start + CONNECTOR_PROOF_TOLERANCE_MM
+            and (
+                side < 0
+                and face.bounding_box().min.X >= root_x - CONNECTOR_PROOF_TOLERANCE_MM
+                and face.bounding_box().max.X
+                <= root_x + DETAIL_EDGE_RADIUS_MM + CONNECTOR_PROOF_TOLERANCE_MM
+                or side > 0
+                and face.bounding_box().max.X <= root_x + CONNECTOR_PROOF_TOLERANCE_MM
+                and face.bounding_box().min.X
+                >= root_x - DETAIL_EDGE_RADIUS_MM - CONNECTOR_PROOF_TOLERANCE_MM
+            )
+        ]
+        if (
+            len(inner_faces) != 1
+            or len(top_faces) != 1
+            or wall_face_remnants
+            or wall_junction_cylinders
+        ):
+            raise ValueError("merged outer guide retained a split wall or top feature")
+
+        inner_edge_continuities = Counter()
+        for edge in inner_faces[0].edges():
+            inner_edge_continuities[continuity_for(edge)] += 1
+        if inner_edge_continuities.get("C0", 0):
+            raise ValueError("outer-guide working face retains an exposed C0 edge")
+
+        outer_guide_rows.append(
+            {
+                "side": side,
+                "raw_overlap_tool_bounds_mm": _bounds(raw_tool),
+                "inner_working_face_count": len(inner_faces),
+                "inner_working_face_bounds_mm": _bounds(inner_faces[0]),
+                "inner_working_face_edge_continuities": dict(inner_edge_continuities),
+                "continuous_top_plane_count": len(top_faces),
+                "continuous_top_plane_bounds_mm": _bounds(top_faces[0]),
+                "x24_wall_face_remnant_count": len(wall_face_remnants),
+                "wall_junction_cylinder_count": len(wall_junction_cylinders),
             }
         )
 
@@ -753,6 +1097,47 @@ def _guide_proofs(parts: tuple[Part, Part, Part]) -> dict:
         + max(0.0, furthest_tooth_y - DIMENSIONS.guide_end) * np.sin(guide_only_yaw_radians)
         - DIMENSIONS.centre_width / 2
     )
+    outer_channel_width = 2 * DIMENSIONS.outer_guide_inner
+    outer_pusher_width = 2 * (DIMENSIONS.outer_centre + DIMENSIONS.outer_width / 2)
+    outer_guide_length = DIMENSIONS.outer_guide_end - DIMENSIONS.outer_guide_start
+    low = 0.0
+    high = 0.1
+    for _ in range(60):
+        middle = (low + high) / 2
+        swept_width = outer_guide_length * np.sin(middle) + outer_pusher_width * np.cos(middle)
+        if swept_width <= outer_channel_width:
+            low = middle
+        else:
+            high = middle
+    combined_yaw_radians = low
+    tooth_stations_at_last_lock = [
+        station + DIMENSIONS.pusher_y_offset - DIMENSIONS.extension
+        for station in MOVING_TOOTH_STATIONS_MM
+    ]
+
+    def tooth_yaw_rows(
+        angle_radians: float,
+        half_channel_width: float,
+        half_pusher_width: float,
+        guide_end: float,
+    ) -> list[dict]:
+        translation_at_contact = (
+            -half_channel_width
+            + half_pusher_width * np.cos(angle_radians)
+            + guide_end * np.sin(angle_radians)
+        )
+        return [
+            {
+                "tooth_station_y_mm": station,
+                "one_sided_lateral_excursion_mm": abs(
+                    -station * np.sin(angle_radians) + translation_at_contact
+                ),
+                "peak_to_peak_lateral_play_mm": 2
+                * abs(-station * np.sin(angle_radians) + translation_at_contact),
+            }
+            for station in tooth_stations_at_last_lock
+        ]
+
     guide_contact_rows = []
     for side in (-1, 1):
         contact_segment = Part(
@@ -781,9 +1166,9 @@ def _guide_proofs(parts: tuple[Part, Part, Part]) -> dict:
             }
         )
     floor_passages = (
-        (-DIMENSIONS.rack_tip, -DIMENSIONS.guide_outer),
+        (-DIMENSIONS.outer_guide_inner, -DIMENSIONS.guide_outer),
         (-DIMENSIONS.guide_inner, DIMENSIONS.guide_inner),
-        (DIMENSIONS.guide_outer, DIMENSIONS.rack_tip),
+        (DIMENSIONS.guide_outer, DIMENSIONS.outer_guide_inner),
     )
     passage_probes = [
         _block(
@@ -829,6 +1214,68 @@ def _guide_proofs(parts: tuple[Part, Part, Part]) -> dict:
             - DIMENSIONS.release_stroke
             - DIMENSIONS.guide_outer
         ),
+        "outer_prong_guides": {
+            "span_y_mm": [DIMENSIONS.outer_guide_start, DIMENSIONS.outer_guide_end],
+            "inner_faces_x_mm": [
+                -DIMENSIONS.outer_guide_inner,
+                DIMENSIONS.outer_guide_inner,
+            ],
+            "nominal_relaxed_clearance_each_side_mm": (
+                DIMENSIONS.outer_guide_inner - DIMENSIONS.outer_centre - DIMENSIONS.outer_width / 2
+            ),
+            "released_tooth_tip_clearance_mm": (
+                DIMENSIONS.outer_guide_inner - (DIMENSIONS.moving_tip - DIMENSIONS.release_stroke)
+            ),
+            "front_limit": "R2 front-perimeter tangent",
+            "rear_limit": "existing guide/keeper seat, 1 mm before carriers at the 49 mm stop",
+            "same_domain_unification": unification,
+            "front_planar_face_count": len(front_faces),
+            "front_planar_face_bounds_mm": _bounds(front_faces[0]),
+            "front_top_r2_rounds": front_top_round_rows,
+            "front_x24_edge_count": front_root_edge_count,
+            "x24_pad_region_c0_seam_edges": root_seam_rows,
+            "pads": outer_guide_rows,
+            "inward_caps_or_overhangs": False,
+        },
+        "rigid_last_lock_play_comparison": {
+            "extension_mm": DIMENSIONS.extension,
+            "tooth_stations_y_mm": tooth_stations_at_last_lock,
+            "centre_guide_only": {
+                "nominal_peak_to_peak_lateral_translation_mm": (
+                    2 * DIMENSIONS.finger_guide_clearance
+                ),
+                "maximum_yaw_degrees": degrees(guide_only_yaw_radians),
+                "tooth_station_yaw_excursions": tooth_yaw_rows(
+                    guide_only_yaw_radians,
+                    DIMENSIONS.guide_inner,
+                    DIMENSIONS.centre_width / 2,
+                    DIMENSIONS.guide_end,
+                ),
+            },
+            "centre_and_outer_guides": {
+                "nominal_peak_to_peak_lateral_translation_mm": (
+                    2 * DIMENSIONS.finger_guide_clearance
+                ),
+                "maximum_yaw_degrees": degrees(combined_yaw_radians),
+                "tooth_station_yaw_excursions": tooth_yaw_rows(
+                    combined_yaw_radians,
+                    DIMENSIONS.outer_guide_inner,
+                    DIMENSIONS.outer_centre + DIMENSIONS.outer_width / 2,
+                    DIMENSIONS.outer_guide_end,
+                ),
+            },
+            "stiffness_note": (
+                "Each outer pad is 3.6 mm thick in X and merges into a rack wall and the "
+                "pilot-boss region, so its nominal lateral load path is broader and more "
+                "buttressed than either 2.35 mm centre-guide wall. This is a qualitative "
+                "geometry comparison, not a measured stiffness result."
+            ),
+            "scope_note": (
+                "These are rigid planar bounds with the pusher centred in nominal gaps. "
+                "The pads block whole-pusher lateral translation and yaw, but do not stop "
+                "an individual outer prong bending inward at its own teeth."
+            ),
+        },
         "guide_static_keeper_seat": {
             "keeper_underside_z_mm": DIMENSIONS.keeper_seat,
             "surface_contact_expected": True,
@@ -845,12 +1292,14 @@ def _guide_proofs(parts: tuple[Part, Part, Part]) -> dict:
             "former_pad_region_overlap_volumes_mm3": raised_floor_overlaps,
             "flat_floor_passage_ranges_x_mm": [list(bounds) for bounds in floor_passages],
         },
-        "selected_front_edge_y_mm": 2.5,
-        "selected_front_edge_to_guide_start_land_mm": (DIMENSIONS.guide_start - 2.5),
+        "selected_front_edge_y_mm": DIMENSIONS.base_start + FREE_EDGE_RADIUS_MM,
+        "selected_front_edge_to_guide_start_land_mm": (
+            DIMENSIONS.guide_start - DIMENSIONS.base_start - FREE_EDGE_RADIUS_MM
+        ),
         "minimum_continuous_centre_overlap_mm": (
             min(
                 DIMENSIONS.guide_end,
-                DIMENSIONS.finger_length - DIMENSIONS.extension,
+                DIMENSIONS.finger_length + DIMENSIONS.pusher_y_offset - DIMENSIONS.extension,
             )
             - DIMENSIONS.guide_start
         ),
@@ -894,7 +1343,7 @@ def _pusher_bed_proofs(parts: tuple[Part, Part, Part], spec: TrunkBlockerSpec) -
     ):
         raise ValueError("pusher bed-facing underside is not one coplanar datum")
 
-    front_y = -DIMENSIONS.wall_thickness - spec.extension_mm
+    front_y = -DIMENSIONS.wall_thickness + DIMENSIONS.pusher_y_offset - spec.extension_mm
     wall_tile = (
         make_tile(Tile(1, 2))
         .rotate(Axis.X, 90)
@@ -955,20 +1404,14 @@ def _disassembly_proofs(parts: tuple[Part, Part, Part]) -> dict:
     released_end = _make_pusher(TrunkBlockerSpec(DIMENSIONS.extension, True))
     pad_to_keeper_y_gap = (
         DIMENSIONS.pad_start
+        + DIMENSIONS.pusher_y_offset
         - DIMENSIONS.extension
-        - (DIMENSIONS.keeper_start + DIMENSIONS.keeper_length)
+        - DIMENSIONS.keeper_end
     )
     if pad_to_keeper_y_gap <= 0:
         raise ValueError("normal-travel pad-to-keeper longitudinal gap changed")
 
-    middle_pad = _squeeze_pad(0)
-    translated_pad_difference = max(
-        _symmetric_difference_volume(
-            middle_pad.moved(Location((side * DIMENSIONS.outer_centre, 0, 0))),
-            _squeeze_pad(side * DIMENSIONS.outer_centre),
-        )
-        for side in (-1, 1)
-    )
+    middle_pad = _squeeze_pad(0, width=DIMENSIONS.centre_width)
     middle_finger = _block(
         -DIMENSIONS.centre_width / 2,
         DIMENSIONS.centre_width / 2,
@@ -980,8 +1423,7 @@ def _disassembly_proofs(parts: tuple[Part, Part, Part]) -> dict:
     middle_pad_root_overlap = _shape_volume(middle_pad.intersect(middle_finger))
     middle_pad_missing_volume = _shape_volume(middle_pad.cut(_make_pusher_body(False)))
     if (
-        translated_pad_difference > VOLUME_TOLERANCE_MM3
-        or middle_pad_root_overlap <= VOLUME_TOLERANCE_MM3
+        middle_pad_root_overlap <= VOLUME_TOLERANCE_MM3
         or middle_pad_missing_volume > VOLUME_TOLERANCE_MM3
     ):
         raise ValueError("middle squeeze pad is not fully rooted in the centre finger")
@@ -1007,8 +1449,10 @@ def _disassembly_proofs(parts: tuple[Part, Part, Part]) -> dict:
         clearance for row in release_sweep for clearance in row["outer_pad_clearances_to_middle_mm"]
     )
 
-    carrier_contact_overtravel = DIMENSIONS.moving_carrier_start - (
-        DIMENSIONS.extension + DIMENSIONS.keeper_start + DIMENSIONS.keeper_length
+    carrier_contact_overtravel = (
+        DIMENSIONS.moving_carrier_start
+        + DIMENSIONS.pusher_y_offset
+        - (DIMENSIONS.extension + DIMENSIONS.keeper_end)
     )
     carrier_contact = released_end.moved(Location((0, -carrier_contact_overtravel, 0)))
     if (
@@ -1059,14 +1503,27 @@ def _disassembly_proofs(parts: tuple[Part, Part, Part]) -> dict:
     allowed_pad_top_regions = Compound(
         children=[
             _block(
-                centre_x - (DIMENSIONS.pad_outer - DIMENSIONS.pad_inner) / 2,
-                centre_x + (DIMENSIONS.pad_outer - DIMENSIONS.pad_inner) / 2,
-                DIMENSIONS.pad_start - 24,
-                DIMENSIONS.pad_start + DIMENSIONS.pad_length - 24,
+                centre_x - width / 2,
+                centre_x + width / 2,
+                DIMENSIONS.pad_start + DIMENSIONS.pusher_y_offset - TrunkBlockerSpec().extension_mm,
+                DIMENSIONS.pad_start
+                + DIMENSIONS.pad_length
+                + DIMENSIONS.pusher_y_offset
+                - TrunkBlockerSpec().extension_mm,
                 DIMENSIONS.pusher_z + short_pad_dimensions.pad_height - DETAIL_EDGE_RADIUS_MM,
                 DIMENSIONS.pad_top + 0.1,
             )
-            for centre_x in (-DIMENSIONS.outer_centre, 0, DIMENSIONS.outer_centre)
+            for centre_x, width in (
+                (
+                    -DIMENSIONS.outer_centre,
+                    DIMENSIONS.pad_outer - DIMENSIONS.pad_inner,
+                ),
+                (0, DIMENSIONS.centre_width),
+                (
+                    DIMENSIONS.outer_centre,
+                    DIMENSIONS.pad_outer - DIMENSIONS.pad_inner,
+                ),
+            )
         ]
     )
     protected_pusher_difference = _symmetric_difference_volume(
@@ -1109,7 +1566,8 @@ def _disassembly_proofs(parts: tuple[Part, Part, Part]) -> dict:
         "tall_pad_revision": {
             "pad_count": 3,
             "pad_height_mm": DIMENSIONS.pad_height,
-            "pad_width_mm": DIMENSIONS.pad_outer - DIMENSIONS.pad_inner,
+            "outer_pad_width_mm": DIMENSIONS.pad_outer - DIMENSIONS.pad_inner,
+            "centre_pad_width_mm": DIMENSIONS.centre_width,
             "pad_length_mm": DIMENSIONS.pad_length,
             "finger_height_mm": DIMENSIONS.finger_height,
             "finger_top_above_pusher_floor_mm": DIMENSIONS.finger_top,
@@ -1119,7 +1577,6 @@ def _disassembly_proofs(parts: tuple[Part, Part, Part]) -> dict:
             "base_brep_difference_from_short_pad_revision_mm3": base_difference,
             "pusher_brep_difference_outside_pad_top_regions_mm3": (protected_pusher_difference),
             "pad_top_edge_radius_mm": DETAIL_EDGE_RADIUS_MM,
-            "translated_pad_brep_difference_mm3": translated_pad_difference,
             "middle_pad_root_overlap_mm3": middle_pad_root_overlap,
             "middle_pad_missing_from_pusher_mm3": middle_pad_missing_volume,
             "outer_pad_release_sweep": release_sweep,
@@ -1150,7 +1607,7 @@ def _rounding_proofs(
         _make_pusher(spec, round_edges=False),
         _make_keeper(round_edges=False),
     )
-    front_y = -DIMENSIONS.wall_thickness - spec.extension_mm
+    front_y = -DIMENSIONS.wall_thickness + DIMENSIONS.pusher_y_offset - spec.extension_mm
     probes = {
         "underbody_anchors": (
             0,
@@ -1158,7 +1615,24 @@ def _rounding_proofs(
         ),
         "rack_teeth_and_guides": (
             0,
-            Location((-26, 3.5, 4.8)) * Box(52, 125, 15, align=(Align.MIN, Align.MIN, Align.MIN)),
+            Compound(
+                children=[
+                    Location((-8, DIMENSIONS.guide_start, 4.8))
+                    * Box(
+                        16,
+                        DIMENSIONS.guide_end - DIMENSIONS.guide_start,
+                        15,
+                        align=(Align.MIN, Align.MIN, Align.MIN),
+                    ),
+                    Location((-26, DIMENSIONS.rack_carrier_start, 4.8))
+                    * Box(
+                        52,
+                        DIMENSIONS.rack_carrier_end - DIMENSIONS.rack_carrier_start,
+                        15,
+                        align=(Align.MIN, Align.MIN, Align.MIN),
+                    ),
+                ]
+            ),
         ),
         "base_pilot_neighborhoods": (
             0,
@@ -1215,13 +1689,14 @@ def _rounding_proofs(
 
     rack_tools = []
     for side in (-1, 1):
-        for index in range(DIMENSIONS.positions + 2):
-            station = MOVING_TOOTH_STATIONS_MM[0] - DIMENSIONS.extension + index * DIMENSIONS.pitch
+        for station in RACK_TOOTH_STATIONS_MM:
             rack_tools.append(_rack_tooth(side, station, DIMENSIONS))
     guide_tools = []
     for side in (-1, 1):
         guide_tools.append(_guide_wall(side, DIMENSIONS))
-    shift_location = Location((0, -spec.extension_mm, DIMENSIONS.pusher_z))
+    shift_location = Location(
+        (0, DIMENSIONS.pusher_y_offset - spec.extension_mm, DIMENSIONS.pusher_z)
+    )
     moving_tooth_tools = []
     for side in (-1, 1):
         shift = side * DIMENSIONS.release_stroke if spec.released_illustration else 0
@@ -1248,6 +1723,7 @@ def _rounding_proofs(
         },
         "applied_regions": {
             "fixed_base_r2": "outer body perimeter",
+            "fixed_base_r1": "outer-prong guide-pad edges and lead-ins",
             "moving_wall_r2": "wall envelope and reinforcement diagonal ridges",
             "moving_wall_r1": (
                 "finger longitudinal and tip edges, squeeze-pad edges, and reinforcement "
@@ -1304,7 +1780,12 @@ def _rounding_proofs(
 def _connector_transform(height_mm: float, extension_mm: float) -> list[list[float]]:
     return [
         [1.0, 0.0, 0.0, -DIMENSIONS.width / 2],
-        [0.0, 0.0, 1.0, -DIMENSIONS.wall_thickness - extension_mm],
+        [
+            0.0,
+            0.0,
+            1.0,
+            -DIMENSIONS.wall_thickness + DIMENSIONS.pusher_y_offset - extension_mm,
+        ],
         [
             0.0,
             -1.0,
@@ -1323,7 +1804,7 @@ def _placed_connector(height_mm: float, extension_mm: float) -> Part:
             Location(
                 (
                     -DIMENSIONS.width / 2,
-                    -DIMENSIONS.wall_thickness - extension_mm,
+                    -DIMENSIONS.wall_thickness + DIMENSIONS.pusher_y_offset - extension_mm,
                     DIMENSIONS.pusher_z + height_mm + DIMENSIONS.width / 2,
                 )
             )
@@ -1333,9 +1814,15 @@ def _placed_connector(height_mm: float, extension_mm: float) -> Part:
 
 def _native_connector_proofs(pusher: Part, spec: TrunkBlockerSpec) -> tuple[list[dict], dict]:
     body = _make_pusher_body(spec.released_illustration).moved(
-        Location((0, -spec.extension_mm, DIMENSIONS.pusher_z))
+        Location(
+            (
+                0,
+                DIMENSIONS.pusher_y_offset - spec.extension_mm,
+                DIMENSIONS.pusher_z,
+            )
+        )
     )
-    front_y = -DIMENSIONS.wall_thickness - spec.extension_mm
+    front_y = -DIMENSIONS.wall_thickness + DIMENSIONS.pusher_y_offset - spec.extension_mm
     protected = Location((-40, front_y + CONNECTOR_PROOF_TOLERANCE_MM, -20)) * Box(
         80,
         180,
@@ -1419,16 +1906,18 @@ def _checked_step_roundtrip(
         imported = restored_solids[candidate]
         volume_delta = abs(imported.volume - source.volume)
         volume_budget = max(1e-6, source.area * Precision.Confusion_s())
+        symmetric_difference = _symmetric_difference_volume(source, imported)
         bounds_delta = float(np.max(np.abs(source_bounds[index] - restored_bounds[candidate])))
         if (
             not imported.is_valid
-            or volume_delta > volume_budget
+            or symmetric_difference > volume_budget
             or bounds_delta > CONNECTOR_PROOF_TOLERANCE_MM
         ):
             raise ValueError(f"STEP roundtrip failed for {PART_NAMES[index]}")
         result[PART_NAMES[index]] = {
             **_shape_facts(imported),
             "volume_delta_mm3": volume_delta,
+            "symmetric_brep_difference_mm3": symmetric_difference,
             "volume_budget_mm3": volume_budget,
             "maximum_bounds_delta_mm": bounds_delta,
         }
@@ -1648,7 +2137,10 @@ def export_trunk_blocker(
             "wall_height_mm": DIMENSIONS.wall_height,
             "wall_width_mm": DIMENSIONS.width,
             "wall_backing_thickness_mm": DIMENSIONS.wall_thickness,
+            "base_bounds_y_mm": [DIMENSIONS.base_start, DIMENSIONS.base_end],
             "finger_length_mm": DIMENSIONS.finger_length,
+            "prong_shortening_mm": DIMENSIONS.prong_shortening,
+            "flexible_beam_length_mm": DIMENSIONS.flexible_beam_length,
             "outer_finger_section_mm": [
                 DIMENSIONS.outer_width,
                 DIMENSIONS.finger_height,
@@ -1676,6 +2168,7 @@ def export_trunk_blocker(
             "squeeze_pad_height_mm": DIMENSIONS.pad_height,
             "squeeze_pad_above_finger_mm": DIMENSIONS.pad_above_finger,
             "squeeze_pad_width_mm": DIMENSIONS.pad_outer - DIMENSIONS.pad_inner,
+            "centre_squeeze_pad_width_mm": DIMENSIONS.centre_width,
             "squeeze_pad_length_mm": DIMENSIONS.pad_length,
             "push_pad_count": 3,
             "nominal_locking_stations": DIMENSIONS.positions,
@@ -1686,7 +2179,7 @@ def export_trunk_blocker(
             ],
             "moving_tooth_carrier_height_mm": DIMENSIONS.tooth_height,
             "carrier_stop_extension_mm": (
-                DIMENSIONS.moving_carrier_start - DIMENSIONS.keeper_start - DIMENSIONS.keeper_length
+                DIMENSIONS.moving_carrier_start + DIMENSIONS.pusher_y_offset - DIMENSIONS.keeper_end
             ),
             "connector_centres_above_pusher_floor_mm": list(
                 CONNECTOR_CENTRES_ABOVE_PUSHER_FLOOR_MM
@@ -1696,6 +2189,8 @@ def export_trunk_blocker(
             "base_anchor_pitch_mm": DIMENSIONS.anchor_pitch,
             "base_anchor_projection_mm": DIMENSIONS.anchor_depth,
             "keeper_length_mm": DIMENSIONS.keeper_length,
+            "keeper_bounds_y_mm": [DIMENSIONS.keeper_start, DIMENSIONS.keeper_end],
+            "keeper_back_shift_mm": DIMENSIONS.keeper_back_shift,
             "keeper_width_mm": DIMENSIONS.keeper_width,
             "keeper_clearance_bore_mm": DIMENSIONS.screw_clearance,
             "keeper_countersink_mouth_mm": DIMENSIONS.countersink_diameter,
