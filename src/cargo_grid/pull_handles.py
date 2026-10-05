@@ -11,10 +11,10 @@ cell; tile thickness sets the plug depth like other X attachments.
 """
 
 from dataclasses import dataclass
-from math import asin, atan2, ceil, degrees, hypot, sin
+from math import asin, atan2, ceil, cos, degrees, hypot, sin
 from typing import ClassVar
 
-from build123d import Axis, Face, Location, Part, Solid, Wire
+from build123d import Axis, CenterOf, Face, Location, Part, Solid, Wire
 from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet
 
 from cargo_grid.interfaces import horizontal_edges, make_plug, prism, rectangle
@@ -47,6 +47,8 @@ STRAP_BAR_THICKNESS_MM = 8.0
 STRAP_BAR_CENTRE_OFFSET_MM = 25.0
 STRAP_BAR_TOP_RADIUS_MM = 3.0
 NO_STRAP_BAR_PRINT_ROTATION_X = 180.0
+# Provisional margin against tipping while the strap-bar handle prints on its front; not measured.
+MIN_FRONT_REST_MARGIN_MM = 5.0
 
 _SHARP_EDGE_DEGREES = 5.0
 _EPSILON = 1e-6
@@ -138,6 +140,35 @@ def _tangent_tilt(lower: tuple[float, float], radius: float, grip, grip_radius: 
     return atan2(dy, dz) + asin((radius - grip_radius) / hypot(dy, dz))
 
 
+def _front_rest(interface: Interface) -> tuple[float, list[tuple[tuple[float, float], float]]]:
+    """Front rest tilt and the two YZ arcs (centre, radius) it touches: grip, then lower edge."""
+    front = grip_front_y_mm(interface)
+    grip = (
+        (front + OUTER_EDGE_RADIUS_MM, grip_top_mm() - OUTER_EDGE_RADIUS_MM),
+        OUTER_EDGE_RADIUS_MM,
+    )
+    bar = (
+        (
+            strap_bar_front_y_mm(interface) + STRAP_BAR_TOP_RADIUS_MM,
+            strap_bar_top_mm() - STRAP_BAR_TOP_RADIUS_MM,
+        ),
+        STRAP_BAR_TOP_RADIUS_MM,
+    )
+    # The seat edge rounds the corner between the seat (along +Y) and the flare towards the neck.
+    flare = hypot(front, FLARE_NECK_MM)
+    bisector = (1 + front / flare, FLARE_NECK_MM / flare)
+    corner = atan2(FLARE_NECK_MM, front)
+    offset = SEAT_EDGE_RADIUS_MM / sin(corner / 2) / hypot(*bisector)
+    seat = ((bisector[0] * offset, bisector[1] * offset), SEAT_EDGE_RADIUS_MM)
+    tilt, lower = max(
+        (_tangent_tilt(centre, radius, grip[0], grip[1]), (centre, radius))
+        for centre, radius in (bar, seat)
+    )
+    if not 0 < tilt < atan2(front, FLARE_NECK_MM):
+        raise ValueError("pull handle front rest face is outside its contact edges")
+    return tilt, [grip, lower]
+
+
 def print_rotation_x(strap_bar: bool, interface: Interface = Interface()) -> float:
     """X rotation that lays each version on its least-support resting face.
 
@@ -149,25 +180,24 @@ def print_rotation_x(strap_bar: bool, interface: Interface = Interface()) -> flo
     """
     if not strap_bar:
         return NO_STRAP_BAR_PRINT_ROTATION_X
-    front = grip_front_y_mm(interface)
-    grip = (front + OUTER_EDGE_RADIUS_MM, grip_top_mm() - OUTER_EDGE_RADIUS_MM)
-    bar = (
-        strap_bar_front_y_mm(interface) + STRAP_BAR_TOP_RADIUS_MM,
-        strap_bar_top_mm() - STRAP_BAR_TOP_RADIUS_MM,
-    )
-    # The seat edge rounds the corner between the seat (along +Y) and the flare towards the neck.
-    flare = hypot(front, FLARE_NECK_MM)
-    bisector = (1 + front / flare, FLARE_NECK_MM / flare)
-    corner = atan2(FLARE_NECK_MM, front)
-    offset = SEAT_EDGE_RADIUS_MM / sin(corner / 2) / hypot(*bisector)
-    seat = (bisector[0] * offset, bisector[1] * offset)
-    tilt = max(
-        _tangent_tilt(bar, STRAP_BAR_TOP_RADIUS_MM, grip, OUTER_EDGE_RADIUS_MM),
-        _tangent_tilt(seat, SEAT_EDGE_RADIUS_MM, grip, OUTER_EDGE_RADIUS_MM),
-    )
-    if not 0 < tilt < atan2(front, FLARE_NECK_MM):
-        raise ValueError("pull handle front rest face is outside its contact edges")
-    return 90.0 + degrees(tilt)
+    return 90.0 + degrees(_front_rest(interface)[0])
+
+
+def front_rest_margin_mm(shape: Part, interface: Interface = Interface()) -> float:
+    """How far the centre of mass sits inside the strap-bar handle's front rest contacts.
+
+    Measured in the bed plane across the two contact lines; negative means it would tip over.
+    """
+    tilt, arcs = _front_rest(interface)
+    normal = (-cos(tilt), sin(tilt))
+    along = (sin(tilt), cos(tilt))
+    contacts = [
+        along[0] * (y + radius * normal[0]) + along[1] * (z + radius * normal[1])
+        for (y, z), radius in arcs
+    ]
+    centre = shape.center(CenterOf.MASS)
+    position = along[0] * centre.Y + along[1] * centre.Z
+    return min(position - min(contacts), max(contacts) - position)
 
 
 def _face(points, to3d) -> Face:
@@ -259,18 +289,18 @@ def _sharp_edges(part: Part) -> list:
     return sharp
 
 
-def _round(part: Part, radius: float, edges: list, what: str) -> Part:
-    if not edges:
+def _round(part: Part, radii: dict, what: str) -> Part:
+    if not radii:
         raise ValueError(f"pull handle {what}: no edges selected")
     operation = BRepFilletAPI_MakeFillet(part.wrapped)
-    for edge in edges:
+    for edge, radius in radii.items():
         operation.Add(radius, edge.wrapped)
     operation.Build()
     if not operation.IsDone():
-        raise ValueError(f"pull handle {what}: R{radius:g} fillet failed")
+        raise ValueError(f"pull handle {what}: fillet failed")
     result = Part([Solid(operation.Shape())])
     if not result.is_valid or len(result.solids()) != 1:
-        raise ValueError(f"pull handle {what}: R{radius:g} fillet produced invalid geometry")
+        raise ValueError(f"pull handle {what}: fillet produced invalid geometry")
     return result
 
 
@@ -299,13 +329,19 @@ def _body(interface: Interface) -> Part:
     def seat(box) -> bool:
         return box.max.Z < _EPSILON
 
-    for what, selector, radius in (
-        ("outer corners and grip top", outer, OUTER_EDGE_RADIUS_MM),
-        ("hand opening", window, WINDOW_EDGE_RADIUS_MM),
-        ("seat perimeter", seat, SEAT_EDGE_RADIUS_MM),
-    ):
-        edges = [edge for edge in _sharp_edges(body) if selector(edge.bounding_box())]
-        body = _round(body, radius, edges, what)
+    # The seat perimeter is solved together with the outer corners: on shallow flares a
+    # separate seat pass can't blend into the R6 ends of the flare edges.
+    edges = _sharp_edges(body)
+    body = _round(
+        body,
+        {
+            **{edge: OUTER_EDGE_RADIUS_MM for edge in edges if outer(edge.bounding_box())},
+            **{edge: SEAT_EDGE_RADIUS_MM for edge in edges if seat(edge.bounding_box())},
+        },
+        "outer corners, grip top and seat perimeter",
+    )
+    edges = [edge for edge in _sharp_edges(body) if window(edge.bounding_box())]
+    body = _round(body, dict.fromkeys(edges, WINDOW_EDGE_RADIUS_MM), "hand opening")
     if _sharp_edges(body):
         raise ValueError("pull handle body still has unrounded edges")
     return body
@@ -359,6 +395,15 @@ def make_pull_handle(spec: PullHandle = PullHandle()) -> Part:
     part = part.fillet(PLUG_ROOT_RADIUS_MM, roots).clean()
     if not part.is_valid or len(part.solids()) != 1 or part.volume <= 0:
         raise ValueError("pull handle: invalid or disconnected geometry")
+    if spec.strap_bar:
+        margin = front_rest_margin_mm(part, interface)
+        if margin < MIN_FRONT_REST_MARGIN_MM:
+            raise ValueError(
+                f"the strap-bar pull handle wouldn't rest steadily on its front for printing "
+                f"with {interface.height:g} mm tiles: its centre of mass is {margin:.1f} mm "
+                f"inside its resting edges, and at least {MIN_FRONT_REST_MARGIN_MM:g} mm is "
+                "needed; use a thinner tile setting"
+            )
     return part
 
 

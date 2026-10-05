@@ -14,6 +14,7 @@ from cargo_grid.pull_handles import (
     STRAP_SLOT_WIDTH_MM,
     PullHandle,
     depth_cells,
+    front_rest_margin_mm,
     make_pull_handle,
     print_rotation_x,
     pull_handle_datums,
@@ -72,6 +73,8 @@ def extras_job(
     designs, sizes = [], {}
     for spec in specs:
         design = pull_handle_design(spec)
+        if spec.strap_bar:
+            rest_margin = front_rest_margin_mm(design.shape, spec.interface)
         size = design.bambu_size if orient_for_bambu else design.size
         if envelope.placement(size) is None or build.placement(size) is None:
             raise ValueError(
@@ -126,6 +129,7 @@ def extras_job(
                     "seat edge below it, with object-scoped normal Auto support"
                 ),
                 "no_strap_bar": "grip top on the bed, plugs upward, no object support",
+                "strap_bar_centre_of_mass_inside_rest_edges_mm": round(rest_margin, 2),
             },
             "physical_evidence": (
                 "An earlier 2x1 strap-bar prototype at the standard 60/13 settings with a 34 mm "

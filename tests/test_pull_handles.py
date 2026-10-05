@@ -24,7 +24,9 @@ from cargo_grid.pull_handles import (
     STRAP_SLOT_HEIGHT_MM,
     PullHandle,
     depth_cells,
+    front_rest_margin_mm,
     grip_top_mm,
+    make_pull_handle,
     plug_centers,
     print_rotation_x,
     strap_bar_front_y_mm,
@@ -157,7 +159,13 @@ def _front_rest_contacts(design, interface=Interface()):
     centre = design.shape.center(CenterOf.MASS)
     c, s = cos(radians(rotation)), sin(radians(rotation))
     resting = [y for ys in contacts.values() for y in ys]
-    assert min(resting) + 5 < centre.Y * c - centre.Z * s < max(resting) - 5
+    centre_y = centre.Y * c - centre.Z * s
+    assert min(resting) < centre_y < max(resting)
+    # Points near a rounded contact spread either side of its tangent line; use each band's middle.
+    lines = [sum(ys) / len(ys) for ys in contacts.values() if ys]
+    measured = min(centre_y - min(lines), max(lines) - centre_y)
+    assert measured == pytest.approx(front_rest_margin_mm(design.shape, interface), abs=0.1)
+    assert measured >= 5
     return {name for name, ys in contacts.items() if ys}
 
 
@@ -194,6 +202,10 @@ def test_h2d_set_puts_each_version_on_its_own_named_plate(h2d_job):
             width, depth = depth, width
         assert common.contains_box(placement.x, placement.y, width, depth, height)
     assert h2d_job.placement_policy["collection"] == "pull-handle"
+    margin = h2d_job.manifest_metadata["print_poses"][
+        "strap_bar_centre_of_mass_inside_rest_edges_mm"
+    ]
+    assert margin == pytest.approx(front_rest_margin_mm(h2d_job.designs[0].shape), abs=0.01)
     assert h2d_job.manifest_metadata["inventory"] == {
         "pull_handle_with_strap_bar": 1,
         "pull_handle_without_strap_bar": 1,
@@ -251,6 +263,26 @@ def test_footprint_is_the_fewest_whole_cells_that_fit_a_hand(pitch, cells):
     assert {(x, y) for x, y, _ in centers} == {
         ((i + 0.5) * pitch, (j + 0.5) * pitch) for i in range(cells[0]) for j in range(cells[1])
     }
+
+
+@pytest.mark.parametrize(
+    "pitch",
+    [46, 130, pytest.param(59, marks=pytest.mark.slow), pytest.param(200, marks=pytest.mark.slow)],
+)
+def test_deep_and_single_cell_footprints_build_both_versions(pitch):
+    interface = Interface(pitch)
+    for strap_bar in (True, False):
+        shape = make_pull_handle(PullHandle(strap_bar, interface))
+        assert shape.is_valid and len(shape.solids()) == 1 and shape.volume > 0
+        bounds = shape.bounding_box()
+        assert bounds.max.X == pytest.approx(width_cells(interface) * pitch, abs=1e-5)
+        assert bounds.max.Z == pytest.approx(grip_top_mm(), abs=1e-5)
+
+
+def test_strap_bar_handle_refuses_tiles_too_thick_to_rest_on_its_front():
+    with pytest.raises(ValueError, match="wouldn't rest steadily on its front"):
+        make_pull_handle(PullHandle(True, Interface(height=40)))
+    assert make_pull_handle(PullHandle(False, Interface(height=40))).is_valid
 
 
 @pytest.mark.parametrize(
