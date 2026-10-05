@@ -1,4 +1,4 @@
-"""Experimental blocker native-CAD geometry and export boundaries."""
+"""Trunk-blocker native-CAD geometry and export boundaries."""
 
 import json
 from math import floor
@@ -14,7 +14,7 @@ from OCP.BRepAdaptor import BRepAdaptor_Surface
 from cargo_grid import TrunkBlockerSpec, prepared
 from cargo_grid.accessories import make_bidirectional_panel_connector
 from cargo_grid.cli import H2D_PROFILES
-from cargo_grid.export import write_3mf
+from cargo_grid.export import BAMBU_PROCESS_DEFAULTS, write_3mf
 from cargo_grid.jobs import Design, Job
 from cargo_grid.packing import PrimeTower, PrintPlacement, TowerClearance, h2d_common_build
 from cargo_grid.plates import (
@@ -47,6 +47,8 @@ from cargo_grid.trunk_blocker_export import (
     export_trunk_blocker,
     prepare_trunk_blocker_print_job,
     trunk_blocker_h2d_settings,
+    trunk_blocker_print_job,
+    write_trunk_blocker_print_project,
 )
 
 
@@ -168,6 +170,68 @@ def test_trunk_blocker_h2d_settings_defaults_to_tested_0p8_profile():
     assert settings.layer_height == profile.layer_height_mm
     assert settings.printer_settings_id == profile.printer
     assert settings.print_settings_id == profile.process
+
+
+@pytest.mark.parametrize("nozzle_diameter_mm", H2D_PROFILES)
+def test_complete_print_project_uses_shared_h2d_support_conventions(
+    tmp_path,
+    nozzle_diameter_mm,
+):
+    job = trunk_blocker_print_job(nozzle_diameter_mm)
+    assert [design.name for design in job.designs] == [
+        "fixed_base",
+        "moving_wall",
+        "short_screwed_keeper",
+        "prong_lock_clip",
+    ]
+    assert {placement.plate for placement in job.print_placements} == {0}
+    assert job.part_gap == 8
+    assert set(job.prime_tower_positions) == {0}
+    assert job.tower_bounds(0)[2] == pytest.approx(H2D_SHARED_REACH_X_MM[1])
+
+    project = tmp_path / f"blocker-{nozzle_diameter_mm:g}.3mf"
+    write_trunk_blocker_print_project(project, nozzle_diameter_mm)
+    with ZipFile(project) as archive:
+        settings = json.loads(archive.read("Metadata/project_settings.config"))
+        model = ET.fromstring(archive.read("Metadata/model_settings.config"))
+    profile = H2D_PROFILES[nozzle_diameter_mm]
+    assert settings["printer_settings_id"] == profile.printer
+    assert settings["print_settings_id"] == profile.process
+    assert settings["filament_settings_id"] == [profile.petg, profile.pla]
+    assert settings["enable_support"] == "0"
+    assert {key: settings[key] for key in BAMBU_PROCESS_DEFAULTS} == BAMBU_PROCESS_DEFAULTS
+    overrides = set(settings["different_settings_to_system"][0].split(";"))
+    assert set(BAMBU_PROCESS_DEFAULTS) <= overrides
+    assert "enable_support" not in overrides
+    assert {"wipe_tower_x", "wipe_tower_y"} <= overrides
+
+    object_settings = {}
+    for item in model.findall("object"):
+        metadata = {
+            child.get("key"): child.get("value")
+            for child in item.findall("metadata")
+            if child.get("key")
+        }
+        object_settings[metadata["name"]] = metadata
+    supported = [
+        values
+        for name, values in object_settings.items()
+        if name.startswith(("Fixed base", "Moving wall"))
+    ]
+    unsupported = [
+        values
+        for name, values in object_settings.items()
+        if name.startswith(("Short keeper", "Accepted v10b #1 clip"))
+    ]
+    assert len(supported) == 2
+    assert all(
+        values["enable_support"] == "1" and values["support_type"] == "normal(auto)"
+        for values in supported
+    )
+    assert len(unsupported) == 2
+    assert all(
+        "enable_support" not in values and "support_type" not in values for values in unsupported
+    )
 
 
 def test_approved_parts_are_three_valid_native_solids():
@@ -766,7 +830,7 @@ def test_complete_export_is_native_step_first_and_refuses_overwrite(tmp_path: Pa
         "trunk_blocker.3mf",
         "trunk_blocker.step",
     }
-    assert manifest["kind"] == "experimental-trunk-blocker"
+    assert manifest["kind"] == "trunk-blocker"
     assert manifest["design_mode"]["workflow"] == "native Cargo-Grid BREP"
     assert manifest["design_mode"]["catalogue_member"] is False
     assert manifest["parameters"]["wall_backing_thickness_mm"] == 8

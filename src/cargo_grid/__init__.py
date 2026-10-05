@@ -13,7 +13,7 @@ def export_trunk_blocker(
     output: Path,
     spec: TrunkBlockerSpec = TrunkBlockerSpec(),
 ) -> Path:
-    """Export the complete experimental blocker through its native CAD pipeline."""
+    """Export the complete blocker through its native CAD pipeline."""
 
     from cargo_grid.trunk_blocker_export import export_trunk_blocker as export
 

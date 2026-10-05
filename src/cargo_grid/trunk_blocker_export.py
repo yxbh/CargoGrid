@@ -1,4 +1,4 @@
-"""Native CAD export for the experimental three-part trunk blocker."""
+"""Native CAD and print-project export for the three-part trunk blocker."""
 
 import hashlib
 import json
@@ -7,7 +7,7 @@ from dataclasses import replace
 from itertools import permutations
 from math import atan2, degrees, floor
 from pathlib import Path
-from tempfile import TemporaryFile
+from tempfile import TemporaryDirectory, TemporaryFile
 from xml.etree import ElementTree as ET
 from xml.sax.saxutils import escape, quoteattr
 from zipfile import ZIP_DEFLATED, BadZipFile, ZipFile
@@ -41,20 +41,35 @@ from OCP.TopoDS import TopoDS
 from cargo_grid._version import __version__
 from cargo_grid.accessories import make_bidirectional_panel_connector
 from cargo_grid.cli import H2D_PROFILES, H2DProfiles
-from cargo_grid.export import BambuSettings, Material
-from cargo_grid.jobs import Job
-from cargo_grid.meshes import write_stl
+from cargo_grid.export import (
+    BAMBU_PROCESS_DEFAULTS,
+    BambuSettings,
+    Material,
+    export_job,
+    write_3mf,
+)
+from cargo_grid.footprints import (
+    minimum_projected_clearance,
+    pack_projected_footprints,
+    projected_mesh_footprint,
+)
+from cargo_grid.jobs import Design, Job
+from cargo_grid.meshes import checked_mesh, write_stl
 from cargo_grid.packing import PrimeTower, TowerClearance, h2d_common_build
 from cargo_grid.parameters import Tile
 from cargo_grid.plates import (
+    AUTO_SUPPORT_FOOT_ALLOWANCE_MM,
+    AUTO_SUPPORT_PLATE_MARGIN_MM,
     AUTO_SUPPORT_TOWER_CLEARANCE_MM,
     BAMBU_TOWER_MARGIN_MM,
+    H2D_FOOTPRINT_SEARCH_ALLOWANCE_MM,
     H2D_SHARED_REACH_X_MM,
     H2D_TOWER_LEFT_CLEARANCE_MM,
     TOWER_BACK_ALLOWANCE_MM,
     BambuTowerEstimate,
 )
 from cargo_grid.prepared import PreparedShape
+from cargo_grid.roof_support import OBJECT_AUTO_SUPPORT, RoofSupportSettings
 from cargo_grid.tiles import make_tile
 from cargo_grid.trunk_blocker import (
     BASE_ANCHOR_CENTRES_Y_MM,
@@ -79,6 +94,7 @@ from cargo_grid.trunk_blocker import (
     _squeeze_pad,
     _unify_same_domain,
     make_trunk_blocker_parts,
+    make_trunk_blocker_prong_lock_clip,
 )
 
 CORE_NAMESPACE = "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"
@@ -88,6 +104,12 @@ CORE = f"{{{CORE_NAMESPACE}}}"
 PART_NAMES = ("fixed_base", "moving_wall", "short_screwed_keeper")
 CONNECTOR_PROOF_TOLERANCE_MM = 1e-5
 VOLUME_TOLERANCE_MM3 = 1e-6
+TRUNK_BLOCKER_MODEL_CLEARANCE_MM = 4.0
+TRUNK_BLOCKER_SUPPORT_CLEARANCE_MM = (
+    TRUNK_BLOCKER_MODEL_CLEARANCE_MM + AUTO_SUPPORT_FOOT_ALLOWANCE_MM
+)
+TRUNK_BLOCKER_PLATE_NAME = "TRUNK BLOCKER - PETG WITH PLA INTERFACE"
+_TRUNK_BLOCKER_SUPPORT_OBJECTS = {"fixed_base", "moving_wall"}
 
 
 def _trunk_blocker_h2d_profile(nozzle_diameter_mm: float) -> H2DProfiles:
@@ -118,6 +140,236 @@ def trunk_blocker_h2d_settings(
         machine_nozzle_count=2,
         printer_model="Bambu Lab H2D",
     )
+
+
+def trunk_blocker_print_job(
+    nozzle_diameter_mm: float = 0.8,
+    spec: TrunkBlockerSpec = TrunkBlockerSpec(),
+) -> Job:
+    """Pack one complete blocker and its accepted clip on one supported H2D plate."""
+    profile = _trunk_blocker_h2d_profile(nozzle_diameter_mm)
+    base, pusher, keeper = make_trunk_blocker_parts(spec)
+    designs = [
+        Design(
+            "fixed_base",
+            base,
+            {"print_preparation": "trunk-blocker-complete-kit"},
+            display_name="Fixed base - connectors down",
+        ),
+        Design(
+            "moving_wall",
+            pusher,
+            {"print_preparation": "trunk-blocker-complete-kit"},
+            display_name="Moving wall - fingers down",
+        ),
+        Design(
+            "short_screwed_keeper",
+            keeper,
+            {"print_preparation": "trunk-blocker-complete-kit"},
+            display_name="Short keeper - countersinks up",
+        ),
+        Design(
+            "prong_lock_clip",
+            make_trunk_blocker_prong_lock_clip(spec),
+            {"print_preparation": "trunk-blocker-complete-kit"},
+            display_name="Accepted v10b #1 clip - side lying",
+            recommended_print_rotation_x=90,
+            apply_orientation_to_bambu=True,
+        ),
+    ]
+    footprints = []
+    for design in designs:
+        vertices, faces, _ = checked_mesh(design.bambu_shape)
+        footprints.append(projected_mesh_footprint(vertices, faces))
+
+    build = h2d_common_build()
+    tallest = max(design.bambu_size[2] for design in designs)
+    position, reach, clearance = _h2d_tower_reservation(
+        tallest,
+        profile.layer_height_mm,
+    )
+    tower_left = reach.footprint(*position)[0] - clearance.left
+    bounds = (
+        30.0,
+        AUTO_SUPPORT_PLATE_MARGIN_MM,
+        tower_left,
+        build.y - AUTO_SUPPORT_PLATE_MARGIN_MM,
+    )
+    placements = pack_projected_footprints(
+        footprints,
+        bounds,
+        gap=TRUNK_BLOCKER_SUPPORT_CLEARANCE_MM,
+        search_gap=(TRUNK_BLOCKER_SUPPORT_CLEARANCE_MM - H2D_FOOTPRINT_SEARCH_ALLOWANCE_MM),
+    )
+    if {placement.plate for placement in placements} != {0}:
+        raise ValueError("complete trunk-blocker kit must fit one H2D plate")
+    if (
+        minimum_projected_clearance(footprints, placements, plate=0)
+        < TRUNK_BLOCKER_SUPPORT_CLEARANCE_MM - 1e-6
+    ):
+        raise ValueError("complete trunk-blocker kit lost its support-foot clearance")
+
+    return prepare_trunk_blocker_print_job(
+        Job(
+            designs,
+            build,
+            "trunk-blocker",
+            part_gap=TRUNK_BLOCKER_SUPPORT_CLEARANCE_MM,
+            print_placements=placements,
+            plate_names={0: TRUNK_BLOCKER_PLATE_NAME},
+            projected_footprints=footprints,
+            projected_footprint_clearances={
+                0: TRUNK_BLOCKER_SUPPORT_CLEARANCE_MM,
+            },
+            plate_builds={0: build},
+            manifest_metadata={
+                "print_guidance": {
+                    "orientations": {
+                        "fixed_base": "connectors down",
+                        "moving_wall": "fingers down",
+                        "short_screwed_keeper": "countersinks up",
+                        "prong_lock_clip": "X=+90, flat side on the bed",
+                    },
+                    "support": (
+                        "Global support is off. Normal Auto support is object-scoped to the "
+                        "fixed base and moving wall; the keeper and clip have no object override."
+                    ),
+                    "assembly": (
+                        "Slide the moving wall into the base, fasten the keeper with four "
+                        "M3x16 DIN 7991 screws, then press the undimpled v10b #1 collar clip "
+                        "over the centre squeeze tab."
+                    ),
+                    "use": (
+                        "Bags remain supported by the mat. The blocker has no load or crash rating."
+                    ),
+                },
+                "physical_evidence": {
+                    "profile": ("H2D 0.8 mm nozzle, 0.32 mm Balanced Strength, Bambu PETG Basic"),
+                    "blocker": "v9c base, moving wall and keeper were physically test-fitted.",
+                    "clip": (
+                        "The accepted v10b #1 0.00 mm-per-side collar clip held without wobble "
+                        "and was firm to remove."
+                    ),
+                    "nozzle_0p4": (
+                        "Export is supported, but fit, flex, bridge shape, retention and strength "
+                        "have not been physically tested at 0.4 mm. Try the clip before the full kit."
+                    ),
+                },
+            },
+        ),
+        material_counts_by_plate={0: 2},
+        nozzle_diameter_mm=nozzle_diameter_mm,
+    )
+
+
+def _apply_trunk_blocker_support_settings(path: Path) -> None:
+    with ZipFile(path) as source:
+        entries = {name: source.read(name) for name in source.namelist()}
+    settings = json.loads(entries["Metadata/project_settings.config"])
+    support = RoofSupportSettings(mode="auto")
+    settings.update(support.native_settings())
+    existing = settings.get("different_settings_to_system", [""])
+    overrides = set(existing[0].split(";")) if existing and existing[0] else set()
+    overrides.update(BAMBU_PROCESS_DEFAULTS)
+    overrides.update(support.process_override_keys)
+    settings["different_settings_to_system"] = [
+        ";".join(sorted(overrides)),
+        *[""] * (len(settings["filament_settings_id"]) + 1),
+    ]
+    entries["Metadata/project_settings.config"] = (json.dumps(settings, indent=2) + "\n").encode()
+
+    prefixes = {
+        "Fixed base": "fixed_base",
+        "Moving wall": "moving_wall",
+        "Short keeper": "short_screwed_keeper",
+        "Accepted v10b #1 clip": "prong_lock_clip",
+    }
+    model = ET.fromstring(entries["Metadata/model_settings.config"])
+    configured = {}
+    for item in model.findall("object"):
+        metadata = {
+            child.get("key"): child for child in item.findall("metadata") if child.get("key")
+        }
+        name = metadata["name"].get("value", "")
+        design = next(
+            (value for prefix, value in prefixes.items() if name.startswith(prefix)),
+            None,
+        )
+        if design is None:
+            raise ValueError(f"unknown blocker print object: {name}")
+        configured[design] = set(metadata)
+        if design in _TRUNK_BLOCKER_SUPPORT_OBJECTS:
+            for key, value in OBJECT_AUTO_SUPPORT.items():
+                child = metadata.get(key)
+                if child is None:
+                    child = ET.SubElement(item, "metadata", key=key)
+                child.set("value", value)
+    expected = {
+        *_TRUNK_BLOCKER_SUPPORT_OBJECTS,
+        "short_screwed_keeper",
+        "prong_lock_clip",
+    }
+    if set(configured) != expected:
+        raise ValueError("blocker project does not contain its four expected objects")
+    for design in ("short_screwed_keeper", "prong_lock_clip"):
+        if configured[design] & OBJECT_AUTO_SUPPORT.keys():
+            raise ValueError(f"{design} must not have an object support override")
+
+    entries["Metadata/model_settings.config"] = ET.tostring(
+        model,
+        encoding="utf-8",
+        xml_declaration=True,
+    )
+    patched = path.with_suffix(".patched")
+    with ZipFile(patched, "w", ZIP_DEFLATED) as target:
+        for name, data in entries.items():
+            target.writestr(name, data)
+    patched.replace(path)
+
+
+def write_trunk_blocker_print_project(
+    path: Path,
+    nozzle_diameter_mm: float = 0.8,
+    spec: TrunkBlockerSpec = TrunkBlockerSpec(),
+) -> dict:
+    """Write one complete PETG/PLA H2D blocker project without partial output."""
+    if path.exists():
+        raise ValueError(f"output file already exists: {path}; choose a new path")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory(dir=path.parent, prefix=f".{path.stem}-") as temporary:
+        target = Path(temporary) / path.name
+        result = write_3mf(
+            trunk_blocker_print_job(nozzle_diameter_mm, spec),
+            target,
+            bambu=trunk_blocker_h2d_settings(
+                nozzle_diameter_mm,
+                dual_material=True,
+            ),
+        )
+        _apply_trunk_blocker_support_settings(target)
+        with ZipFile(target) as archive:
+            if archive.testzip() is not None:
+                raise ValueError("trunk-blocker print project ZIP failed integrity check")
+        target.replace(path)
+    return result
+
+
+def export_trunk_blocker_print_project(
+    output: Path,
+    nozzle_diameter_mm: float = 0.8,
+    spec: TrunkBlockerSpec = TrunkBlockerSpec(),
+    *,
+    stl: bool = True,
+) -> Path:
+    """Export the complete H2D blocker kit through the ordinary job manifest path."""
+    manifest = export_job(
+        trunk_blocker_print_job(nozzle_diameter_mm, spec),
+        output,
+        stl=stl,
+        bambu=trunk_blocker_h2d_settings(nozzle_diameter_mm, dual_material=True),
+    )
+    _apply_trunk_blocker_support_settings(output / "job.3mf")
+    return manifest
 
 
 def prepare_trunk_blocker_print_job(
@@ -2124,7 +2376,7 @@ def export_trunk_blocker(
     manifest = {
         "schema_version": 1,
         "generator": {"name": "cargo-grid", "version": __version__},
-        "kind": "experimental-trunk-blocker",
+        "kind": "trunk-blocker",
         "design_mode": {
             "workflow": "native Cargo-Grid BREP",
             "released_static_illustration": spec.released_illustration,

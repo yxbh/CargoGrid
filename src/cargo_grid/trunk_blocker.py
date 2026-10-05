@@ -1,4 +1,4 @@
-"""Experimental three-part trunk blocker geometry.
+"""Three-part adjustable trunk blocker geometry.
 
 All dimensions are millimeters. The fixed base underside is Z=0. The moving
 wall is authored locally with its front at Y=0 and its fingers pointing in +Y,
