@@ -31,6 +31,8 @@ from cargo_grid.interfaces import (
     x_profile,
 )
 from cargo_grid.parameters import DEFAULT_HOLE_DIAMETER_MM, Interface, Tile, count, positive
+from cargo_grid.pull_handles import PULL_HANDLE_FAMILY
+from cargo_grid.pull_handles import print_rotation_x as pull_handle_print_rotation_x
 from cargo_grid.rods import Rod, RodBrace, brace_datums, make_rod, make_rod_brace, rod_datums
 from cargo_grid.tiles import hole_placements
 
@@ -995,6 +997,10 @@ def bambu_print_policy(parameters: dict) -> BambuPrintPolicy:
             parameters["height"],
         )
         rotation_x = 180 - degrees(atan(slope))
+    elif family == PULL_HANDLE_FAMILY:
+        rotation_x = pull_handle_print_rotation_x(
+            parameters["strap_bar"], Interface(**parameters["interface"])
+        )
     else:
         rotation_x = (
             None
@@ -1012,6 +1018,12 @@ def bambu_print_policy(parameters: dict) -> BambuPrintPolicy:
         object_settings = {}
     elif family == "vertical-tile-bracket" and panel_height_cells is not None:
         object_settings = {"enable_support": "1", "support_type": "normal(auto)"}
+    elif family == PULL_HANDLE_FAMILY:
+        object_settings = (
+            {"enable_support": "1", "support_type": "normal(auto)"}
+            if parameters["strap_bar"]
+            else {}
+        )
     else:
         object_settings = dict(BAMBU_OBJECT_SETTINGS.get(family, {}))
     return BambuPrintPolicy(rotation_x, rotation_y, object_settings)

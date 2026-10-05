@@ -1,8 +1,10 @@
 """Rebuild the H2D project files published on MakerWorld.
 
-Each variant is one ordinary ``cargo-grid`` command: the H2D catalogue and the Zeekr 7X
-expansion set, with and without the 1.92 mm solid bottom, for every nozzle in
-``cargo_grid.cli.H2D_PROFILES``. All use auto roof support with PETG and a PLA interface.
+Each variant is one ordinary ``cargo-grid`` command for every nozzle in
+``cargo_grid.cli.H2D_PROFILES``: the H2D catalogue and the Zeekr 7X expansion set, with and
+without the 1.92 mm solid bottom and with auto roof support (PETG and a PLA interface), and
+the pull-handle set in PETG only. The handles have no tile-edge roofs or floor, and the
+strap-bar handle already carries its own object support.
 Every project is generated in a temporary folder first; the output folder only receives
 ``<name>.3mf`` and ``<name>.manifest.json`` after every variant has succeeded. Names put
 underscores between their parts and hyphens inside a part, for example
@@ -15,7 +17,10 @@ written project is unchanged. Any G-code path conflict or unprintable plate stop
 MakerWorld re-slices uploads and rejects the same conflicts, which the Bambu Studio GUI only
 shows as a warning on the plate being previewed.
 
+``--set NAME`` builds only that set, for every nozzle; repeat it for more than one set.
+
     uv run python tools/makerworld_exports.py --output FOLDER [--replace] [--jobs N]
+        [--set Full-Catalogue|Zeekr-7X-Expansion-Set|Pull-Handle-Set ...]
         [--bambu-studio /Applications/BambuStudio.app/Contents/MacOS/BambuStudio]
 """
 
@@ -37,6 +42,8 @@ PETG_COLOUR = "#688197"
 PLA_COLOUR = "#0A2989"
 SOLID_BOTTOM_MM = 1.92
 SETS = ((("catalogue",), "Full-Catalogue"), (("extras", "zeekr-7x"), "Zeekr-7X-Expansion-Set"))
+HANDLE_SET = (("extras", "pull-handle"), "Pull-Handle-Set")
+SET_NAMES = tuple(title for _, title in (*SETS, HANDLE_SET))
 SUFFIXES = {"job.3mf": ".3mf", "manifest.json": ".manifest.json"}
 
 
@@ -44,6 +51,33 @@ SUFFIXES = {"job.3mf": ".3mf", "manifest.json": ".manifest.json"}
 class Variant:
     name: str
     arguments: tuple[str, ...]
+    set_name: str
+
+
+def _h2d_arguments(profiles) -> list[str]:
+    return [
+        "--h2d-dual-safe",
+        "--build-width-mm",
+        "350",
+        "--build-depth-mm",
+        "320",
+        "--build-height-mm",
+        "325",
+        "--bambu",
+        "--material",
+        profiles.petg,
+        "PETG",
+        PETG_COLOUR,
+    ]
+
+
+def _layer_arguments(nozzle: float, profiles) -> list[str]:
+    return [
+        "--nozzle-diameter-mm",
+        f"{nozzle:g}",
+        "--layer-height-mm",
+        f"{profiles.layer_height_mm:g}",
+    ]
 
 
 def variants() -> list[Variant]:
@@ -54,26 +88,12 @@ def variants() -> list[Variant]:
                 floor = f"_Solid-Bottom-{bottom:g}mm" if bottom else ""
                 arguments = [
                     *command,
-                    "--h2d-dual-safe",
-                    "--build-width-mm",
-                    "350",
-                    "--build-depth-mm",
-                    "320",
-                    "--build-height-mm",
-                    "325",
-                    "--bambu",
-                    "--material",
-                    profiles.petg,
-                    "PETG",
-                    PETG_COLOUR,
+                    *_h2d_arguments(profiles),
                     "--material",
                     profiles.pla,
                     "PLA",
                     PLA_COLOUR,
-                    "--nozzle-diameter-mm",
-                    f"{nozzle:g}",
-                    "--layer-height-mm",
-                    f"{profiles.layer_height_mm:g}",
+                    *_layer_arguments(nozzle, profiles),
                     "--roof-support",
                     "--roof-support-mode",
                     "auto",
@@ -85,8 +105,22 @@ def variants() -> list[Variant]:
                     Variant(
                         f"CargoGrid_H2D_{title}{floor}_Auto-Support_{nozzle:g}mm-Nozzle",
                         tuple(arguments),
+                        title,
                     )
                 )
+        command, title = HANDLE_SET
+        result.append(
+            Variant(
+                f"CargoGrid_H2D_{title}_{nozzle:g}mm-Nozzle",
+                (
+                    *command,
+                    *_h2d_arguments(profiles),
+                    *_layer_arguments(nozzle, profiles),
+                    "--no-stl",
+                ),
+                title,
+            )
+        )
     return result
 
 
@@ -263,6 +297,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--jobs", type=int, default=4, help="variants generated at once")
     parser.add_argument(
+        "--set",
+        dest="sets",
+        action="append",
+        choices=SET_NAMES,
+        help="build only this set, for every nozzle; repeat for more sets; default every set",
+    )
+    parser.add_argument(
         "--dry-run", action="store_true", help="list each file and its command without running"
     )
     parser.add_argument(
@@ -273,7 +314,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.jobs < 1:
         parser.error("--jobs must be at least 1")
-    selected = variants()
+    selected = [variant for variant in variants() if not args.sets or variant.set_name in args.sets]
     if args.dry_run:
         for variant in selected:
             print(f"{variant.name}: cargo-grid {' '.join(variant.arguments)}")
