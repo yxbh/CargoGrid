@@ -14,7 +14,7 @@ from cargo_grid.catalogue import (
     h2d_dual_safe_catalogue_job,
     tile_sizes,
 )
-from cargo_grid.cli import main
+from cargo_grid.cli import H2D_PROFILES, main
 from cargo_grid.export import BambuSettings, Material, _PreparedProject
 from cargo_grid.footprints import minimum_projected_clearance
 from cargo_grid.jobs import Design, tile_identity
@@ -570,6 +570,48 @@ def test_h2d_dual_safe_plan_requests_support_only_for_supported_families(h2d_pla
             ],
             "unmodified H2D build envelope",
         ),
+        (
+            [
+                "--bambu",
+                "--material",
+                "Bambu PETG Basic @BBL H2D 0.4 nozzle",
+                "PETG",
+                "#637b70",
+                "--nozzle-diameter-mm",
+                "0.4",
+                "--layer-height-mm",
+                "0.32",
+            ],
+            "--nozzle-diameter-mm 0.4 with --layer-height-mm 0.24",
+        ),
+        (
+            [
+                "--bambu",
+                "--material",
+                "Bambu PETG Basic @BBL H2D 0.6 nozzle",
+                "PETG",
+                "#637b70",
+                "--nozzle-diameter-mm",
+                "0.6",
+                "--layer-height-mm",
+                "0.24",
+            ],
+            "--nozzle-diameter-mm 0.8 with --layer-height-mm 0.32",
+        ),
+        (
+            [
+                "--bambu",
+                "--material",
+                "Bambu PETG Basic @BBL H2D 0.8 nozzle",
+                "PETG",
+                "#637b70",
+                "--nozzle-diameter-mm",
+                "0.4",
+                "--layer-height-mm",
+                "0.24",
+            ],
+            '--material "Bambu PETG Basic @BBL H2D 0.4 nozzle" PETG',
+        ),
     ],
 )
 def test_h2d_dual_safe_cli_rejects_incomplete_hardware_requests(extra, message, tmp_path, capsys):
@@ -683,3 +725,62 @@ def test_h2d_dual_safe_cli_uses_shared_implicit_packing_gap(monkeypatch, tmp_pat
         == 0
     )
     assert supplied["packing_gap"] == H2D_DEFAULT_PART_CLEARANCE_MM
+
+
+@pytest.mark.parametrize("nozzle", sorted(H2D_PROFILES))
+def test_h2d_dual_safe_cli_writes_the_h2d_profiles_for_each_nozzle(nozzle, monkeypatch, tmp_path):
+    profiles = H2D_PROFILES[nozzle]
+    exported = {}
+
+    def fake_export(job, output, **kwargs):
+        exported.update(kwargs)
+        return output / "manifest.json"
+
+    monkeypatch.setattr(
+        "cargo_grid.cli.h2d_dual_safe_catalogue_job",
+        lambda **kwargs: SimpleNamespace(
+            designs=[], omitted=[], print_placements=[PrintPlacement(0, 0, 0, 0)]
+        ),
+    )
+    monkeypatch.setattr("cargo_grid.cli.export_job", fake_export)
+    assert (
+        main(
+            [
+                "catalogue",
+                "--h2d-dual-safe",
+                "--bambu",
+                "--material",
+                profiles.petg,
+                "PETG",
+                "#637b70",
+                "--material",
+                profiles.pla,
+                "PLA",
+                "#dddddd",
+                "--nozzle-diameter-mm",
+                f"{nozzle:g}",
+                "--layer-height-mm",
+                f"{profiles.layer_height_mm:g}",
+                "--roof-support",
+                "--roof-support-mode",
+                "auto",
+                "--build-width-mm",
+                "350",
+                "--build-depth-mm",
+                "320",
+                "--build-height-mm",
+                "325",
+                "--output",
+                str(tmp_path / "catalogue"),
+            ]
+        )
+        == 0
+    )
+    bambu = exported["bambu"]
+    assert (bambu.nozzle, bambu.layer_height) == (nozzle, profiles.layer_height_mm)
+    assert (bambu.printer_settings_id, bambu.print_settings_id) == (
+        profiles.printer,
+        profiles.process,
+    )
+    assert [material.name for material in bambu.materials] == [profiles.petg, profiles.pla]
+    assert bambu.machine_nozzle_count == 2 and bambu.printer_model == "Bambu Lab H2D"

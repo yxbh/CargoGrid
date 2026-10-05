@@ -3,7 +3,7 @@
 import argparse
 import json
 import sys
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from math import floor
 from pathlib import Path
 
@@ -61,8 +61,35 @@ def _nonnegative_mm(value: str) -> float:
     return millimeters
 
 
-H2D_PETG = "Bambu PETG Basic @BBL H2D 0.8 nozzle"
-H2D_PLA = "Bambu PLA Basic @BBL H2D 0.8 nozzle"
+@dataclass(frozen=True)
+class H2DProfiles:
+    """Bambu system profile names written for one H2D nozzle size."""
+
+    layer_height_mm: float
+    printer: str
+    process: str
+    petg: str
+    pla: str
+
+
+# Bambu names the H2D 0.4 nozzle PLA Basic profile without a nozzle suffix.
+H2D_PROFILES = {
+    0.8: H2DProfiles(
+        0.32,
+        "Bambu Lab H2D 0.8 nozzle",
+        "0.32mm Balanced Strength @BBL H2D 0.8 nozzle",
+        "Bambu PETG Basic @BBL H2D 0.8 nozzle",
+        "Bambu PLA Basic @BBL H2D 0.8 nozzle",
+    ),
+    # 0.24 mm layers keep Bambu's tower estimate small enough for the five-cell tiles beside it.
+    0.4: H2DProfiles(
+        0.24,
+        "Bambu Lab H2D 0.4 nozzle",
+        "0.24mm Standard @BBL H2D",
+        "Bambu PETG Basic @BBL H2D 0.4 nozzle",
+        "Bambu PLA Basic @BBL H2D",
+    ),
+}
 
 LEGACY_OPTION_REPLACEMENTS = {
     "--build": "--build-width-mm MM --build-depth-mm MM --build-height-mm MM",
@@ -259,39 +286,42 @@ def _bambu_settings(args, roof_support: RoofSupportSettings | None) -> BambuSett
             raise ValueError("Bambu export requires --nozzle-diameter-mm and --layer-height-mm")
         materials = tuple(Material(*material) for material in args.material)
         if getattr(args, "h2d_dual_safe", False):
-            if args.nozzle_diameter_mm != 0.8 or args.layer_height_mm != 0.32:
-                raise ValueError(
-                    "--h2d-dual-safe currently requires --nozzle-diameter-mm 0.8 "
-                    "and --layer-height-mm 0.32"
+            profiles = H2D_PROFILES.get(args.nozzle_diameter_mm)
+            if profiles is None or args.layer_height_mm != profiles.layer_height_mm:
+                supported = " or ".join(
+                    f"--nozzle-diameter-mm {nozzle:g} with --layer-height-mm "
+                    f"{choice.layer_height_mm:g}"
+                    for nozzle, choice in H2D_PROFILES.items()
                 )
+                raise ValueError(f"--h2d-dual-safe requires {supported}")
             if roof_support is not None and roof_support.mode == "auto":
                 if (
                     len(materials) != 2
                     or [m.kind.upper() for m in materials] != ["PETG", "PLA"]
-                    or materials[0].name != H2D_PETG
-                    or materials[1].name != H2D_PLA
+                    or materials[0].name != profiles.petg
+                    or materials[1].name != profiles.pla
                 ):
                     raise ValueError(
                         "--h2d-dual-safe with auto roof support requires two official material "
-                        f'declarations: --material "{H2D_PETG}" PETG "#RRGGBB" '
-                        f'--material "{H2D_PLA}" PLA "#RRGGBB"'
+                        f'declarations: --material "{profiles.petg}" PETG "#RRGGBB" '
+                        f'--material "{profiles.pla}" PLA "#RRGGBB"'
                     )
             elif (
                 len(materials) != 1
                 or materials[0].kind.upper() != "PETG"
-                or materials[0].name != H2D_PETG
+                or materials[0].name != profiles.petg
             ):
                 raise ValueError(
                     "--h2d-dual-safe requires one official material declaration: "
-                    f'--material "{H2D_PETG}" PETG "#RRGGBB"'
+                    f'--material "{profiles.petg}" PETG "#RRGGBB"'
                 )
             return BambuSettings(
                 materials,
                 args.nozzle_diameter_mm,
                 args.layer_height_mm,
                 roof_support=roof_support,
-                printer_settings_id="Bambu Lab H2D 0.8 nozzle",
-                print_settings_id="0.32mm Balanced Strength @BBL H2D 0.8 nozzle",
+                printer_settings_id=profiles.printer,
+                print_settings_id=profiles.process,
                 bed_type="Textured PEI Plate",
                 machine_nozzle_count=2,
                 printer_model="Bambu Lab H2D",
@@ -720,8 +750,9 @@ def parser() -> argparse.ArgumentParser:
                 help=(
                     "H2D family-grouped plan: 5 mm inset inside common "
                     "X25..325/Y0..320/Z<=320 reach, "
-                    f"{H2D_DEFAULT_PART_CLEARANCE_MM:g} mm actual-part XY clearance, "
-                    "and an isolated left-nozzle-only 5x5 tile plate"
+                    f"{H2D_DEFAULT_PART_CLEARANCE_MM:g} mm actual-part XY clearance "
+                    "and Bambu H2D profiles for a 0.8 mm nozzle with 0.32 mm layers or "
+                    "a 0.4 mm nozzle with 0.24 mm layers; the 306 mm 5x5 tile is omitted"
                 ),
             )
     compare = commands.add_parser(
@@ -919,6 +950,7 @@ def main(argv: list[str] | None = None) -> int:
                         zeekr_7x.CONTOUR_GAP_MM if requested_gap is None else requested_gap
                     ),
                     auto_roof_support=bool(roof_support and roof_support.mode == "auto"),
+                    **({"layer_height_mm": bambu.layer_height} if bambu else {}),
                 )
                 if args.h2d_dual_safe:
                     job.placement_policy.update(
@@ -941,6 +973,7 @@ def main(argv: list[str] | None = None) -> int:
                     packing_gap=packing_gap,
                     solid_bottom_mm=interface.solid_bottom_mm,
                     auto_roof_support=bool(roof_support and roof_support.mode == "auto"),
+                    layer_height_mm=bambu.layer_height,
                 )
             else:
                 job = catalogue_job(

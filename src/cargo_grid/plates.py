@@ -5,7 +5,8 @@ decides which plates need a prime tower for auto roof support, reserves the towe
 support-foot allowance, packs each group and returns the plates, names and tower positions.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
+from math import floor, pi, sqrt
 
 from cargo_grid.footprints import (
     ProjectedFootprint,
@@ -14,17 +15,20 @@ from cargo_grid.footprints import (
 )
 from cargo_grid.jobs import Design
 from cargo_grid.meshes import checked_mesh
-from cargo_grid.packing import PrimeTower, PrintPlacement, h2d_common_build, pack_sizes
+from cargo_grid.packing import (
+    PrimeTower,
+    PrintPlacement,
+    TowerClearance,
+    h2d_common_build,
+    pack_sizes,
+)
 from cargo_grid.parameters import BuildVolume, Exclusion, positive
 from cargo_grid.roof_support import OBJECT_AUTO_SUPPORT, female_roofs
 
 # Auto roof support prints a PLA interface, so every plate with supported parts needs a prime
 # tower. Bambu's default tower is used as it is; each plate only gets a tower position and a
-# model-free corner around the reserved tower bounds. On the H2D the bounds (X 283..325,
-# Y 1..39.5) stay inside the reach of both nozzles (X 25..325), and models can still reach
-# X 276.5 beside them, which the 246 mm-wide tiles with a 5-cell side need.
+# model-free area around the reserved tower bounds.
 DEFAULT_PRIME_TOWER = PrimeTower()
-H2D_AUTO_SUPPORT_TOWER_ORIGIN = (290.5, 8.0)
 # Models keep this far from the reserved tower bounds: Bambu's automatic support foot grows up
 # to about 5 mm past a supported part.
 AUTO_SUPPORT_TOWER_CLEARANCE_MM = 6.5
@@ -34,6 +38,62 @@ AUTO_SUPPORT_TOWER_CLEARANCE_MM = 6.5
 AUTO_SUPPORT_FOOT_ALLOWANCE_MM = 4.0
 AUTO_SUPPORT_PLATE_MARGIN_MM = 6.0
 H2D_FOOTPRINT_SEARCH_ALLOWANCE_MM = 0.75
+# When Bambu Studio 02.08.02.61 opens a project it moves any tower whose estimated square is
+# not at least this far inside the area every nozzle reaches, so towers are written in range.
+BAMBU_TOWER_MARGIN_MM = 15.0
+H2D_SHARED_REACH_X_MM = (25.0, 325.0)
+# Local slices put the real tower up to 0.6 mm behind its estimated square and brim.
+TOWER_BACK_ALLOWANCE_MM = 1.0
+# Models beside the H2D tower keep this much less than the support-foot clearance so the 246 mm
+# wide tiles with a 5-cell side still fit on tower plates. Every published plate passed Bambu's
+# path-conflict check with it at 0.32 and 0.24 mm layers; at 0.2 mm the larger tower conflicted
+# with a rotated tile and an edge strip whose supported sides faced it.
+H2D_TOWER_LEFT_CLEARANCE_MM = 1.5
+SIDES = ("left", "front", "right", "back")
+
+
+@dataclass(frozen=True)
+class BambuTowerEstimate:
+    """Bambu Studio 02.08.02.61's pre-slice rib-wall tower estimate for one PETG and one PLA.
+
+    It is the square Bambu uses to decide whether a stored tower position is in range. The
+    inputs are the H2D PETG/PLA Basic values that reproduce the positions Bambu Studio wrote
+    into saved 0.32 and 0.2 mm projects: 30 mm³ purge per filament, 10 mm of 1.75 mm filament
+    per nozzle change, a 150% infill gap and 8 mm ribs.
+    """
+
+    layer_height: float
+    prime_volume_mm3: float = 30.0
+    nozzle_change_mm3: float = 10 * pi * 1.75**2 / 4
+    infill_gap: float = 1.5
+    rib_width_mm: float = 8.0
+
+    def __post_init__(self) -> None:
+        positive("layer height", self.layer_height)
+
+    def side_mm(self, height: float) -> float:
+        """Estimated square side for a plate whose tallest object is ``height`` mm."""
+        volume = 2 * self.prime_volume_mm3 + self.nozzle_change_mm3
+        volume_depth = sqrt(volume / self.layer_height * self.infill_gap)
+        depth = max(_bambu_min_tower_depth(height), volume_depth)
+        rib = min(self.rib_width_mm, depth / 2)
+        return rib / sqrt(2) + depth
+
+    @staticmethod
+    def brim_mm(height: float) -> float:
+        """Bambu's automatic tower brim: 8 mm at 100 mm tall and above, less below."""
+        return 8.0 * min(height, 100.0) / 100.0
+
+
+def _bambu_min_tower_depth(height: float) -> float:
+    """Bambu's minimum tower depth for stability, interpolated by tower height."""
+    table = ((5.0, 5.0), (100.0, 20.0), (250.0, 40.0), (350.0, 60.0))
+    if height <= table[0][0]:
+        return table[0][1]
+    for (h0, d0), (h1, d1) in zip(table, table[1:]):
+        if height <= h1:
+            return d0 + (height - h0) * (d1 - d0) / (h1 - h0)
+    return table[-1][1]
 
 
 def needs_auto_support(design: Design) -> bool:
@@ -41,28 +101,26 @@ def needs_auto_support(design: Design) -> bool:
     return bool(female_roofs(design)) or design.bambu_object_settings == OBJECT_AUTO_SUPPORT
 
 
-def h2d_auto_support_build() -> BuildVolume:
-    """H2D common reach for plates with a prime tower in the front-right corner."""
-    common = h2d_common_build()
-    return BuildVolume(
-        common.x,
-        common.y,
-        common.z,
-        margin=AUTO_SUPPORT_PLATE_MARGIN_MM,
-        exclusions=(
-            *common.exclusions,
-            _keep_out(DEFAULT_PRIME_TOWER.footprint(*H2D_AUTO_SUPPORT_TOWER_ORIGIN), common),
-        ),
-    )
-
-
-def _keep_out(bounds: tuple[float, float, float, float], build: BuildVolume) -> Exclusion:
+def _keep_out(
+    bounds: tuple[float, float, float, float], clearance: TowerClearance, build: BuildVolume
+) -> Exclusion:
     """Model-free rectangle: tower bounds grown by the tower clearance, clipped to the plate."""
-    gap = AUTO_SUPPORT_TOWER_CLEARANCE_MM
-    x0, y0, x1, y1 = bounds
-    left, front = max(0.0, x0 - gap), max(0.0, y0 - gap)
-    right, back = min(build.x, x1 + gap), min(build.y, y1 + gap)
+    x0, y0, x1, y1 = clearance.grow(bounds)
+    left, front = max(0.0, x0), max(0.0, y0)
+    right, back = min(build.x, x1), min(build.y, y1)
     return Exclusion(left, front, right - left, back - front)
+
+
+@dataclass(frozen=True)
+class TowerReservation:
+    origin: tuple[float, float]
+    reach: PrimeTower
+    clearance: TowerClearance
+    build: BuildVolume
+
+    @property
+    def bounds(self) -> tuple[float, float, float, float]:
+        return self.reach.footprint(*self.origin)
 
 
 @dataclass(frozen=True)
@@ -88,7 +146,8 @@ class PlatePlan:
     projected_packing: dict[str | None, dict] = field(default_factory=dict)
     prime_tower: PrimeTower | None = None
     prime_tower_positions: dict[int, tuple[float, float]] = field(default_factory=dict)
-    prime_tower_clearances: dict[int, float] = field(default_factory=dict)
+    prime_tower_reaches: dict[int, PrimeTower] = field(default_factory=dict)
+    prime_tower_clearances: dict[int, TowerClearance] = field(default_factory=dict)
     auto_roof_support: dict | None = None
 
     @property
@@ -96,18 +155,23 @@ class PlatePlan:
         return max((placement.plate for placement in self.placements), default=-1) + 1
 
 
-class _TowerCorner:
-    """Bambu's default tower in one front corner, with models kept clear of its bounds."""
+class _TowerLayout:
+    """Where Bambu's default tower goes on plates with supported parts, and what it reserves."""
 
-    tower = DEFAULT_PRIME_TOWER
+    reason = ""
 
-    def __init__(self, build: BuildVolume, origin: tuple[float, float], reason: str) -> None:
-        self.build, self.origin, self.reason = build, origin, reason
-        self.bounds = self.tower.footprint(*origin)
+    def __init__(self, build: BuildVolume) -> None:
+        self.build = build
 
-    def supported_build(self) -> BuildVolume:
+    def reserve(self, height: float) -> TowerReservation:
+        raise NotImplementedError
+
+    def _with_keep_out(
+        self, origin: tuple[float, float], reach: PrimeTower, clearance: TowerClearance
+    ) -> TowerReservation:
         build = self.build
-        return BuildVolume(
+        keep_out = _keep_out(reach.footprint(*origin), clearance, build)
+        supported = BuildVolume(
             build.x,
             build.y,
             build.z,
@@ -115,24 +179,47 @@ class _TowerCorner:
             reserve_x=build.reserve_x,
             reserve_y=build.reserve_y,
             reserve_z=build.reserve_z,
-            exclusions=(*build.exclusions, _keep_out(self.bounds, build)),
+            exclusions=(*build.exclusions, keep_out),
         )
+        return TowerReservation(origin, reach, clearance, supported)
 
-    def record(self, plates: list[int], groups: list[str | None], gaps: list[float]) -> dict:
+    def record(
+        self,
+        reservations: dict[int, TowerReservation],
+        groups: list[str | None],
+        gaps: list[float],
+    ) -> dict:
         titled = [group for group in groups if group is not None]
+        clearances = {item.clearance for item in reservations.values()}
         return {
-            "prime_tower_plates": [plate + 1 for plate in plates],
+            "prime_tower_plates": [plate + 1 for plate in sorted(reservations)],
             **({"prime_tower_groups": titled} if titled else {}),
-            "prime_tower_origin_mm": self.origin,
-            "reserved_tower_bounds_mm": self.bounds,
-            "model_clearance_to_tower_bounds_mm": AUTO_SUPPORT_TOWER_CLEARANCE_MM,
+            "prime_tower_origins_mm": {
+                plate + 1: item.origin for plate, item in sorted(reservations.items())
+            },
+            "reserved_tower_bounds_mm": {
+                plate + 1: item.bounds for plate, item in sorted(reservations.items())
+            },
+            "model_clearance_to_tower_bounds_mm": (
+                asdict(next(iter(reservations.values())).clearance)
+                if reservations and len(clearances) == 1
+                else {plate + 1: asdict(item.clearance) for plate, item in reservations.items()}
+            ),
             "model_gap_on_tower_plates_mm": min(gaps),
             "reason": self.reason,
         }
 
 
-class _H2DTowerCorner(_TowerCorner):
-    def __init__(self) -> None:
+class _H2DTowerLayout(_TowerLayout):
+    """Front-right H2D tower at the position Bambu Studio keeps when it opens the project."""
+
+    reason = (
+        "PLA interface plates need a prime tower both nozzles reach; Bambu's default tower goes "
+        "in the front-right corner where Bambu Studio keeps it (its estimated square 15 mm inside "
+        "X 25..325 and Y >= 15), and models keep clear of the estimated tower and brim"
+    )
+
+    def __init__(self, estimate: BambuTowerEstimate) -> None:
         common = h2d_common_build()
         super().__init__(
             BuildVolume(
@@ -141,27 +228,47 @@ class _H2DTowerCorner(_TowerCorner):
                 common.z,
                 margin=AUTO_SUPPORT_PLATE_MARGIN_MM,
                 exclusions=common.exclusions,
-            ),
-            H2D_AUTO_SUPPORT_TOWER_ORIGIN,
-            "PLA interface plates need a prime tower both nozzles reach; Bambu's default tower "
-            "goes in the front-right corner and models keep clear of its reserved bounds",
+            )
         )
+        self.estimate = estimate
 
-    def supported_build(self) -> BuildVolume:
-        return h2d_auto_support_build()
+    def reserve(self, height: float) -> TowerReservation:
+        side = self.estimate.side_mm(height)
+        brim = self.estimate.brim_mm(height)
+        limit = H2D_SHARED_REACH_X_MM[1]
+        # Round down so Bambu's in-range test (x + margin + side <= limit) keeps the position.
+        x = floor((limit - BAMBU_TOWER_MARGIN_MM - side) * 100) / 100
+        y = BAMBU_TOWER_MARGIN_MM
+        reach = PrimeTower(brim, brim, limit - x, side + brim + TOWER_BACK_ALLOWANCE_MM)
+        clearance = TowerClearance(
+            H2D_TOWER_LEFT_CLEARANCE_MM,
+            AUTO_SUPPORT_TOWER_CLEARANCE_MM,
+            AUTO_SUPPORT_TOWER_CLEARANCE_MM,
+            AUTO_SUPPORT_TOWER_CLEARANCE_MM,
+        )
+        return self._with_keep_out((x, y), reach, clearance)
 
 
-class _FrontLeftTowerCorner(_TowerCorner):
+class _FrontLeftTowerLayout(_TowerLayout):
     """Generic builds: the tower sits in the front-left corner of the usable area."""
 
+    reason = (
+        "PLA interface plates need a prime tower; Bambu's default tower goes in the front-left "
+        "corner of the usable area, at least 15 mm from the bed edges where Bambu Studio keeps "
+        "it, so check that every nozzle reaches it"
+    )
+
     def __init__(self, build: BuildVolume) -> None:
-        super().__init__(
-            build,
-            (build.margin + self.tower.left, build.margin + self.tower.front),
-            "PLA interface plates need a prime tower; Bambu's default tower goes in the "
-            "front-left corner of the usable area, so check that every nozzle reaches it",
+        super().__init__(build)
+        tower = DEFAULT_PRIME_TOWER
+        origin = (
+            max(BAMBU_TOWER_MARGIN_MM, build.margin + tower.left),
+            max(BAMBU_TOWER_MARGIN_MM, build.margin + tower.front),
         )
-        x0, y0, x1, y1 = self.bounds
+        self.reservation = self._with_keep_out(
+            origin, tower, TowerClearance.uniform(AUTO_SUPPORT_TOWER_CLEARANCE_MM)
+        )
+        x0, y0, x1, y1 = self.reservation.bounds
         usable_x = build.x - build.margin - build.reserve_x
         usable_y = build.y - build.margin - build.reserve_y
         if (
@@ -179,9 +286,16 @@ class _FrontLeftTowerCorner(_TowerCorner):
                 "auto roof support needs room for a prime tower at the front left of the build"
             )
 
+    def reserve(self, height: float) -> TowerReservation:
+        return self.reservation
 
-def _tower_layout(build: BuildVolume) -> _TowerCorner:
-    return _H2DTowerCorner() if build == h2d_common_build() else _FrontLeftTowerCorner(build)
+
+def _tower_layout(build: BuildVolume, layer_height_mm: float | None) -> _TowerLayout:
+    if build == h2d_common_build():
+        if layer_height_mm is None:
+            raise ValueError("H2D auto roof support needs the layer height for the tower position")
+        return _H2DTowerLayout(BambuTowerEstimate(layer_height_mm))
+    return _FrontLeftTowerLayout(build)
 
 
 def _projected_bounds(
@@ -209,6 +323,7 @@ def plan_plates(
     *,
     size,
     auto_roof_support: bool = False,
+    layer_height_mm: float | None = None,
 ) -> PlatePlan:
     """Pack ordered groups onto consecutive plates, reserving prime towers for auto support.
 
@@ -216,16 +331,22 @@ def plan_plates(
     ``size`` returns each design's placed bounds. With ``auto_roof_support``, a group with any
     design that gets object support prints PLA, so its plates use the tower layout for that
     base area and add the support-foot allowance to the group gap. Designs that do not fit
-    their group's area are returned in ``unfit`` for the caller to omit or reject.
+    their group's area are returned in ``unfit`` for the caller to omit or reject. On the H2D
+    the tower position follows Bambu's estimate for ``layer_height_mm`` and the group's
+    tallest design, so Bambu Studio keeps it when it opens the project.
     """
-    tower = _tower_layout(build) if auto_roof_support else None
-    plan = PlatePlan([], [], {}, {}, {}, prime_tower=tower.tower if tower else None)
-    towered_plates, towered_groups, towered_gaps = set(), [], []
+    tower = _tower_layout(build, layer_height_mm) if auto_roof_support else None
+    plan = PlatePlan([], [], {}, {}, {})
+    towered_plates: dict[int, TowerReservation] = {}
+    towered_groups, towered_gaps = [], []
     for group in groups:
         positive("plate group gap", group.gap, zero=True)
         towered = tower is not None and any(needs_auto_support(d) for d in group.designs)
         gap = group.gap + AUTO_SUPPORT_FOOT_ALLOWANCE_MM if towered else group.gap
-        group_build = tower.supported_build() if towered else build
+        reservation = (
+            tower.reserve(max(size(design)[2] for design in group.designs)) if towered else None
+        )
+        group_build = reservation.build if reservation else build
         plan.group_gaps[group.title] = gap
         members = []
         for design in group.designs:
@@ -290,17 +411,24 @@ def plan_plates(
         for design, placement in zip(members, packed):
             plate = placement.plate + offset
             if towered and needs_auto_support(design):
-                plan.prime_tower_positions[plate] = tower.origin
-                plan.prime_tower_clearances[plate] = AUTO_SUPPORT_TOWER_CLEARANCE_MM
-                towered_plates.add(plate)
+                plan.prime_tower_positions[plate] = reservation.origin
+                plan.prime_tower_reaches[plate] = reservation.reach
+                plan.prime_tower_clearances[plate] = reservation.clearance
+                towered_plates[plate] = reservation
             plan.designs.append(design)
             plan.placements.append(
                 PrintPlacement(plate, placement.x, placement.y, placement.rotation)
             )
         plan.projected_footprints.extend(footprints)
     if tower is not None:
+        reaches = list(plan.prime_tower_reaches.values())
+        plan.prime_tower = (
+            PrimeTower(*(max(getattr(r, side) for r in reaches) for side in SIDES))
+            if reaches
+            else DEFAULT_PRIME_TOWER
+        )
         plan.auto_roof_support = tower.record(
-            sorted(towered_plates),
+            towered_plates,
             towered_groups,
             towered_gaps or [next(iter(plan.group_gaps.values()), 0.0)],
         )

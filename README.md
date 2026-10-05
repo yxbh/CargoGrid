@@ -105,7 +105,7 @@ The manifest lists anything omitted because it did not fit.
 
 ## Make the full H2D catalogue
 
-This command makes a ready-packed project for a Bambu Lab H2D with 0.8 mm nozzles: 24 tile sizes with the full 10 mm hole pattern and all 105 accessories, on named plates grouped by family. It only works with the standard 60 mm unit, 13 mm thickness and no fit offset; you can add `--solid-bottom-thickness-mm`. Edges and corners share plates by outward width, and each object's name still says which edge, corner variant and male/female joint it has.
+This command makes a ready-packed project for a Bambu Lab H2D with 0.8 mm or 0.4 mm nozzles: 24 tile sizes with the full 10 mm hole pattern and all 105 accessories, on named plates grouped by family. It only works with the standard 60 mm unit, 13 mm thickness and no fit offset; you can add `--solid-bottom-thickness-mm`. Edges and corners share plates by outward width, and each object's name still says which edge, corner variant and male/female joint it has.
 
 ```sh
 uv run cargo-grid catalogue --h2d-dual-safe --build-width-mm 350 --build-depth-mm 320 --build-height-mm 325 --bambu --material "Bambu PETG Basic @BBL H2D 0.8 nozzle" PETG "#637b70" --nozzle-diameter-mm 0.8 --layer-height-mm 0.32 --no-stl --output outputs/full-catalogue
@@ -116,6 +116,8 @@ Open `outputs/full-catalogue/job.3mf` as a project. Every part sits inside the a
 The 306x306 mm 5x5 tile is left out because it is wider than the 300 mm area both nozzles reach; the manifest lists it as omitted. To print one, make it with `part --width-cells 5 --depth-cells 5` and choose the nozzle yourself in Bambu Studio.
 
 The project names the H2D 0.8 nozzle, 0.32 mm Balanced Strength process, Textured PEI plate and Bambu PETG Basic profile. Check those profiles and your loaded filament before slicing. To add supports with a PLA interface under the joint roofs, see [auto roof support](#auto-roof-support-for-catalogues-and-extras).
+
+For 0.4 mm nozzles, use `--nozzle-diameter-mm 0.4 --layer-height-mm 0.24` and `--material "Bambu PETG Basic @BBL H2D 0.4 nozzle" PETG "#637b70"`. The project then names the H2D 0.4 nozzle and the 0.24 mm Standard process; the parts and plates are the same. With 0.2 mm layers the prime tower for [auto roof support](#auto-roof-support-for-catalogues-and-extras) gets too big for two catalogue plates. With auto roof support the matching PLA profile is `Bambu PLA Basic @BBL H2D`, which Bambu names without a nozzle size. `--h2d-dual-safe` accepts only these two nozzle and layer-height pairs.
 
 ## Make the Zeekr 7X expansion set
 
@@ -273,7 +275,13 @@ uv run cargo-grid catalogue --h2d-dual-safe --build-width-mm 350 --build-depth-m
 
 The project keeps the same PETG/PLA zero-contact settings as above, but leaves global support off. Normal Auto support is switched on for each object that has a female pocket roof (tiles, female edges and corner sides, female ramps) and for the stops, shallow brackets and rods that already ask for it. Everything else, such as male edges, male ramps, plates, angled stops, braces, rails and rail ends, prints without support. Auto support covers whole overhangs, not just the small painted pads. Every support on those objects gets the PLA interface, including the stop, bracket and rod supports, which are all PETG without this option. That combination hasn't been tested on a real print.
 
-Each plate with supported parts uses PLA, so it needs a prime tower. The project uses Bambu Studio's default tower and only sets where it goes: the front-right corner on the H2D, inside X 283..325 and Y 1..39.5, where both nozzles reach it. Parts on that plate stay at least 6.5 mm away from that corner. Auto support also spreads its first layer up to about 5 mm past each part, so those plates keep parts 8 mm apart and 6 mm from the front and back edges. The H2D catalogue then needs 26 plates (25 without auto support).
+Each plate with supported parts uses PLA, so it needs a prime tower. The project uses Bambu Studio's default tower and only sets where it goes. On the H2D that is the front-right corner, at the spot where Bambu Studio leaves it when it opens the project: 15 mm from the front, and as far right as Bambu's own size estimate allows inside the X 25..325 area both nozzles reach. The estimate grows with thinner layers and taller plates, so the tower sits at X 284.49 with 0.32 mm layers, X 281.42 with 0.24 mm layers, and a little further left on the 120 mm bracket plate. Parts keep 6.5 mm from the estimated tower and its brim, or 1.5 mm on its left side, where the big tiles sit beside it. Auto support also spreads its first layer up to about 5 mm past each part, so those plates keep parts 8 mm apart and 6 mm from the front and back edges. The H2D catalogue then needs 26 plates (25 without auto support).
+
+If you switch to thicker layers in Bambu Studio, the tower stays put. Thinner layers make Bambu's estimate bigger, so it moves the tower left towards the parts; slice and check every plate again.
+
+Bambu Studio only warns about a tower running into a part on the plate you are previewing, but MakerWorld re-slices uploads and refuses those plates. Slice every plate and look for that warning before uploading.
+
+In test slices every plate of the H2D catalogues and Zeekr sets, at both nozzle sizes, sliced with PETG on either nozzle.
 
 As with painted support, support may fill round holes beside the pocket roofs while printing, so remove it from the underside before assembly. Slice every plate and check the tower and support paths before printing.
 

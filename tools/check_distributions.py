@@ -20,6 +20,7 @@ ROOT_FILES = {
     "tools/check_distributions.py",
     "tools/check_test_durations.py",
     "tools/ci_memory_sampler.py",
+    "tools/makerworld_exports.py",
     "tools/render_docs.py",
     "AGENTS.md",
     "docs/images/attachments/manifest.json",

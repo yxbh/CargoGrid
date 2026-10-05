@@ -9,7 +9,7 @@ from build123d import Axis, Part
 
 from cargo_grid.footprints import ProjectedFootprint
 from cargo_grid.layout import Layout
-from cargo_grid.packing import PrimeTower, PrintPlacement
+from cargo_grid.packing import PrimeTower, PrintPlacement, TowerClearance
 from cargo_grid.parameters import BuildVolume, Tile, count, interface_parameters, positive
 from cargo_grid.tiles import hole_placements, make_tile
 
@@ -94,8 +94,10 @@ class Job:
     manifest_metadata: dict = field(default_factory=dict)
     prime_tower: PrimeTower | None = None
     prime_tower_positions: dict[int, tuple[float, float]] = field(default_factory=dict)
-    # Per-plate tower-to-model clearance; plates not listed use the part gap.
-    prime_tower_clearances: dict[int, float] = field(default_factory=dict)
+    # Per-plate tower reach; plates not listed use ``prime_tower``.
+    prime_tower_reaches: dict[int, PrimeTower] = field(default_factory=dict)
+    # Per-plate tower-to-model clearance, one value or per side; unlisted plates use the part gap.
+    prime_tower_clearances: dict[int, float | TowerClearance] = field(default_factory=dict)
 
     def __post_init__(self):
         if not self.designs:
@@ -120,8 +122,13 @@ class Job:
             raise ValueError("prime_tower must be a PrimeTower")
         if set(self.prime_tower_clearances) - set(self.prime_tower_positions):
             raise ValueError("prime tower clearances need a prime tower position on that plate")
+        if set(self.prime_tower_reaches) - set(self.prime_tower_positions):
+            raise ValueError("prime tower reaches need a prime tower position on that plate")
+        if not all(isinstance(reach, PrimeTower) for reach in self.prime_tower_reaches.values()):
+            raise ValueError("prime tower reaches must be PrimeTower instances")
         for clearance in self.prime_tower_clearances.values():
-            positive("prime tower clearance", clearance, zero=True)
+            if not isinstance(clearance, TowerClearance):
+                positive("prime tower clearance", clearance, zero=True)
         for plate, position in self.prime_tower_positions.items():
             if isinstance(plate, bool) or not isinstance(plate, int) or plate < 0:
                 raise ValueError("prime tower plates must be nonnegative integers")
@@ -148,6 +155,17 @@ class Job:
                     raise ValueError(
                         "projected footprint clearance plates require every design footprint"
                     )
+
+    def tower_bounds(self, plate: int) -> tuple[float, float, float, float]:
+        """Reserved tower extrusion bounds on a plate that has a tower position."""
+        reach = self.prime_tower_reaches.get(plate, self.prime_tower)
+        return reach.footprint(*self.prime_tower_positions[plate])
+
+    def tower_clearance(self, plate: int) -> TowerClearance:
+        clearance = self.prime_tower_clearances.get(plate, self.part_gap)
+        if isinstance(clearance, TowerClearance):
+            return clearance
+        return TowerClearance.uniform(clearance)
 
     def validate_plate_builds(self) -> None:
         if not isinstance(self.plate_builds, dict):

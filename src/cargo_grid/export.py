@@ -33,7 +33,7 @@ from cargo_grid.footprints import (
 )
 from cargo_grid.jobs import Design, Job
 from cargo_grid.meshes import write_stl
-from cargo_grid.packing import PrintPlacement, pack_sizes
+from cargo_grid.packing import PrintPlacement, TowerClearance, pack_sizes
 from cargo_grid.parameters import DEFAULT_HOLE_DIAMETER_MM, BuildVolume, Interface, count, positive
 from cargo_grid.prepared import Bounds, PreparedShape, rotated_points, rotation_matrix_3mf
 from cargo_grid.rods import ROD_FAMILIES, Rod, RodBrace, fit_evidence
@@ -132,6 +132,10 @@ def _metadata(parent, key, value):
 
 def _bytes(root) -> bytes:
     return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+
+def _sides(clearance: TowerClearance) -> str:
+    return "/".join(f"{getattr(clearance, side):g}" for side in ("left", "front", "right", "back"))
 
 
 def _filament_mode(settings: BambuSettings) -> str:
@@ -563,29 +567,35 @@ class _PreparedProject:
 
     def check_prime_towers(self) -> None:
         """Keep each reserved tower envelope on its plate and clear of every placed model."""
-        tower = self.job.prime_tower
-        if tower is None:
+        if self.job.prime_tower is None:
             return
-        for plate, (x, y) in self.job.prime_tower_positions.items():
+        for plate in self.job.prime_tower_positions:
             if plate >= self.plate_count:
                 raise ValueError(f"prime tower plate {plate + 1} has no placed model")
-            x0, y0, x1, y1 = tower.footprint(x, y)
+            bounds = self.job.tower_bounds(plate)
+            x0, y0, x1, y1 = bounds
             build = self.job.build
             if x0 < 0 or y0 < 0 or x1 > build.x or y1 > build.y:
                 raise ValueError(f"prime tower on plate {plate + 1} leaves the build plate")
+            clearance = self.job.tower_clearance(plate)
+            k0, l0, k1, l1 = clearance.grow(bounds)
             for placement, size in zip(self.placements, self.sizes):
                 if placement.plate != plate:
                     continue
                 width, depth = size[:2] if placement.rotation == 0 else size[1::-1]
-                gap = self.job.prime_tower_clearances.get(plate, self.job.part_gap)
+                # Planned models may touch the clearance edge; allow for rounding.
                 if (
-                    x0 < placement.x + width + gap
-                    and placement.x < x1 + gap
-                    and y0 < placement.y + depth + gap
-                    and placement.y < y1 + gap
+                    k0 + 1e-6 < placement.x + width
+                    and placement.x < k1 - 1e-6
+                    and l0 + 1e-6 < placement.y + depth
+                    and placement.y < l1 - 1e-6
                 ):
                     raise ValueError(
-                        f"prime tower on plate {plate + 1} is within {gap:g} mm of a placed model"
+                        f"prime tower on plate {plate + 1} is within {clearance.minimum:g} mm "
+                        "of a placed model"
+                        if clearance == TowerClearance.uniform(clearance.minimum)
+                        else f"prime tower on plate {plate + 1} is inside the reserved "
+                        f"clearance of a placed model ({_sides(clearance)} mm)"
                     )
 
     def geometry(self, shape) -> PreparedShape:
@@ -949,14 +959,13 @@ def _write_3mf(
                         {
                             "plate": plate + 1,
                             "origin_mm": (x, y),
-                            "reserved_extrusion_bounds_mm": job.prime_tower.footprint(x, y),
-                            "minimum_model_clearance_mm": job.prime_tower_clearances.get(
-                                plate, job.part_gap
-                            ),
+                            "reserved_extrusion_bounds_mm": job.tower_bounds(plate),
+                            "minimum_model_clearance_mm": job.tower_clearance(plate).minimum,
+                            "model_clearance_mm": asdict(job.tower_clearance(plate)),
                         }
                         for plate, (x, y) in sorted(job.prime_tower_positions.items())
                     ],
-                    "note": "Each plate sets only the tower origin. The reserved bounds cover the default tower and its automatic brim as sliced locally in Bambu Studio 02.08.02.61, not a guarantee for other profiles or materials.",
+                    "note": "Each plate sets only the tower origin. On the H2D it is where Bambu Studio 02.08.02.61 places the tower when it opens the project, and the reserved bounds cover its estimated tower, automatic brim and the extra depth seen in local slices. They are not a guarantee for other profiles or materials.",
                 }
             }
         ),
