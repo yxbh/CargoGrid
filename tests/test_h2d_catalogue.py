@@ -582,7 +582,7 @@ def test_h2d_dual_safe_plan_requests_support_only_for_supported_families(h2d_pla
                 "--layer-height-mm",
                 "0.32",
             ],
-            "--nozzle-diameter-mm 0.4 with --layer-height-mm 0.2",
+            "--nozzle-diameter-mm 0.4 with --layer-height-mm 0.24",
         ),
         (
             [
@@ -608,7 +608,7 @@ def test_h2d_dual_safe_plan_requests_support_only_for_supported_families(h2d_pla
                 "--nozzle-diameter-mm",
                 "0.4",
                 "--layer-height-mm",
-                "0.2",
+                "0.24",
             ],
             '--material "Bambu PETG Basic @BBL H2D 0.4 nozzle" PETG',
         ),

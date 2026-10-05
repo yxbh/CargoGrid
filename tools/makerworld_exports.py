@@ -8,11 +8,20 @@ Every project is generated in a temporary folder first; the output folder only r
 underscores between their parts and hyphens inside a part, for example
 ``CargoGrid_H2D_Full-Catalogue_Solid-Bottom-1.92mm_Auto-Support_0.8mm-Nozzle``.
 
+With ``--bambu-studio PATH`` every plate is also sliced by that Bambu Studio executable, once
+with PETG on each nozzle, before anything is written. The check copy gets the full printer,
+process and filament profiles from that installation and a fixed filament-to-nozzle map; the
+written project is unchanged. Any G-code path conflict or unprintable plate stops the run.
+MakerWorld re-slices uploads and rejects the same conflicts, which the Bambu Studio GUI only
+shows as a warning on the plate being previewed.
+
     uv run python tools/makerworld_exports.py --output FOLDER [--replace] [--jobs N]
+        [--bambu-studio /Applications/BambuStudio.app/Contents/MacOS/BambuStudio]
 """
 
 import argparse
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -20,6 +29,7 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
+from zipfile import ZIP_DEFLATED, ZipFile
 
 from cargo_grid.cli import H2D_PROFILES
 
@@ -100,6 +110,151 @@ def generate(variant: Variant, scratch: Path) -> Path:
     return folder
 
 
+# Bambu stores resolved filament-to-nozzle maps in the project; the check sets its own.
+PROFILE_CACHES = {"filament_map", "filament_map_2", "filament_nozzle_map", "filament_volume_map"}
+# PETG then PLA: on the left (1) and right (2) nozzle, then the other way round.
+NOZZLE_MAPS = (("1", "2"), ("2", "1"))
+# Messages the CLI logs as errors on plates it slices successfully.
+PROBLEMS = re.compile(
+    r"gcode path conflicts found[^\n]*|found gcode unprintable[^\n]*|error_message=[^\n]*"
+)
+
+
+def _profiles(bambu: Path) -> Path:
+    for root in (bambu.parents[1] / "Resources", bambu.parent / "resources"):
+        if (root / "profiles" / "BBL").is_dir():
+            return root / "profiles" / "BBL"
+    raise ValueError(f"no Bambu profiles found next to {bambu}")
+
+
+def _resolve(root: Path, kind: str, name: str, seen: tuple[Path, ...] = ()) -> dict:
+    path = root / kind / f"{name}.json"
+    if path in seen:
+        raise ValueError(f"Bambu profile inheritance cycle at {path.name}")
+    source = json.loads(path.read_text())
+    result = (
+        _resolve(root, kind, source["inherits"], (*seen, path)) if source.get("inherits") else {}
+    )
+    for include in source.get("include", []):
+        result.update(_resolve(root, kind, include, (*seen, path)))
+    result.update(source)
+    result.pop("inherits", None)
+    result.pop("include", None)
+    return result
+
+
+def _run(bambu: Path, arguments: list[str], log: Path) -> int:
+    with log.open("w") as handle:
+        return subprocess.run(
+            [str(bambu), *arguments], stdout=handle, stderr=subprocess.STDOUT, check=False
+        ).returncode
+
+
+def effective_settings(project: Path, bambu: Path, work: Path) -> dict:
+    """The project's settings on top of the full profiles it names, as Bambu Studio resolves them."""
+    with ZipFile(project) as archive:
+        generated = json.loads(archive.read("Metadata/project_settings.config"))
+    root = _profiles(bambu)
+    paths = []
+    for kind, name in (
+        ("machine", generated["printer_settings_id"]),
+        ("process", generated["print_settings_id"]),
+        *(("filament", name) for name in generated["filament_settings_id"]),
+    ):
+        path = work / f"{kind}-{len(paths)}.json"
+        path.write_text(json.dumps(_resolve(root, kind, name)))
+        paths.append(path)
+    exported = work / "effective.json"
+    arguments = ["--datadir", str(work / "datadir"), "--debug", "1", "--arrange", "0"]
+    arguments += ["--orient", "0", "--load-settings", f"{paths[0]};{paths[1]}"]
+    arguments += ["--load-filaments", ";".join(map(str, paths[2:])), "--export-settings"]
+    if _run(bambu, [*arguments, str(exported)], work / "resolve.log"):
+        raise RuntimeError(f"Bambu Studio could not resolve {project.name}'s profiles")
+    effective = json.loads(exported.read_text())
+    for key in PROFILE_CACHES:
+        effective.pop(key, None)
+    effective.update(generated)
+    return effective
+
+
+def check_copy(project: Path, effective: dict, mapping: tuple[str, ...], target: Path) -> int:
+    """Write a sliceable copy with a fixed nozzle map; return its plate count."""
+    settings = dict(effective)
+    count = len(settings["filament_settings_id"])
+    extruders = len(settings["nozzle_diameter"])
+    mapping = tuple(mapping[:count])
+    settings.update(
+        filament_map_mode="Manual",
+        filament_map=list(mapping),
+        filament_map_2=list(mapping),
+        filament_nozzle_map=list(mapping),
+        filament_volume_map=["0"] * count,
+        extruder_nozzle_stats=["Standard#1"] * extruders,
+        # The CLI needs a purge table sized for these filaments on every nozzle.
+        flush_volumes_matrix=[
+            "0" if row == column else "280"
+            for _ in range(extruders)
+            for row in range(count)
+            for column in range(count)
+        ],
+        flush_volumes_vector=["140"] * (2 * count),
+        flush_multiplier=["1"] * extruders,
+        flush_multiplier_fast=["1.2"] * extruders,
+    )
+    plates = 0
+    with ZipFile(project) as original, ZipFile(target, "w", ZIP_DEFLATED) as copy:
+        for entry in original.infolist():
+            data = original.read(entry)
+            if entry.filename == "Metadata/project_settings.config":
+                data = json.dumps(settings, indent=2).encode()
+            elif entry.filename == "Metadata/model_settings.config":
+                text = data.decode()
+                plates = text.count("<plate>")
+                text = text.replace(
+                    '<metadata key="filament_map_mode" value="Auto For Match" />',
+                    '<metadata key="filament_map_mode" value="Manual" />'
+                    f'<metadata key="filament_maps" value="{" ".join(mapping)}" />',
+                )
+                data = text.encode()
+            copy.writestr(entry, data)
+    return plates
+
+
+def slice_plate(bambu: Path, project: Path, plate: int, work: Path) -> str | None:
+    """Slice one plate; return Bambu's complaint, or None when it slices cleanly."""
+    log = work / f"slice-{plate}.log"
+    arguments = ["--datadir", str(work / f"datadir-{plate}"), "--debug", "1", "--arrange", "0"]
+    arguments += ["--orient", "0", "--slice", str(plate)]
+    arguments += ["--export-3mf", str(work / f"sliced-{plate}.3mf"), str(project)]
+    code = _run(bambu, arguments, log)
+    (work / f"sliced-{plate}.3mf").unlink(missing_ok=True)
+    if code == 0:
+        return None
+    found = PROBLEMS.findall(log.read_text(errors="replace"))
+    return found[0].strip() if found else f"Bambu Studio exited with code {code}"
+
+
+def bambu_problems(project: Path, bambu: Path, work: Path, jobs: int) -> list[str]:
+    """Slice every plate with PETG on each nozzle; list what Bambu Studio refuses."""
+    work.mkdir(parents=True)
+    effective = effective_settings(project, bambu, work)
+    tasks = []
+    for mapping in NOZZLE_MAPS:
+        folder = work / f"petg-nozzle-{mapping[0]}"
+        folder.mkdir()
+        copy = folder / "check.3mf"
+        plates = check_copy(project, effective, mapping, copy)
+        tasks += [(mapping, copy, plate, folder) for plate in range(1, plates + 1)]
+    with ThreadPoolExecutor(jobs) as pool:
+        results = list(pool.map(lambda task: slice_plate(bambu, *task[1:]), tasks))
+    side = {"1": "left", "2": "right"}
+    return [
+        f"plate {plate} with PETG on the {side[mapping[0]]} nozzle: {problem}"
+        for (mapping, _, plate, _), problem in zip(tasks, results)
+        if problem
+    ]
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--output", type=Path, required=True, help="folder for the named files")
@@ -109,6 +264,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--jobs", type=int, default=4, help="variants generated at once")
     parser.add_argument(
         "--dry-run", action="store_true", help="list each file and its command without running"
+    )
+    parser.add_argument(
+        "--bambu-studio",
+        type=Path,
+        help="Bambu Studio executable used to slice every plate before anything is written",
     )
     args = parser.parse_args(argv)
     if args.jobs < 1:
@@ -120,6 +280,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if not args.output.is_dir():
         parser.error(f"--output must be an existing folder: {args.output}")
+    if args.bambu_studio is not None and not args.bambu_studio.is_file():
+        parser.error(f"--bambu-studio must be the Bambu Studio executable: {args.bambu_studio}")
     existing = [
         path
         for variant in selected
@@ -135,6 +297,21 @@ def main(argv: list[str] | None = None) -> int:
         scratch = Path(temporary)
         with ThreadPoolExecutor(args.jobs) as pool:
             folders = list(pool.map(lambda variant: generate(variant, scratch), selected))
+        if args.bambu_studio is not None:
+            bambu = args.bambu_studio.resolve()
+            problems = []
+            for variant, folder in zip(selected, folders):
+                found = bambu_problems(
+                    folder / "job.3mf", bambu, scratch / f"{variant.name}-check", args.jobs
+                )
+                result = f"{len(found)} plate slices refused" if found else "every plate sliced"
+                print(f"{variant.name}: Bambu Studio check, {result}")
+                problems += [f"{variant.name}: {problem}" for problem in found]
+            if problems:
+                raise RuntimeError(
+                    "Bambu Studio refused these plates; nothing was written:\n"
+                    + "\n".join(problems)
+                )
         for variant, folder in zip(selected, folders):
             for source, destination in destinations(args.output, variant).items():
                 shutil.move(folder / source, destination)

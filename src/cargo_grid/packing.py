@@ -10,10 +10,12 @@ class PrimeTower:
     """Space kept free for Bambu's default prime tower; no tower settings are written.
 
     Each plate only chooses the tower origin (``wipe_tower_x``/``wipe_tower_y``). The fields
-    are how far tower extrusion may reach from that origin. Bambu Studio 02.08.02.61 sliced
-    the default H2D rib-wall tower on PETG/PLA plates as a 25.5 to 28.3 mm square whose walls,
-    wipe lines and automatic first-layer brim reached up to 7.05 mm left, 6.39 mm in front,
-    34.05 mm right and 30.83 mm behind the origin; the defaults add a little to each.
+    are how far tower extrusion may reach from that origin. The defaults are used for generic
+    builds: Bambu Studio 02.08.02.61 sliced the default H2D rib-wall tower on 0.32 mm PETG/PLA
+    plates as a 25.5 to 28.3 mm square whose walls, wipe lines and automatic first-layer brim
+    reached up to 7.05 mm left, 6.39 mm in front, 34.05 mm right and 30.83 mm behind the
+    origin; the defaults add a little to each. H2D plans size each plate's reach from Bambu's
+    own tower estimate instead (``plates.BambuTowerEstimate``).
     """
 
     left: float = 7.5
@@ -30,6 +32,32 @@ class PrimeTower:
     def footprint(self, x: float, y: float) -> tuple[float, float, float, float]:
         """Reserved extrusion bounds (x0, y0, x1, y1) for a tower whose origin is (x, y)."""
         return (x - self.left, y - self.front, x + self.right, y + self.back)
+
+
+@dataclass(frozen=True)
+class TowerClearance:
+    """Minimum distance from each side of a reserved tower area to any model's bounds."""
+
+    left: float
+    front: float
+    right: float
+    back: float
+
+    def __post_init__(self) -> None:
+        for side in ("left", "front", "right", "back"):
+            positive(f"prime tower {side} clearance", getattr(self, side), zero=True)
+
+    @classmethod
+    def uniform(cls, value: float) -> "TowerClearance":
+        return cls(value, value, value, value)
+
+    @property
+    def minimum(self) -> float:
+        return min(self.left, self.front, self.right, self.back)
+
+    def grow(self, bounds: tuple[float, float, float, float]) -> tuple[float, float, float, float]:
+        x0, y0, x1, y1 = bounds
+        return (x0 - self.left, y0 - self.front, x1 + self.right, y1 + self.back)
 
 
 def h2d_common_build() -> BuildVolume:

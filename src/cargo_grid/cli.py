@@ -81,10 +81,11 @@ H2D_PROFILES = {
         "Bambu PETG Basic @BBL H2D 0.8 nozzle",
         "Bambu PLA Basic @BBL H2D 0.8 nozzle",
     ),
+    # 0.24 mm layers keep Bambu's tower estimate small enough for the five-cell tiles beside it.
     0.4: H2DProfiles(
-        0.2,
+        0.24,
         "Bambu Lab H2D 0.4 nozzle",
-        "0.20mm Balanced Strength @BBL H2D",
+        "0.24mm Standard @BBL H2D",
         "Bambu PETG Basic @BBL H2D 0.4 nozzle",
         "Bambu PLA Basic @BBL H2D",
     ),
@@ -751,7 +752,7 @@ def parser() -> argparse.ArgumentParser:
                     "X25..325/Y0..320/Z<=320 reach, "
                     f"{H2D_DEFAULT_PART_CLEARANCE_MM:g} mm actual-part XY clearance "
                     "and Bambu H2D profiles for a 0.8 mm nozzle with 0.32 mm layers or "
-                    "a 0.4 mm nozzle with 0.2 mm layers; the 306 mm 5x5 tile is omitted"
+                    "a 0.4 mm nozzle with 0.24 mm layers; the 306 mm 5x5 tile is omitted"
                 ),
             )
     compare = commands.add_parser(
@@ -949,6 +950,7 @@ def main(argv: list[str] | None = None) -> int:
                         zeekr_7x.CONTOUR_GAP_MM if requested_gap is None else requested_gap
                     ),
                     auto_roof_support=bool(roof_support and roof_support.mode == "auto"),
+                    **({"layer_height_mm": bambu.layer_height} if bambu else {}),
                 )
                 if args.h2d_dual_safe:
                     job.placement_policy.update(
@@ -971,6 +973,7 @@ def main(argv: list[str] | None = None) -> int:
                     packing_gap=packing_gap,
                     solid_bottom_mm=interface.solid_bottom_mm,
                     auto_roof_support=bool(roof_support and roof_support.mode == "auto"),
+                    layer_height_mm=bambu.layer_height,
                 )
             else:
                 job = catalogue_job(

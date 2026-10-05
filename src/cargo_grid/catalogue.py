@@ -294,6 +294,7 @@ def catalogue_job(
         placement_policy={"auto_roof_support": plan.auto_roof_support},
         prime_tower=plan.prime_tower,
         prime_tower_positions=plan.prime_tower_positions,
+        prime_tower_reaches=plan.prime_tower_reaches,
         prime_tower_clearances=plan.prime_tower_clearances,
     )
 
@@ -350,8 +351,13 @@ def h2d_dual_safe_catalogue_job(
     packing_gap: float = H2D_DEFAULT_PART_CLEARANCE_MM,
     solid_bottom_mm: float = 0.0,
     auto_roof_support: bool = False,
+    layer_height_mm: float = 0.32,
 ) -> Job:
-    """Family-grouped H2D plan; ``auto_roof_support`` reserves prime towers for PLA plates."""
+    """Family-grouped H2D plan; ``auto_roof_support`` reserves prime towers for PLA plates.
+
+    ``layer_height_mm`` is the project's layer height, which sets Bambu's tower estimate and so
+    where the tower goes.
+    """
     positive("H2D packing gap", packing_gap)
     interface = Interface(solid_bottom_mm=solid_bottom_mm)
     physical_build = BuildVolume(350, 320, 325)
@@ -442,6 +448,7 @@ def h2d_dual_safe_catalogue_job(
         common_build,
         size=lambda design: sizes[id(design)],
         auto_roof_support=auto_roof_support,
+        layer_height_mm=layer_height_mm,
     )
     if plan.unfit:
         raise ValueError(f"{plan.unfit[0].name} does not fit its H2D plate area")
@@ -487,6 +494,7 @@ def h2d_dual_safe_catalogue_job(
         projected_footprint_clearances=plan.projected_clearances,
         prime_tower=plan.prime_tower,
         prime_tower_positions=plan.prime_tower_positions,
+        prime_tower_reaches=plan.prime_tower_reaches,
         prime_tower_clearances=plan.prime_tower_clearances,
     )
     job.part_gap = packing_gap

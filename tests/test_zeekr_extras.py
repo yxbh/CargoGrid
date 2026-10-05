@@ -10,6 +10,7 @@ from zipfile import ZipFile
 
 import pytest
 from build123d import Box
+from tower_checks import assert_towers_stay_where_bambu_keeps_them
 
 from cargo_grid import cli
 from cargo_grid import plates as plates_module
@@ -22,7 +23,7 @@ from cargo_grid.catalogue import (
 from cargo_grid.cli import main
 from cargo_grid.export import BambuSettings, Material, export_job
 from cargo_grid.jobs import Design
-from cargo_grid.packing import PrimeTower, h2d_common_build
+from cargo_grid.packing import h2d_common_build
 from cargo_grid.parameters import BuildVolume, Exclusion, Interface, interface_parameters
 from cargo_grid.plates import needs_auto_support
 from cargo_grid.rods import Rod, RodBrace
@@ -735,9 +736,7 @@ def test_auto_support_reserves_a_tower_on_plates_with_supported_pieces(auto_stan
         plate for plate, members in plates.items() if any(auto_stand_ins(d) for d, _ in members)
     }
     assert supported and set(job.prime_tower_positions) == supported
-    assert set(job.prime_tower_positions.values()) == {(290.5, 8.0)}
-    assert job.prime_tower == PrimeTower()
-    x0, _, _, y1 = job.prime_tower.footprint(290.5, 8.0)
+    assert_towers_stay_where_bambu_keeps_them(job, 0.32, size=lambda design: design.size)
     gaps = job.placement_policy["plate_group_minimum_model_gap_mm"]
     for plate, members in plates.items():
         name = job.plate_names[plate]
@@ -751,7 +750,6 @@ def test_auto_support_reserves_a_tower_on_plates_with_supported_pieces(auto_stan
                 width, depth = design.size[:2] if placement.rotation == 0 else design.size[1::-1]
                 assert placement.x >= 30 - 1e-6 and placement.x + width <= 320 + 1e-6
                 assert placement.y >= 6 - 1e-6 and placement.y + depth <= 314 + 1e-6
-                assert placement.x + width + 6.5 <= x0 + 1e-6 or placement.y >= y1 + 6.5 - 1e-6
     assert job.placement_policy["auto_roof_support"]["prime_tower_plates"] == [
         plate + 1 for plate in sorted(supported)
     ]
@@ -761,8 +759,8 @@ def test_auto_support_outside_h2d_uses_a_front_left_tower_corner(auto_stand_ins)
     build = BuildVolume(400, 400, 50)
     job = extras_job(build, auto_roof_support=True)
     (origin,) = set(job.prime_tower_positions.values())
+    assert origin == (15, 15)
     x0, y0, x1, y1 = job.prime_tower.footprint(*origin)
-    assert (x0, y0) == (0, 0)
     gaps = job.placement_policy["plate_group_minimum_model_gap_mm"]
     for plate, members in _placed_by_plate(job).items():
         if plate in job.prime_tower_positions:

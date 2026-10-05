@@ -11,6 +11,7 @@ from zipfile import ZipFile
 
 import pytest
 from build123d import Box
+from tower_checks import assert_towers_stay_where_bambu_keeps_them
 
 from cargo_grid import BuildVolume, Interface, Tile
 from cargo_grid import catalogue as catalogue_module
@@ -21,11 +22,11 @@ from cargo_grid.cli import main
 from cargo_grid.export import BambuSettings, Material, export_job, write_3mf
 from cargo_grid.jobs import Design, Job, tile_design, tile_identity
 from cargo_grid.packing import PrimeTower, PrintPlacement
-from cargo_grid.parameters import Exclusion
 from cargo_grid.plates import (
     AUTO_SUPPORT_TOWER_CLEARANCE_MM,
     DEFAULT_PRIME_TOWER,
-    H2D_AUTO_SUPPORT_TOWER_ORIGIN,
+    BambuTowerEstimate,
+    _H2DTowerLayout,
     needs_auto_support,
 )
 from cargo_grid.rods import Rod, RodBrace
@@ -259,6 +260,30 @@ def test_prime_tower_must_stay_on_the_plate_and_clear_of_models(
     assert not (tmp_path / "tower.3mf").exists()
 
 
+@pytest.mark.parametrize("offset,fits", [(0.0, True), (-0.01, False)])
+def test_planned_tower_clearance_allows_touching_and_names_each_side(
+    designs, tmp_path, offset, fits
+):
+    reservation = _H2DTowerLayout(BambuTowerEstimate(0.2)).reserve(14.92)
+    area = reservation.build.exclusions[-1]
+    job = Job(
+        [designs[0]["tile"]],
+        BUILD,
+        "part",
+        # The model's front edge sits on the recomputed back edge of the model-free area.
+        print_placements=[PrintPlacement(0, 230, area.y + area.depth + offset, 0)],
+        prime_tower=reservation.reach,
+        prime_tower_positions={0: reservation.origin},
+        prime_tower_reaches={0: reservation.reach},
+        prime_tower_clearances={0: reservation.clearance},
+    )
+    if fits:
+        write_3mf(job, tmp_path / "tower.3mf", bambu=bambu())
+    else:
+        with pytest.raises(ValueError, match=r"reserved clearance .*\(1.5/6.5/6.5/6.5 mm\)"):
+            write_3mf(job, tmp_path / "tower.3mf", bambu=bambu())
+
+
 def test_tower_positions_need_a_tower_and_valid_plates():
     with pytest.raises(ValueError, match="require a prime tower"):
         Job([Design("box", Box(1, 1, 1), {})], BUILD, "part", prime_tower_positions={0: (1, 1)})
@@ -366,11 +391,13 @@ def _corner(size):
     return Location(tuple(value / 2 for value in size))
 
 
-def test_h2d_auto_plan_reserves_a_tower_corner_on_every_support_plate(stubbed_h2d):
+@pytest.mark.parametrize("layer_height", [0.32, 0.24])
+def test_h2d_auto_plan_reserves_a_tower_corner_on_every_support_plate(stubbed_h2d, layer_height):
     default = h2d_dual_safe_catalogue_job(solid_bottom_mm=T)
-    job = h2d_dual_safe_catalogue_job(solid_bottom_mm=T, auto_roof_support=True)
+    job = h2d_dual_safe_catalogue_job(
+        solid_bottom_mm=T, auto_roof_support=True, layer_height_mm=layer_height
+    )
     assert default.prime_tower is None and default.prime_tower_positions == {}
-    assert job.prime_tower == DEFAULT_PRIME_TOWER
     plates = {}
     for design, placement in zip(job.designs, job.print_placements):
         plates.setdefault(placement.plate, []).append((design, placement))
@@ -380,19 +407,15 @@ def test_h2d_auto_plan_reserves_a_tower_corner_on_every_support_plate(stubbed_h2
         if any(stubbed_h2d(design) for design, _ in members)
     }
     assert set(job.prime_tower_positions) == tower_plates
-    x0, y0, x1, y1 = DEFAULT_PRIME_TOWER.footprint(*H2D_AUTO_SUPPORT_TOWER_ORIGIN)
-    assert (x0, y0, x1, y1) == (283, 1, 325, 39.5)
-    assert 25 <= x0 and x1 <= 325
-    clear = AUTO_SUPPORT_TOWER_CLEARANCE_MM
+    assert_towers_stay_where_bambu_keeps_them(job, layer_height)
     for plate in tower_plates:
-        assert job.prime_tower_positions[plate] == H2D_AUTO_SUPPORT_TOWER_ORIGIN
+        x0, _, x1, _ = job.tower_bounds(plate)
+        assert 25 <= x0 and x1 <= 325
         for design, placement in plates[plate]:
             size = design.bambu_size
             width, depth = size[:2] if placement.rotation == 0 else size[1::-1]
             assert 6 - 1e-6 <= placement.y and placement.y + depth <= 314 + 1e-6
             assert placement.x + width <= 320 + 1e-6
-            assert placement.x + width + clear <= x0 + 1e-6 or placement.y >= y1 + clear - 1e-6
-        assert job.prime_tower_clearances[plate] == clear
     # The 5x5 only fits one nozzle's area, so neither H2D plan includes it or maps a nozzle.
     for plan in (default, job):
         assert not any(
@@ -411,8 +434,10 @@ def test_h2d_auto_plan_reserves_a_tower_corner_on_every_support_plate(stubbed_h2
         if plate not in tower_plates:
             assert job.plate_builds[plate].exclusions[-1].x == 320
         else:
-            assert job.plate_builds[plate].exclusions[-1] == Exclusion(
-                x0 - clear, 0, x1 - x0 + 2 * clear, y1 + clear
+            k0, l0, k1, l1 = job.tower_clearance(plate).grow(job.tower_bounds(plate))
+            area = job.plate_builds[plate].exclusions[-1]
+            assert (area.x, area.y, area.x + area.width, area.y + area.depth) == pytest.approx(
+                (k0, max(0, l0), k1, l1)
             )
     assert {d.name for d in job.designs} == {d.name for d in default.designs}
 
@@ -428,8 +453,8 @@ def test_plain_auto_catalogue_reserves_a_front_left_tower_corner(stubbed_h2d):
     )
     assert job.prime_tower == DEFAULT_PRIME_TOWER
     (origin,) = set(job.prime_tower_positions.values())
+    assert origin == (15, 15)
     x0, y0, x1, y1 = job.prime_tower.footprint(*origin)
-    assert (x0, y0) == (0, 0)
     clear = AUTO_SUPPORT_TOWER_CLEARANCE_MM
     for design, placement in zip(job.designs, job.print_placements):
         if placement.plate in job.prime_tower_positions:

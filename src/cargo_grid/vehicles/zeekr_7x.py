@@ -83,6 +83,7 @@ def extras_job(
     edge_gap: float = 2,
     contour_gap: float = CONTOUR_GAP_MM,
     auto_roof_support: bool = False,
+    layer_height_mm: float = 0.32,
 ) -> Job:
     """Build the whole expansion set: 40 mm straight edges plus rear-panel contour pieces.
 
@@ -143,6 +144,7 @@ def extras_job(
             envelope,
             size=lambda design: sizes[id(design)],
             auto_roof_support=auto_roof_support,
+            layer_height_mm=layer_height_mm,
         )
         if result.unfit:
             raise ValueError(f"{result.unfit[0].name} does not fit its plate area")
@@ -173,6 +175,7 @@ def extras_job(
         plate_builds=plates.plate_builds,
         prime_tower=plates.prime_tower,
         prime_tower_positions=plates.prime_tower_positions,
+        prime_tower_reaches=plates.prime_tower_reaches,
         prime_tower_clearances=plates.prime_tower_clearances,
         placement_policy={
             "collection": "zeekr-7x",
