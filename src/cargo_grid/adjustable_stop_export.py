@@ -101,7 +101,7 @@ CORE_NAMESPACE = "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"
 RELATIONSHIPS_NAMESPACE = "http://schemas.openxmlformats.org/package/2006/relationships"
 CONTENT_TYPES_NAMESPACE = "http://schemas.openxmlformats.org/package/2006/content-types"
 CORE = f"{{{CORE_NAMESPACE}}}"
-PART_NAMES = ("fixed_base", "moving_wall", "short_screwed_keeper")
+PART_NAMES = ("fixed_base", "moving_wall", "keeper")
 CONNECTOR_PROOF_TOLERANCE_MM = 1e-5
 VOLUME_TOLERANCE_MM3 = 1e-6
 ADJUSTABLE_STOP_MODEL_CLEARANCE_MM = 4.0
@@ -146,7 +146,7 @@ def adjustable_stop_print_job(
     nozzle_diameter_mm: float = 0.8,
     spec: AdjustableStopSpec = AdjustableStopSpec(),
 ) -> Job:
-    """Pack one adjustable stop and its accepted clip on one supported H2D plate."""
+    """Pack one adjustable stop and its prong lock clip on one supported H2D plate."""
     profile = _adjustable_stop_h2d_profile(nozzle_diameter_mm)
     base, pusher, keeper = make_adjustable_stop_parts(spec)
     designs = [
@@ -163,16 +163,16 @@ def adjustable_stop_print_job(
             display_name="Moving wall - fingers down",
         ),
         Design(
-            "short_screwed_keeper",
+            "keeper",
             keeper,
             {"print_preparation": "adjustable-stop-complete-kit"},
-            display_name="Short keeper - countersinks up",
+            display_name="Keeper - countersinks up",
         ),
         Design(
             "prong_lock_clip",
             make_adjustable_stop_prong_lock_clip(spec),
             {"print_preparation": "adjustable-stop-complete-kit"},
-            display_name="Accepted v10b #1 clip - side lying",
+            display_name="Prong lock clip - side lying",
             recommended_print_rotation_x=90,
             apply_orientation_to_bambu=True,
         ),
@@ -227,7 +227,7 @@ def adjustable_stop_print_job(
                     "orientations": {
                         "fixed_base": "connectors down",
                         "moving_wall": "fingers down",
-                        "short_screwed_keeper": "countersinks up",
+                        "keeper": "countersinks up",
                         "prong_lock_clip": "X=+90, flat side on the bed",
                     },
                     "support": (
@@ -236,8 +236,8 @@ def adjustable_stop_print_job(
                     ),
                     "assembly": (
                         "Slide the moving wall into the base, fasten the keeper with four "
-                        "M3x16 DIN 7991 screws, then press the undimpled v10b #1 collar clip "
-                        "over the centre squeeze tab."
+                        "M3x16 DIN 7991 screws, then press the prong lock clip over the "
+                        "centre squeeze tab."
                     ),
                     "use": (
                         "Bags remain supported by the mat. The stop has no load or crash rating."
@@ -246,11 +246,11 @@ def adjustable_stop_print_job(
                 "physical_evidence": {
                     "profile": ("H2D 0.8 mm nozzle, 0.32 mm Balanced Strength, Bambu PETG Basic"),
                     "adjustable_stop": (
-                        "v9c base, moving wall and keeper were physically test-fitted."
+                        "The fixed base, moving wall and keeper were physically test-fitted."
                     ),
                     "clip": (
-                        "The accepted v10b #1 0.00 mm-per-side collar clip held without wobble "
-                        "and was firm to remove."
+                        "The 0.00 mm-per-side prong lock clip held without wobble and was firm "
+                        "to remove."
                     ),
                     "nozzle_0p4": (
                         "Export is supported, but fit, flex, bridge shape, retention and strength "
@@ -283,8 +283,8 @@ def _apply_adjustable_stop_support_settings(path: Path) -> None:
     prefixes = {
         "Fixed base": "fixed_base",
         "Moving wall": "moving_wall",
-        "Short keeper": "short_screwed_keeper",
-        "Accepted v10b #1 clip": "prong_lock_clip",
+        "Keeper": "keeper",
+        "Prong lock clip": "prong_lock_clip",
     }
     model = ET.fromstring(entries["Metadata/model_settings.config"])
     configured = {}
@@ -308,12 +308,12 @@ def _apply_adjustable_stop_support_settings(path: Path) -> None:
                 child.set("value", value)
     expected = {
         *_ADJUSTABLE_STOP_SUPPORT_OBJECTS,
-        "short_screwed_keeper",
+        "keeper",
         "prong_lock_clip",
     }
     if set(configured) != expected:
         raise ValueError("adjustable-stop project does not contain its four expected objects")
-    for design in ("short_screwed_keeper", "prong_lock_clip"):
+    for design in ("keeper", "prong_lock_clip"):
         if configured[design] & OBJECT_AUTO_SUPPORT.keys():
             raise ValueError(f"{design} must not have an object support override")
 
@@ -2023,7 +2023,7 @@ def _rounding_proofs(
                 ),
             },
             {
-                "part": "short_screwed_keeper",
+                "part": "keeper",
                 "region": "two top side edges",
                 "reason": (
                     f"The {DIMENSIONS.countersink_diameter:g} mm countersink mouths leave "
@@ -2031,7 +2031,7 @@ def _rounding_proofs(
                 ),
             },
             {
-                "part": "short_screwed_keeper",
+                "part": "keeper",
                 "region": "flat underside, overrun-stop and screw working edges",
                 "reason": "Planar lands, overtravel blocking, bores and countersinks are preserved.",
             },
@@ -2357,7 +2357,7 @@ def export_adjustable_stop(
             "plug": "cargo_grid.interfaces.make_plug",
             "panel_connector": "cargo_grid.accessories.make_bidirectional_panel_connector",
             "construction": (
-                "The shared bidirectional panel post uses the accepted inset stem and unchanged "
+                "The shared bidirectional panel post uses the 0.08 mm inset stem and unchanged "
                 "native 12.8 mm R2-tipped plug. Two rigid copies are fused into the 8 mm wall."
             ),
             "external_reference_asset_required": False,
@@ -2501,8 +2501,8 @@ def export_adjustable_stop(
                 "the native geometry check, but physical tile fit is unverified."
             ),
             "underbody_base_plug": (
-                "The independent analytic candidate is retained at Y=100 mm and duplicated at "
-                "Y=40 mm on the same 60 mm pitch; physical mat fit is unverified."
+                "The fixed-base underside plug at Y=100 mm is duplicated at Y=40 mm on the "
+                "same 60 mm pitch; physical mat fit is unverified."
             ),
             "upright_tile": (
                 "The original 66 x 126 x 13 mm two-opening tile remains a separate accessory "

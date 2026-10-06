@@ -26,6 +26,7 @@ from cargo_grid.adjustable_stop import (
     make_adjustable_stop_prong_lock_clip,
 )
 from cargo_grid.adjustable_stop_export import (
+    ADJUSTABLE_STOP_PLATE_NAME,
     _disassembly_proofs,
     _edge_continuity_counts,
     _guide_proofs,
@@ -181,7 +182,7 @@ def test_complete_print_project_uses_shared_h2d_support_conventions(
     assert [design.name for design in job.designs] == [
         "fixed_base",
         "moving_wall",
-        "short_screwed_keeper",
+        "keeper",
         "prong_lock_clip",
     ]
     assert {placement.plate for placement in job.print_placements} == {0}
@@ -206,6 +207,7 @@ def test_complete_print_project_uses_shared_h2d_support_conventions(
     assert {"wipe_tower_x", "wipe_tower_y"} <= overrides
 
     object_settings = {}
+    part_names = set()
     for item in model.findall("object"):
         metadata = {
             child.get("key"): child.get("value")
@@ -213,6 +215,40 @@ def test_complete_print_project_uses_shared_h2d_support_conventions(
             if child.get("key")
         }
         object_settings[metadata["name"]] = metadata
+        part_names.update(
+            child.get("value")
+            for part in item.findall("part")
+            for child in part.findall("metadata")
+            if child.get("key") == "name"
+        )
+    assert set(object_settings) == {
+        "Fixed base - connectors down_batch_1",
+        "Moving wall - fingers down_batch_2",
+        "Keeper - countersinks up_batch_3",
+        "Prong lock clip - side lying_batch_4",
+    }
+    assert part_names == {
+        "Fixed base - connectors down",
+        "Moving wall - fingers down",
+        "Keeper - countersinks up",
+        "Prong lock clip - side lying",
+    }
+    plate = model.find("plate")
+    assert plate is not None
+    plate_metadata = {
+        child.get("key"): child.get("value")
+        for child in plate.findall("metadata")
+        if child.get("key")
+    }
+    assert plate_metadata["plater_name"] == ADJUSTABLE_STOP_PLATE_NAME
+    assert not any(
+        term in ET.tostring(model, encoding="unicode").casefold()
+        for term in ("accepted", "candidate", "v9c", "v10b")
+    )
+    assert not any(
+        term in json.dumps(job.manifest_metadata).casefold()
+        for term in ("accepted", "candidate", "v9c", "v10b")
+    )
     supported = [
         values
         for name, values in object_settings.items()
@@ -221,7 +257,7 @@ def test_complete_print_project_uses_shared_h2d_support_conventions(
     unsupported = [
         values
         for name, values in object_settings.items()
-        if name.startswith(("Short keeper", "Accepted v10b #1 clip"))
+        if name.startswith(("Keeper", "Prong lock clip"))
     ]
     assert len(supported) == 2
     assert all(
@@ -237,9 +273,9 @@ def test_complete_print_project_uses_shared_h2d_support_conventions(
 def test_approved_parts_are_three_valid_native_solids():
     base, pusher, keeper = make_adjustable_stop_parts()
     assert [part.label for part in (base, pusher, keeper)] == [
-        "fixed_base_analytic_anchor_candidate",
+        "fixed_base",
         "moving_wall",
-        "short_screwed_keeper",
+        "keeper",
     ]
     assert all(
         part.is_valid and len(part.solids()) == 1 and part.volume > 0
@@ -388,6 +424,7 @@ def test_centre_squeeze_tab_continues_centre_prong_and_clip_has_one_side_bed_fac
 
     clip = make_adjustable_stop_prong_lock_clip()
     assert clip.is_valid and len(clip.solids()) == 1
+    assert clip.label == "prong_lock_clip"
     bed_y = clip.bounding_box().min.Y
     bed_faces = [
         face
@@ -775,7 +812,7 @@ def test_feature_ordered_rounding_preserves_working_regions_and_finger_sections(
     assert radius_counts["fixed_base"]["2"] >= 36
     assert radius_counts["moving_wall"]["2"] >= 33
     assert radius_counts["moving_wall"]["1"] == 53
-    assert radius_counts["short_screwed_keeper"]["1"] >= 6
+    assert radius_counts["keeper"]["1"] >= 6
     assert all(counts["G1"] > 0 for counts in proof["adjacent_edge_continuity_counts"].values())
     sections = proof["finger_cross_sections"]
     assert sections["outer_each_mm2"] == pytest.approx(103.9915926535898)
@@ -791,7 +828,7 @@ def test_feature_ordered_rounding_preserves_working_regions_and_finger_sections(
     exceptions = {
         (item["part"], item["region"]): item["reason"] for item in proof["intentional_sharp_edges"]
     }
-    assert "1.3 mm" in exceptions[("short_screwed_keeper", "two top side edges")]
+    assert "1.3 mm" in exceptions[("keeper", "two top side edges")]
     assert "R0.05" in exceptions[("moving_wall", "six wall-root side transitions")]
 
 
@@ -826,11 +863,14 @@ def test_complete_export_is_native_step_first_and_refuses_overwrite(tmp_path: Pa
         "manifest.json",
         "moving_wall.stl",
         "provenance.json",
-        "short_screwed_keeper.stl",
+        "keeper.stl",
         "adjustable_stop.3mf",
         "adjustable_stop.step",
     }
     assert manifest["kind"] == "adjustable-stop"
+    assert not any(
+        term in json.dumps(manifest).casefold() for term in ("accepted", "candidate", "v9c", "v10b")
+    )
     assert manifest["design_mode"]["workflow"] == "native Cargo-Grid BREP"
     assert manifest["design_mode"]["catalogue_member"] is False
     assert manifest["parameters"]["wall_backing_thickness_mm"] == 8
@@ -894,12 +934,18 @@ def test_complete_export_is_native_step_first_and_refuses_overwrite(tmp_path: Pa
     restored = import_step(output / "adjustable_stop.step")
     assert restored.is_valid
     assert len(restored.solids()) == 3
+    assert {part.label for part in restored.children} == {"fixed_base", "moving_wall", "keeper"}
     with ZipFile(output / "adjustable_stop.3mf") as archive:
         model = ET.fromstring(archive.read("3D/3dmodel.model"))
     metadata = {item.get("name"): item.text for item in model.findall("{*}metadata")}
     assert metadata["CargoGridXSource"] == (
         "cargo_grid.accessories.make_bidirectional_panel_connector"
     )
+    assert {item.get("name") for item in model.findall("{*}resources/{*}object")} == {
+        "fixed_base",
+        "moving_wall",
+        "keeper",
+    }
 
     before = {path.name: path.read_bytes() for path in output.iterdir()}
     with pytest.raises(ValueError, match="not empty"):

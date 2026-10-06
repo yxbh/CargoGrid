@@ -905,7 +905,7 @@ def _make_base(
         base = _unify_same_domain(base)
     if round_edges:
         _mark_outer_guide_tangency(base, d)
-    base.label = "fixed_base_analytic_anchor_candidate"
+    base.label = "fixed_base"
     base.color = Color(0.19, 0.39, 0.50)
     return base
 
@@ -1147,7 +1147,7 @@ def _make_pusher_body(
             expected=6,
             feature="finger-reinforcement R1 transition",
         )
-    pusher.label = "moving_wall_connector_backing"
+    pusher.label = "moving_wall"
     pusher.color = Color(0.92, 0.51, 0.15)
     return pusher
 
@@ -1247,7 +1247,7 @@ def _make_keeper(
             d.countersink_depth + 0.1,
             align=(Align.CENTER, Align.CENTER, Align.MIN),
         )
-    keeper.label = "short_screwed_keeper"
+    keeper.label = "keeper"
     keeper.color = Color(0.72, 0.78, 0.80)
     return keeper
 
@@ -1272,7 +1272,7 @@ def make_adjustable_stop_prong_lock_clip(
     spec: AdjustableStopSpec = AdjustableStopSpec(),
     clip_dimensions: AdjustableStopProngLockClipDimensions = PRONG_LOCK_CLIP_DIMENSIONS,
 ) -> Part:
-    """Build the removable three-tab lock clip; defaults are undimpled v10b #1."""
+    """Build the removable three-tab prong lock clip."""
 
     if not isinstance(spec, AdjustableStopSpec):
         raise ValueError("spec must be an AdjustableStopSpec")
@@ -1457,6 +1457,6 @@ def make_adjustable_stop_prong_lock_clip(
         raise ValueError("prong lock clip must be one valid positive-volume solid")
 
     clip = clip.moved(Location((0, d.pusher_y_offset - spec.extension_mm, d.pusher_z)))
-    clip.label = "PRONG_LOCK_CLIP"
+    clip.label = "prong_lock_clip"
     clip.color = Color(0.58, 0.24, 0.72)
     return clip
