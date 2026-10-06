@@ -39,7 +39,7 @@ from cargo_grid.roof_support import RoofSupportSettings, check_roof_job_kind
 from cargo_grid.stacking import StackSettings
 from cargo_grid.vehicles import zeekr_7x
 
-EXTRAS_RECIPES = ("zeekr-7x", "pull-handle")
+EXTRAS_RECIPES = ("zeekr-7x", "pull-handle", "adjustable-stop")
 
 
 def _positive_mm(value: str) -> float:
@@ -418,7 +418,8 @@ def parser() -> argparse.ArgumentParser:
                 help=(
                     "zeekr-7x: Zeekr 7X expansion set of 40 mm straight edges plus the measured "
                     "rear-panel contour caps and ramps; pull-handle: two-unit X-plug pull "
-                    "handle with and without a strap bar"
+                    "handle with and without a strap bar; adjustable-stop: adjustable four-object "
+                    "H2D print kit"
                 ),
             )
         for axis, meaning in (
@@ -957,6 +958,26 @@ def main(argv: list[str] | None = None) -> int:
                     )
                 positive("H2D packing gap", packing_gap)
             if args.command == "extras":
+                if args.recipe == "adjustable-stop":
+                    if not args.h2d_dual_safe or not bambu:
+                        raise ValueError(
+                            "extras adjustable-stop requires --h2d-dual-safe and --bambu"
+                        )
+                    if roof_support is None or roof_support.mode != "auto":
+                        raise ValueError(
+                            "extras adjustable-stop requires --roof-support --roof-support-mode auto"
+                        )
+                    from cargo_grid.adjustable_stop_export import (
+                        export_adjustable_stop_print_project,
+                    )
+
+                    manifest = export_adjustable_stop_print_project(
+                        args.output,
+                        args.nozzle_diameter_mm,
+                        stl=not args.no_stl,
+                    )
+                    print(manifest)
+                    return 0
                 if args.recipe == "pull-handle":
                     _check_pull_handle_options(args, roof_support)
                     job = pull_handle_extras_job(
