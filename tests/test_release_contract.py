@@ -58,7 +58,7 @@ def test_version_and_module_entrypoint(tmp_path):
         command in help_result.stdout
         for command in ("part", "layout", "catalogue", "extras", "compare-reference")
     )
-    assert "trunk-blocker" not in help_result.stdout
+    assert "adjustable-stop" not in help_result.stdout
     normalized_help = " ".join(help_result.stdout.split())
     assert "full 10 mm round-hole tiles are the defaults" in normalized_help
     assert "roof support remains off" in normalized_help

@@ -38,9 +38,9 @@ def test_variants_cover_each_published_set_and_nozzle_once():
             assert [material[0] for material in args.material] == [profiles.petg]
             assert args.solid_bottom_thickness_mm == 0
             continue
-        if args.command == "extras" and args.recipe == "trunk-blocker":
+        if args.command == "extras" and args.recipe == "adjustable-stop":
             assert variant.name == (
-                f"CargoGrid_H2D_Trunk-Blocker_{args.nozzle_diameter_mm:g}mm-Nozzle"
+                f"CargoGrid_H2D_Adjustable-Stop_{args.nozzle_diameter_mm:g}mm-Nozzle"
             )
             assert args.roof_support and args.roof_support_mode == "auto"
             assert [material[0] for material in args.material] == [profiles.petg, profiles.pla]
@@ -114,14 +114,14 @@ def test_set_filter_builds_only_the_chosen_sets(monkeypatch, tmp_path, capsys):
     assert all(line.startswith("CargoGrid_H2D_Full-Catalogue_") for line in listed)
 
 
-def test_trunk_blocker_set_filter_writes_only_both_nozzles(monkeypatch, tmp_path):
+def test_adjustable_stop_set_filter_writes_only_both_nozzles(monkeypatch, tmp_path):
     tool = _tool()
     monkeypatch.setattr(tool, "generate", _fake_generate)
-    assert tool.main(["--output", str(tmp_path), "--set", "Trunk-Blocker"]) == 0
+    assert tool.main(["--output", str(tmp_path), "--set", "Adjustable-Stop"]) == 0
     assert {path.name for path in tmp_path.iterdir()} == {
         path.name
         for variant in tool.variants()
-        if variant.set_name == "Trunk-Blocker"
+        if variant.set_name == "Adjustable-Stop"
         for path in tool.destinations(tmp_path, variant).values()
     }
 

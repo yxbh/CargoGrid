@@ -1,4 +1,4 @@
-"""Trunk-blocker native-CAD geometry and export boundaries."""
+"""Adjustable-stop native-CAD geometry and export boundaries."""
 
 import json
 from math import floor
@@ -11,8 +11,33 @@ import pytest
 from build123d import Align, Axis, Box, GeomType, Location, Part, Pos, Shape, ShapeList, import_step
 from OCP.BRepAdaptor import BRepAdaptor_Surface
 
-from cargo_grid import TrunkBlockerSpec, prepared
+from cargo_grid import AdjustableStopSpec, prepared
 from cargo_grid.accessories import make_bidirectional_panel_connector
+from cargo_grid.adjustable_stop import (
+    BASE_ANCHOR_CENTRES_Y_MM,
+    CONNECTOR_CENTRES_ABOVE_PUSHER_FLOOR_MM,
+    DETAIL_EDGE_RADIUS_MM,
+    DIMENSIONS,
+    FREE_EDGE_RADIUS_MM,
+    MOVING_TOOTH_STATIONS_MM,
+    PRONG_LOCK_CLIP_DIMENSIONS,
+    SCREW_AXES_MM,
+    make_adjustable_stop_parts,
+    make_adjustable_stop_prong_lock_clip,
+)
+from cargo_grid.adjustable_stop_export import (
+    _disassembly_proofs,
+    _edge_continuity_counts,
+    _guide_proofs,
+    _pusher_bed_proofs,
+    _ratchet_proofs,
+    _rounding_proofs,
+    adjustable_stop_h2d_settings,
+    adjustable_stop_print_job,
+    export_adjustable_stop,
+    prepare_adjustable_stop_print_job,
+    write_adjustable_stop_print_project,
+)
 from cargo_grid.cli import H2D_PROFILES
 from cargo_grid.export import BAMBU_PROCESS_DEFAULTS, write_3mf
 from cargo_grid.jobs import Design, Job
@@ -24,31 +49,6 @@ from cargo_grid.plates import (
     H2D_TOWER_LEFT_CLEARANCE_MM,
     TOWER_BACK_ALLOWANCE_MM,
     BambuTowerEstimate,
-)
-from cargo_grid.trunk_blocker import (
-    BASE_ANCHOR_CENTRES_Y_MM,
-    CONNECTOR_CENTRES_ABOVE_PUSHER_FLOOR_MM,
-    DETAIL_EDGE_RADIUS_MM,
-    DIMENSIONS,
-    FREE_EDGE_RADIUS_MM,
-    MOVING_TOOTH_STATIONS_MM,
-    PRONG_LOCK_CLIP_DIMENSIONS,
-    SCREW_AXES_MM,
-    make_trunk_blocker_parts,
-    make_trunk_blocker_prong_lock_clip,
-)
-from cargo_grid.trunk_blocker_export import (
-    _disassembly_proofs,
-    _edge_continuity_counts,
-    _guide_proofs,
-    _pusher_bed_proofs,
-    _ratchet_proofs,
-    _rounding_proofs,
-    export_trunk_blocker,
-    prepare_trunk_blocker_print_job,
-    trunk_blocker_h2d_settings,
-    trunk_blocker_print_job,
-    write_trunk_blocker_print_project,
 )
 
 
@@ -74,7 +74,7 @@ def test_print_job_uses_default_tower_only_for_multi_material_plates(
     nozzle_diameter_mm,
 ):
     tallest_part_mm = 120.2500001
-    bambu = trunk_blocker_h2d_settings(
+    bambu = adjustable_stop_h2d_settings(
         nozzle_diameter_mm,
         dual_material=material_count > 1,
     )
@@ -87,11 +87,11 @@ def test_print_job_uses_default_tower_only_for_multi_material_plates(
         (profile.petg, profile.pla) if material_count > 1 else (profile.petg,)
     )
     build = h2d_common_build()
-    job = prepare_trunk_blocker_print_job(
+    job = prepare_adjustable_stop_print_job(
         Job(
-            [Design("blocker test box", Box(20, 20, tallest_part_mm), {})],
+            [Design("adjustable stop test box", Box(20, 20, tallest_part_mm), {})],
             build,
-            "trunk-blocker-test",
+            "adjustable-stop-test",
             part_gap=4,
             print_placements=[PrintPlacement(0, 85, 5, 0)],
             plate_builds={0: build},
@@ -158,13 +158,13 @@ def test_print_job_uses_default_tower_only_for_multi_material_plates(
             assert (x0, y0, x1, y1) == pytest.approx((273.42, 7.0, 325.0, 52.57693534037844))
 
 
-def test_trunk_blocker_h2d_settings_rejects_unlisted_nozzle():
+def test_adjustable_stop_h2d_settings_rejects_unlisted_nozzle():
     with pytest.raises(ValueError, match="must be one of: 0.8, 0.4 mm"):
-        trunk_blocker_h2d_settings(0.6, dual_material=True)
+        adjustable_stop_h2d_settings(0.6, dual_material=True)
 
 
-def test_trunk_blocker_h2d_settings_defaults_to_tested_0p8_profile():
-    settings = trunk_blocker_h2d_settings(dual_material=False)
+def test_adjustable_stop_h2d_settings_defaults_to_tested_0p8_profile():
+    settings = adjustable_stop_h2d_settings(dual_material=False)
     profile = H2D_PROFILES[0.8]
     assert settings.nozzle == 0.8
     assert settings.layer_height == profile.layer_height_mm
@@ -177,7 +177,7 @@ def test_complete_print_project_uses_shared_h2d_support_conventions(
     tmp_path,
     nozzle_diameter_mm,
 ):
-    job = trunk_blocker_print_job(nozzle_diameter_mm)
+    job = adjustable_stop_print_job(nozzle_diameter_mm)
     assert [design.name for design in job.designs] == [
         "fixed_base",
         "moving_wall",
@@ -189,8 +189,8 @@ def test_complete_print_project_uses_shared_h2d_support_conventions(
     assert set(job.prime_tower_positions) == {0}
     assert job.tower_bounds(0)[2] == pytest.approx(H2D_SHARED_REACH_X_MM[1])
 
-    project = tmp_path / f"blocker-{nozzle_diameter_mm:g}.3mf"
-    write_trunk_blocker_print_project(project, nozzle_diameter_mm)
+    project = tmp_path / f"adjustable-stop-{nozzle_diameter_mm:g}.3mf"
+    write_adjustable_stop_print_project(project, nozzle_diameter_mm)
     with ZipFile(project) as archive:
         settings = json.loads(archive.read("Metadata/project_settings.config"))
         model = ET.fromstring(archive.read("Metadata/model_settings.config"))
@@ -235,7 +235,7 @@ def test_complete_print_project_uses_shared_h2d_support_conventions(
 
 
 def test_approved_parts_are_three_valid_native_solids():
-    base, pusher, keeper = make_trunk_blocker_parts()
+    base, pusher, keeper = make_adjustable_stop_parts()
     assert [part.label for part in (base, pusher, keeper)] == [
         "fixed_base_analytic_anchor_candidate",
         "moving_wall",
@@ -270,7 +270,7 @@ def test_approved_parts_are_three_valid_native_solids():
 
 
 def test_base_has_two_identical_60_mm_pitch_underbody_anchors():
-    base, _, _ = make_trunk_blocker_parts()
+    base, _, _ = make_adjustable_stop_parts()
     assert BASE_ANCHOR_CENTRES_Y_MM == (40, 100)
     anchors = []
     for centre_y in BASE_ANCHOR_CENTRES_Y_MM:
@@ -297,7 +297,7 @@ def test_base_has_two_identical_60_mm_pitch_underbody_anchors():
 
 
 def test_front_connectors_reuse_shared_native_panel_brep():
-    _, pusher, _ = make_trunk_blocker_parts(TrunkBlockerSpec(extension_mm=0))
+    _, pusher, _ = make_adjustable_stop_parts(AdjustableStopSpec(extension_mm=0))
     source = make_bidirectional_panel_connector()
     assert source.bounding_box().min.Z == pytest.approx(-12.8)
     assert source.bounding_box().max.Z == pytest.approx(2)
@@ -318,7 +318,7 @@ def test_front_connectors_reuse_shared_native_panel_brep():
 
 
 def test_compact_pusher_offset_preserves_wall_thickness():
-    _, pusher, _ = make_trunk_blocker_parts(TrunkBlockerSpec(extension_mm=0))
+    _, pusher, _ = make_adjustable_stop_parts(AdjustableStopSpec(extension_mm=0))
     wall_only = pusher.intersect(
         Location((20, -2, 64))
         * Box(
@@ -335,7 +335,7 @@ def test_compact_pusher_offset_preserves_wall_thickness():
 
 
 def test_outer_fingers_have_three_equal_pitch_exposed_teeth():
-    _, pusher, _ = make_trunk_blocker_parts(TrunkBlockerSpec(extension_mm=0))
+    _, pusher, _ = make_adjustable_stop_parts(AdjustableStopSpec(extension_mm=0))
     assert MOVING_TOOTH_STATIONS_MM == (97.5, 105.5, 113.5)
     outer_edge = DIMENSIONS.outer_centre + DIMENSIONS.outer_width / 2
     for side in (-1, 1):
@@ -360,7 +360,7 @@ def test_outer_fingers_have_three_equal_pitch_exposed_teeth():
 
 
 def test_centre_squeeze_tab_continues_centre_prong_and_clip_has_one_side_bed_face():
-    _, pusher, _ = make_trunk_blocker_parts()
+    _, pusher, _ = make_adjustable_stop_parts()
     for side in (-1, 1):
         side_x = side * DIMENSIONS.centre_width / 2
         continuous_side_faces = []
@@ -381,12 +381,12 @@ def test_centre_squeeze_tab_continues_centre_prong_and_clip_has_one_side_bed_fac
             DIMENSIONS.pad_start
             + DIMENSIONS.pad_length
             + DIMENSIONS.pusher_y_offset
-            - TrunkBlockerSpec().extension_mm
+            - AdjustableStopSpec().extension_mm
             - DETAIL_EDGE_RADIUS_MM
         )
         assert bounds.max.Z > DIMENSIONS.pad_top
 
-    clip = make_trunk_blocker_prong_lock_clip()
+    clip = make_adjustable_stop_prong_lock_clip()
     assert clip.is_valid and len(clip.solids()) == 1
     bed_y = clip.bounding_box().min.Y
     bed_faces = [
@@ -448,8 +448,8 @@ def test_centre_squeeze_tab_continues_centre_prong_and_clip_has_one_side_bed_fac
 
 @pytest.mark.slow
 def test_matched_ratchet_ramps_contact_and_clear_through_one_pitch():
-    parts = make_trunk_blocker_parts()
-    proof = _ratchet_proofs(parts, TrunkBlockerSpec())
+    parts = make_adjustable_stop_parts()
+    proof = _ratchet_proofs(parts, AdjustableStopSpec())
     angle = proof["shared_ramp_angle_degrees"]
     assert angle["nominal"] == pytest.approx(53.13010235415598)
     assert angle["maximum_measured_difference"] < 1e-9
@@ -516,7 +516,7 @@ def test_approved_outer_assembly_shift_preserves_released_clearances():
 
 
 def test_plain_front_centre_guides_bound_rigid_yaw_without_preloading_fingers():
-    parts = make_trunk_blocker_parts()
+    parts = make_adjustable_stop_parts()
     _, pusher, _ = parts
     proof = _guide_proofs(parts)
     assert DIMENSIONS.guide_start == 13.5
@@ -606,8 +606,8 @@ def test_plain_front_centre_guides_bound_rigid_yaw_without_preloading_fingers():
 
 @pytest.mark.parametrize("released", [False, True])
 def test_pusher_bed_facing_underside_is_coplanar_with_fingers(released):
-    spec = TrunkBlockerSpec(released_illustration=released)
-    parts = make_trunk_blocker_parts(spec)
+    spec = AdjustableStopSpec(released_illustration=released)
+    parts = make_adjustable_stop_parts(spec)
     proof = _pusher_bed_proofs(parts, spec)
     assert DIMENSIONS.pusher_bed_bottom == DIMENSIONS.finger_bottom == pytest.approx(-0.25)
     assert proof["named_local_datum_mm"] == pytest.approx(-0.25)
@@ -632,7 +632,7 @@ def test_pusher_bed_facing_underside_is_coplanar_with_fingers(released):
 
 @pytest.mark.slow
 def test_tall_squeeze_pads_clear_normal_travel_and_require_keeper_off_for_removal():
-    parts = make_trunk_blocker_parts()
+    parts = make_adjustable_stop_parts()
     proof = _disassembly_proofs(parts)
     revision = proof["tall_pad_revision"]
     assert revision["pad_count"] == 3
@@ -682,9 +682,9 @@ def test_tall_squeeze_pads_clear_normal_travel_and_require_keeper_off_for_remova
 
 
 def test_tooth_carriers_stop_overtravel_even_when_released():
-    _, relaxed, keeper = make_trunk_blocker_parts(TrunkBlockerSpec(48))
-    _, released, released_keeper = make_trunk_blocker_parts(
-        TrunkBlockerSpec(48, released_illustration=True)
+    _, relaxed, keeper = make_adjustable_stop_parts(AdjustableStopSpec(48))
+    _, released, released_keeper = make_adjustable_stop_parts(
+        AdjustableStopSpec(48, released_illustration=True)
     )
     for pusher, stop in ((relaxed, keeper), (released, released_keeper)):
         before = pusher.moved(Location((0, -0.999, 0)))
@@ -697,7 +697,7 @@ def test_tooth_carriers_stop_overtravel_even_when_released():
 
 
 def test_obsolete_mini_removal_shoulders_are_absent():
-    _, pusher, _ = make_trunk_blocker_parts(TrunkBlockerSpec(0))
+    _, pusher, _ = make_adjustable_stop_parts(AdjustableStopSpec(0))
     probes = [
         Location((x0, 94.5, DIMENSIONS.finger_top_z + 0.01))
         * Box(
@@ -721,7 +721,7 @@ def test_obsolete_mini_removal_shoulders_are_absent():
 
 
 def test_keeper_and_base_preserve_requested_fastener_geometry():
-    base, _, keeper = make_trunk_blocker_parts()
+    base, _, keeper = make_adjustable_stop_parts()
     cones = [face for face in keeper.faces() if face.geom_type == GeomType.CONE]
     assert len(cones) == 4
     bottom_faces = [
@@ -763,8 +763,8 @@ def test_keeper_and_base_preserve_requested_fastener_geometry():
 
 
 def test_feature_ordered_rounding_preserves_working_regions_and_finger_sections():
-    spec = TrunkBlockerSpec()
-    parts = make_trunk_blocker_parts(spec)
+    spec = AdjustableStopSpec()
+    parts = make_adjustable_stop_parts(spec)
     proof = _rounding_proofs(parts, spec)
 
     assert proof["radii_mm"] == {
@@ -808,18 +808,18 @@ def test_export_refuses_nonempty_output_before_building_geometry(
         pytest.fail("occupied-output refusal must happen before geometry construction")
 
     monkeypatch.setattr(
-        "cargo_grid.trunk_blocker_export.make_trunk_blocker_parts",
+        "cargo_grid.adjustable_stop_export.make_adjustable_stop_parts",
         fail_if_built,
     )
     with pytest.raises(ValueError, match="output directory is not empty"):
-        export_trunk_blocker(output)
+        export_adjustable_stop(output)
     assert sentinel.read_text() == "keep"
 
 
 @pytest.mark.slow
 def test_complete_export_is_native_step_first_and_refuses_overwrite(tmp_path: Path):
     output = tmp_path / "job"
-    manifest_path = export_trunk_blocker(output)
+    manifest_path = export_adjustable_stop(output)
     manifest = json.loads(manifest_path.read_text())
     assert set(path.name for path in output.iterdir()) == {
         "fixed_base.stl",
@@ -827,10 +827,10 @@ def test_complete_export_is_native_step_first_and_refuses_overwrite(tmp_path: Pa
         "moving_wall.stl",
         "provenance.json",
         "short_screwed_keeper.stl",
-        "trunk_blocker.3mf",
-        "trunk_blocker.step",
+        "adjustable_stop.3mf",
+        "adjustable_stop.step",
     }
-    assert manifest["kind"] == "trunk-blocker"
+    assert manifest["kind"] == "adjustable-stop"
     assert manifest["design_mode"]["workflow"] == "native Cargo-Grid BREP"
     assert manifest["design_mode"]["catalogue_member"] is False
     assert manifest["parameters"]["wall_backing_thickness_mm"] == 8
@@ -888,13 +888,13 @@ def test_complete_export_is_native_step_first_and_refuses_overwrite(tmp_path: Pa
     assert disassembly["keeper_installed_withdrawal"]["supported"] is False
     assert disassembly["keeper_removed_withdrawal"]["supported"] is True
     assert manifest["export"]["primary_format"] == "STEP"
-    assert manifest["export"]["step"] == "trunk_blocker.step"
+    assert manifest["export"]["step"] == "adjustable_stop.step"
     assert manifest["export"]["sliced"] is False
 
-    restored = import_step(output / "trunk_blocker.step")
+    restored = import_step(output / "adjustable_stop.step")
     assert restored.is_valid
     assert len(restored.solids()) == 3
-    with ZipFile(output / "trunk_blocker.3mf") as archive:
+    with ZipFile(output / "adjustable_stop.3mf") as archive:
         model = ET.fromstring(archive.read("3D/3dmodel.model"))
     metadata = {item.get("name"): item.text for item in model.findall("{*}metadata")}
     assert metadata["CargoGridXSource"] == (
@@ -903,7 +903,7 @@ def test_complete_export_is_native_step_first_and_refuses_overwrite(tmp_path: Pa
 
     before = {path.name: path.read_bytes() for path in output.iterdir()}
     with pytest.raises(ValueError, match="not empty"):
-        export_trunk_blocker(output)
+        export_adjustable_stop(output)
     assert {path.name: path.read_bytes() for path in output.iterdir()} == before
 
 
@@ -927,5 +927,5 @@ def test_export_measures_each_owned_part_before_reusing_one_checked_mesh(
 
     monkeypatch.setattr(prepared, "checked_mesh", checked)
     monkeypatch.setattr(Shape, "bounding_box", bounds)
-    export_trunk_blocker(tmp_path / "job")
+    export_adjustable_stop(tmp_path / "job")
     assert len(meshed) == 3

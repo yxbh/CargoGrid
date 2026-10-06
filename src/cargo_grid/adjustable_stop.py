@@ -1,4 +1,4 @@
-"""Three-part adjustable trunk blocker geometry.
+"""Three-part adjustable stop geometry.
 
 All dimensions are millimeters. The fixed base underside is Z=0. The moving
 wall is authored locally with its front at Y=0 and its fingers pointing in +Y,
@@ -47,7 +47,7 @@ from cargo_grid.accessories import make_bidirectional_panel_connector
 
 
 @dataclass(frozen=True)
-class TrunkBlockerDimensions:
+class AdjustableStopDimensions:
     width: float = 60.0
     base_start: float = 10.0
     base_length: float = 120.0
@@ -300,7 +300,7 @@ class TrunkBlockerDimensions:
         return self.keeper_width / 2 - outer_axis - self.countersink_diameter / 2
 
 
-DIMENSIONS = TrunkBlockerDimensions()
+DIMENSIONS = AdjustableStopDimensions()
 BASE_ANCHOR_CENTRES_Y_MM = DIMENSIONS.base_anchor_centres_y
 MOVING_TOOTH_STATIONS_MM = DIMENSIONS.moving_tooth_stations
 RACK_TOOTH_STATIONS_MM = DIMENSIONS.rack_tooth_stations
@@ -312,8 +312,8 @@ EDGE_SELECTION_TOLERANCE_MM = 1e-5
 
 
 @dataclass(frozen=True)
-class TrunkBlockerSpec:
-    """Approved fixed blocker geometry with one configurable static pose."""
+class AdjustableStopSpec:
+    """Approved adjustable-stop geometry with one configurable static pose."""
 
     extension_mm: float = 24.0
     released_illustration: bool = False
@@ -326,14 +326,14 @@ class TrunkBlockerSpec:
             or not 0 <= self.extension_mm <= DIMENSIONS.extension
         ):
             raise ValueError(
-                f"trunk-blocker extension must be within 0..{DIMENSIONS.extension:g} mm"
+                f"adjustable-stop extension must be within 0..{DIMENSIONS.extension:g} mm"
             )
         if not isinstance(self.released_illustration, bool):
             raise ValueError("released illustration must be a boolean")
 
 
 @dataclass(frozen=True)
-class TrunkBlockerProngLockClipDimensions:
+class AdjustableStopProngLockClipDimensions:
     side_clearance: float = 0.05
     leg_lateral_clearance: float = 0.0
     top_clearance: float = 0.05
@@ -358,7 +358,7 @@ class TrunkBlockerProngLockClipDimensions:
     loop_bottom_band: float = 7.0
 
 
-PRONG_LOCK_CLIP_DIMENSIONS = TrunkBlockerProngLockClipDimensions()
+PRONG_LOCK_CLIP_DIMENSIONS = AdjustableStopProngLockClipDimensions()
 
 
 def _block(x0: float, x1: float, y0: float, y1: float, z0: float, z1: float) -> Part:
@@ -581,7 +581,7 @@ def _round_finger(
     )
 
 
-def _anchor_profile(d: TrunkBlockerDimensions) -> Face:
+def _anchor_profile(d: AdjustableStopDimensions) -> Face:
     c, r, q = d.anchor_lobe_centre, d.anchor_lobe_radius, d.anchor_notch_radius
     diagonal = (r + q) * sqrt(2)
     arcs = (
@@ -608,7 +608,7 @@ def _anchor_profile(d: TrunkBlockerDimensions) -> Face:
     return Face(Wire(edges))
 
 
-def _analytic_anchor(d: TrunkBlockerDimensions, centre_y: float | None = None) -> Part:
+def _analytic_anchor(d: AdjustableStopDimensions, centre_y: float | None = None) -> Part:
     centre_y = d.anchor_y if centre_y is None else centre_y
     anchor = extrude(_anchor_profile(d), amount=d.anchor_depth + 0.5, dir=(0, 0, 1))
     anchor = anchor.moved(Location((0, centre_y, -d.anchor_depth)))
@@ -619,7 +619,7 @@ def _analytic_anchor(d: TrunkBlockerDimensions, centre_y: float | None = None) -
 def _rack_tooth(
     side: int,
     station: float,
-    d: TrunkBlockerDimensions = DIMENSIONS,
+    d: AdjustableStopDimensions = DIMENSIONS,
 ) -> Part:
     root = side * d.rack_root
     tip = side * d.rack_tip
@@ -640,7 +640,7 @@ def _moving_tooth(
     side: int,
     station: float,
     shift: float,
-    d: TrunkBlockerDimensions = DIMENSIONS,
+    d: AdjustableStopDimensions = DIMENSIONS,
 ) -> Part:
     root = side * d.moving_tooth_root - shift
     tip = side * d.moving_tip - shift
@@ -659,7 +659,7 @@ def _moving_tooth(
 
 def _guide_wall(
     side: int,
-    d: TrunkBlockerDimensions = DIMENSIONS,
+    d: AdjustableStopDimensions = DIMENSIONS,
 ) -> Part:
     x0, x1 = sorted((side * d.guide_inner, side * d.guide_outer))
     return _block(
@@ -675,7 +675,7 @@ def _guide_wall(
 @lru_cache(maxsize=4)
 def _outer_guide_pad(
     side: int,
-    d: TrunkBlockerDimensions = DIMENSIONS,
+    d: AdjustableStopDimensions = DIMENSIONS,
 ) -> Part:
     x0, x1 = sorted((side * d.outer_guide_inner, side * d.outer_guide_tool_outer))
     pad = _block(
@@ -701,7 +701,7 @@ def _outer_guide_pad(
 
 def _outer_guide_floor_relief(
     side: int,
-    d: TrunkBlockerDimensions = DIMENSIONS,
+    d: AdjustableStopDimensions = DIMENSIONS,
 ) -> Part:
     radius = DETAIL_EDGE_RADIUS_MM
     inner = side * d.outer_guide_inner
@@ -751,7 +751,7 @@ def _unify_same_domain(part: Part) -> Part:
 
 def _mark_outer_guide_tangency(
     part: Part,
-    d: TrunkBlockerDimensions = DIMENSIONS,
+    d: AdjustableStopDimensions = DIMENSIONS,
 ) -> None:
     edge_faces = IndexedDataMap_TopoDS_Shape_List_TopoDS_Shape_TopTools_ShapeMapHasher()
     TopExp.MapShapesAndAncestors_s(
@@ -792,7 +792,7 @@ def _mark_outer_guide_tangency(
 
 
 def _make_base(
-    d: TrunkBlockerDimensions = DIMENSIONS,
+    d: AdjustableStopDimensions = DIMENSIONS,
     *,
     round_edges: bool = True,
     unify_same_domain: bool = True,
@@ -910,7 +910,7 @@ def _make_base(
     return base
 
 
-def _finger_displacement(y: float, d: TrunkBlockerDimensions) -> float:
+def _finger_displacement(y: float, d: AdjustableStopDimensions) -> float:
     t = max(
         0.0,
         min(
@@ -921,7 +921,7 @@ def _finger_displacement(y: float, d: TrunkBlockerDimensions) -> float:
     return d.release_stroke * t * t * (3 - 2 * t)
 
 
-def _outer_finger(side: int, released: bool, d: TrunkBlockerDimensions) -> Part:
+def _outer_finger(side: int, released: bool, d: AdjustableStopDimensions) -> Part:
     centre = side * d.outer_centre
     if not released:
         return _block(
@@ -971,7 +971,7 @@ def _outer_finger(side: int, released: bool, d: TrunkBlockerDimensions) -> Part:
 
 def _squeeze_pad(
     centre_x: float,
-    d: TrunkBlockerDimensions = DIMENSIONS,
+    d: AdjustableStopDimensions = DIMENSIONS,
     *,
     width: float | None = None,
     round_edges: bool = True,
@@ -1000,7 +1000,7 @@ def _squeeze_pad(
 
 def _make_pusher_body(
     released: bool,
-    d: TrunkBlockerDimensions = DIMENSIONS,
+    d: AdjustableStopDimensions = DIMENSIONS,
     *,
     round_edges: bool = True,
 ) -> Part:
@@ -1153,8 +1153,8 @@ def _make_pusher_body(
 
 
 def _make_pusher(
-    spec: TrunkBlockerSpec,
-    d: TrunkBlockerDimensions = DIMENSIONS,
+    spec: AdjustableStopSpec,
+    d: AdjustableStopDimensions = DIMENSIONS,
     *,
     round_edges: bool = True,
 ) -> Part:
@@ -1178,7 +1178,7 @@ def _make_pusher(
 
 
 def _make_keeper(
-    d: TrunkBlockerDimensions = DIMENSIONS,
+    d: AdjustableStopDimensions = DIMENSIONS,
     *,
     round_edges: bool = True,
     fill_channels: bool = True,
@@ -1252,13 +1252,13 @@ def _make_keeper(
     return keeper
 
 
-def make_trunk_blocker_parts(
-    spec: TrunkBlockerSpec = TrunkBlockerSpec(),
+def make_adjustable_stop_parts(
+    spec: AdjustableStopSpec = AdjustableStopSpec(),
 ) -> tuple[Part, Part, Part]:
     """Build the three complete native-BREP manufactured parts."""
 
-    if not isinstance(spec, TrunkBlockerSpec):
-        raise ValueError("spec must be a TrunkBlockerSpec")
+    if not isinstance(spec, AdjustableStopSpec):
+        raise ValueError("spec must be an AdjustableStopSpec")
     base = _make_base()
     pusher = _make_pusher(spec)
     keeper = _make_keeper()
@@ -1268,18 +1268,18 @@ def make_trunk_blocker_parts(
     return base, pusher, keeper
 
 
-def make_trunk_blocker_prong_lock_clip(
-    spec: TrunkBlockerSpec = TrunkBlockerSpec(),
-    clip_dimensions: TrunkBlockerProngLockClipDimensions = PRONG_LOCK_CLIP_DIMENSIONS,
+def make_adjustable_stop_prong_lock_clip(
+    spec: AdjustableStopSpec = AdjustableStopSpec(),
+    clip_dimensions: AdjustableStopProngLockClipDimensions = PRONG_LOCK_CLIP_DIMENSIONS,
 ) -> Part:
     """Build the removable three-tab lock clip; defaults are undimpled v10b #1."""
 
-    if not isinstance(spec, TrunkBlockerSpec):
-        raise ValueError("spec must be a TrunkBlockerSpec")
+    if not isinstance(spec, AdjustableStopSpec):
+        raise ValueError("spec must be an AdjustableStopSpec")
     if spec.released_illustration:
         raise ValueError("the prong lock clip seats only on an unsqueezed moving wall")
-    if not isinstance(clip_dimensions, TrunkBlockerProngLockClipDimensions):
-        raise ValueError("clip_dimensions must be a TrunkBlockerProngLockClipDimensions")
+    if not isinstance(clip_dimensions, AdjustableStopProngLockClipDimensions):
+        raise ValueError("clip_dimensions must be an AdjustableStopProngLockClipDimensions")
 
     d = DIMENSIONS
     c = clip_dimensions

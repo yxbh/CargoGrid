@@ -1,4 +1,4 @@
-"""Native CAD and print-project export for the three-part trunk blocker."""
+"""Native CAD and print-project export for the three-part adjustable stop."""
 
 import hashlib
 import json
@@ -40,6 +40,31 @@ from OCP.TopoDS import TopoDS
 
 from cargo_grid._version import __version__
 from cargo_grid.accessories import make_bidirectional_panel_connector
+from cargo_grid.adjustable_stop import (
+    BASE_ANCHOR_CENTRES_Y_MM,
+    CONNECTOR_CENTRES_ABOVE_PUSHER_FLOOR_MM,
+    DETAIL_EDGE_RADIUS_MM,
+    DIMENSIONS,
+    FREE_EDGE_RADIUS_MM,
+    MOVING_TOOTH_STATIONS_MM,
+    RACK_TOOTH_STATIONS_MM,
+    SCREW_AXES_MM,
+    AdjustableStopSpec,
+    _block,
+    _guide_wall,
+    _make_base,
+    _make_keeper,
+    _make_pusher,
+    _make_pusher_body,
+    _moving_tooth,
+    _outer_finger,
+    _outer_guide_pad,
+    _rack_tooth,
+    _squeeze_pad,
+    _unify_same_domain,
+    make_adjustable_stop_parts,
+    make_adjustable_stop_prong_lock_clip,
+)
 from cargo_grid.cli import H2D_PROFILES, H2DProfiles
 from cargo_grid.export import (
     BAMBU_PROCESS_DEFAULTS,
@@ -71,31 +96,6 @@ from cargo_grid.plates import (
 from cargo_grid.prepared import PreparedShape
 from cargo_grid.roof_support import OBJECT_AUTO_SUPPORT, RoofSupportSettings
 from cargo_grid.tiles import make_tile
-from cargo_grid.trunk_blocker import (
-    BASE_ANCHOR_CENTRES_Y_MM,
-    CONNECTOR_CENTRES_ABOVE_PUSHER_FLOOR_MM,
-    DETAIL_EDGE_RADIUS_MM,
-    DIMENSIONS,
-    FREE_EDGE_RADIUS_MM,
-    MOVING_TOOTH_STATIONS_MM,
-    RACK_TOOTH_STATIONS_MM,
-    SCREW_AXES_MM,
-    TrunkBlockerSpec,
-    _block,
-    _guide_wall,
-    _make_base,
-    _make_keeper,
-    _make_pusher,
-    _make_pusher_body,
-    _moving_tooth,
-    _outer_finger,
-    _outer_guide_pad,
-    _rack_tooth,
-    _squeeze_pad,
-    _unify_same_domain,
-    make_trunk_blocker_parts,
-    make_trunk_blocker_prong_lock_clip,
-)
 
 CORE_NAMESPACE = "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"
 RELATIONSHIPS_NAMESPACE = "http://schemas.openxmlformats.org/package/2006/relationships"
@@ -104,29 +104,29 @@ CORE = f"{{{CORE_NAMESPACE}}}"
 PART_NAMES = ("fixed_base", "moving_wall", "short_screwed_keeper")
 CONNECTOR_PROOF_TOLERANCE_MM = 1e-5
 VOLUME_TOLERANCE_MM3 = 1e-6
-TRUNK_BLOCKER_MODEL_CLEARANCE_MM = 4.0
-TRUNK_BLOCKER_SUPPORT_CLEARANCE_MM = (
-    TRUNK_BLOCKER_MODEL_CLEARANCE_MM + AUTO_SUPPORT_FOOT_ALLOWANCE_MM
+ADJUSTABLE_STOP_MODEL_CLEARANCE_MM = 4.0
+ADJUSTABLE_STOP_SUPPORT_CLEARANCE_MM = (
+    ADJUSTABLE_STOP_MODEL_CLEARANCE_MM + AUTO_SUPPORT_FOOT_ALLOWANCE_MM
 )
-TRUNK_BLOCKER_PLATE_NAME = "TRUNK BLOCKER - PETG WITH PLA INTERFACE"
-_TRUNK_BLOCKER_SUPPORT_OBJECTS = {"fixed_base", "moving_wall"}
+ADJUSTABLE_STOP_PLATE_NAME = "ADJUSTABLE STOP - PETG WITH PLA INTERFACE"
+_ADJUSTABLE_STOP_SUPPORT_OBJECTS = {"fixed_base", "moving_wall"}
 
 
-def _trunk_blocker_h2d_profile(nozzle_diameter_mm: float) -> H2DProfiles:
+def _adjustable_stop_h2d_profile(nozzle_diameter_mm: float) -> H2DProfiles:
     profile = H2D_PROFILES.get(nozzle_diameter_mm)
     if profile is None:
         choices = ", ".join(f"{nozzle:g}" for nozzle in H2D_PROFILES)
-        raise ValueError(f"trunk-blocker H2D nozzle must be one of: {choices} mm")
+        raise ValueError(f"adjustable-stop H2D nozzle must be one of: {choices} mm")
     return profile
 
 
-def trunk_blocker_h2d_settings(
+def adjustable_stop_h2d_settings(
     nozzle_diameter_mm: float = 0.8,
     *,
     dual_material: bool,
 ) -> BambuSettings:
-    """Use one of the official H2D profile pairs for a blocker print project."""
-    profile = _trunk_blocker_h2d_profile(nozzle_diameter_mm)
+    """Use one of the official H2D profile pairs for an adjustable-stop project."""
+    profile = _adjustable_stop_h2d_profile(nozzle_diameter_mm)
     materials = (Material(profile.petg, "PETG", "#637B70"),)
     if dual_material:
         materials += (Material(profile.pla, "PLA", "#DDDDDD"),)
@@ -142,36 +142,36 @@ def trunk_blocker_h2d_settings(
     )
 
 
-def trunk_blocker_print_job(
+def adjustable_stop_print_job(
     nozzle_diameter_mm: float = 0.8,
-    spec: TrunkBlockerSpec = TrunkBlockerSpec(),
+    spec: AdjustableStopSpec = AdjustableStopSpec(),
 ) -> Job:
-    """Pack one complete blocker and its accepted clip on one supported H2D plate."""
-    profile = _trunk_blocker_h2d_profile(nozzle_diameter_mm)
-    base, pusher, keeper = make_trunk_blocker_parts(spec)
+    """Pack one adjustable stop and its accepted clip on one supported H2D plate."""
+    profile = _adjustable_stop_h2d_profile(nozzle_diameter_mm)
+    base, pusher, keeper = make_adjustable_stop_parts(spec)
     designs = [
         Design(
             "fixed_base",
             base,
-            {"print_preparation": "trunk-blocker-complete-kit"},
+            {"print_preparation": "adjustable-stop-complete-kit"},
             display_name="Fixed base - connectors down",
         ),
         Design(
             "moving_wall",
             pusher,
-            {"print_preparation": "trunk-blocker-complete-kit"},
+            {"print_preparation": "adjustable-stop-complete-kit"},
             display_name="Moving wall - fingers down",
         ),
         Design(
             "short_screwed_keeper",
             keeper,
-            {"print_preparation": "trunk-blocker-complete-kit"},
+            {"print_preparation": "adjustable-stop-complete-kit"},
             display_name="Short keeper - countersinks up",
         ),
         Design(
             "prong_lock_clip",
-            make_trunk_blocker_prong_lock_clip(spec),
-            {"print_preparation": "trunk-blocker-complete-kit"},
+            make_adjustable_stop_prong_lock_clip(spec),
+            {"print_preparation": "adjustable-stop-complete-kit"},
             display_name="Accepted v10b #1 clip - side lying",
             recommended_print_rotation_x=90,
             apply_orientation_to_bambu=True,
@@ -198,28 +198,28 @@ def trunk_blocker_print_job(
     placements = pack_projected_footprints(
         footprints,
         bounds,
-        gap=TRUNK_BLOCKER_SUPPORT_CLEARANCE_MM,
-        search_gap=(TRUNK_BLOCKER_SUPPORT_CLEARANCE_MM - H2D_FOOTPRINT_SEARCH_ALLOWANCE_MM),
+        gap=ADJUSTABLE_STOP_SUPPORT_CLEARANCE_MM,
+        search_gap=(ADJUSTABLE_STOP_SUPPORT_CLEARANCE_MM - H2D_FOOTPRINT_SEARCH_ALLOWANCE_MM),
     )
     if {placement.plate for placement in placements} != {0}:
-        raise ValueError("complete trunk-blocker kit must fit one H2D plate")
+        raise ValueError("complete adjustable-stop kit must fit one H2D plate")
     if (
         minimum_projected_clearance(footprints, placements, plate=0)
-        < TRUNK_BLOCKER_SUPPORT_CLEARANCE_MM - 1e-6
+        < ADJUSTABLE_STOP_SUPPORT_CLEARANCE_MM - 1e-6
     ):
-        raise ValueError("complete trunk-blocker kit lost its support-foot clearance")
+        raise ValueError("complete adjustable-stop kit lost its support-foot clearance")
 
-    return prepare_trunk_blocker_print_job(
+    return prepare_adjustable_stop_print_job(
         Job(
             designs,
             build,
-            "trunk-blocker",
-            part_gap=TRUNK_BLOCKER_SUPPORT_CLEARANCE_MM,
+            "adjustable-stop",
+            part_gap=ADJUSTABLE_STOP_SUPPORT_CLEARANCE_MM,
             print_placements=placements,
-            plate_names={0: TRUNK_BLOCKER_PLATE_NAME},
+            plate_names={0: ADJUSTABLE_STOP_PLATE_NAME},
             projected_footprints=footprints,
             projected_footprint_clearances={
-                0: TRUNK_BLOCKER_SUPPORT_CLEARANCE_MM,
+                0: ADJUSTABLE_STOP_SUPPORT_CLEARANCE_MM,
             },
             plate_builds={0: build},
             manifest_metadata={
@@ -240,12 +240,14 @@ def trunk_blocker_print_job(
                         "over the centre squeeze tab."
                     ),
                     "use": (
-                        "Bags remain supported by the mat. The blocker has no load or crash rating."
+                        "Bags remain supported by the mat. The stop has no load or crash rating."
                     ),
                 },
                 "physical_evidence": {
                     "profile": ("H2D 0.8 mm nozzle, 0.32 mm Balanced Strength, Bambu PETG Basic"),
-                    "blocker": "v9c base, moving wall and keeper were physically test-fitted.",
+                    "adjustable_stop": (
+                        "v9c base, moving wall and keeper were physically test-fitted."
+                    ),
                     "clip": (
                         "The accepted v10b #1 0.00 mm-per-side collar clip held without wobble "
                         "and was firm to remove."
@@ -262,7 +264,7 @@ def trunk_blocker_print_job(
     )
 
 
-def _apply_trunk_blocker_support_settings(path: Path) -> None:
+def _apply_adjustable_stop_support_settings(path: Path) -> None:
     with ZipFile(path) as source:
         entries = {name: source.read(name) for name in source.namelist()}
     settings = json.loads(entries["Metadata/project_settings.config"])
@@ -296,21 +298,21 @@ def _apply_trunk_blocker_support_settings(path: Path) -> None:
             None,
         )
         if design is None:
-            raise ValueError(f"unknown blocker print object: {name}")
+            raise ValueError(f"unknown adjustable-stop print object: {name}")
         configured[design] = set(metadata)
-        if design in _TRUNK_BLOCKER_SUPPORT_OBJECTS:
+        if design in _ADJUSTABLE_STOP_SUPPORT_OBJECTS:
             for key, value in OBJECT_AUTO_SUPPORT.items():
                 child = metadata.get(key)
                 if child is None:
                     child = ET.SubElement(item, "metadata", key=key)
                 child.set("value", value)
     expected = {
-        *_TRUNK_BLOCKER_SUPPORT_OBJECTS,
+        *_ADJUSTABLE_STOP_SUPPORT_OBJECTS,
         "short_screwed_keeper",
         "prong_lock_clip",
     }
     if set(configured) != expected:
-        raise ValueError("blocker project does not contain its four expected objects")
+        raise ValueError("adjustable-stop project does not contain its four expected objects")
     for design in ("short_screwed_keeper", "prong_lock_clip"):
         if configured[design] & OBJECT_AUTO_SUPPORT.keys():
             raise ValueError(f"{design} must not have an object support override")
@@ -327,64 +329,64 @@ def _apply_trunk_blocker_support_settings(path: Path) -> None:
     patched.replace(path)
 
 
-def write_trunk_blocker_print_project(
+def write_adjustable_stop_print_project(
     path: Path,
     nozzle_diameter_mm: float = 0.8,
-    spec: TrunkBlockerSpec = TrunkBlockerSpec(),
+    spec: AdjustableStopSpec = AdjustableStopSpec(),
 ) -> dict:
-    """Write one complete PETG/PLA H2D blocker project without partial output."""
+    """Write one complete PETG/PLA H2D adjustable-stop project without partial output."""
     if path.exists():
         raise ValueError(f"output file already exists: {path}; choose a new path")
     path.parent.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(dir=path.parent, prefix=f".{path.stem}-") as temporary:
         target = Path(temporary) / path.name
         result = write_3mf(
-            trunk_blocker_print_job(nozzle_diameter_mm, spec),
+            adjustable_stop_print_job(nozzle_diameter_mm, spec),
             target,
-            bambu=trunk_blocker_h2d_settings(
+            bambu=adjustable_stop_h2d_settings(
                 nozzle_diameter_mm,
                 dual_material=True,
             ),
         )
-        _apply_trunk_blocker_support_settings(target)
+        _apply_adjustable_stop_support_settings(target)
         with ZipFile(target) as archive:
             if archive.testzip() is not None:
-                raise ValueError("trunk-blocker print project ZIP failed integrity check")
+                raise ValueError("adjustable-stop print project ZIP failed integrity check")
         target.replace(path)
     return result
 
 
-def export_trunk_blocker_print_project(
+def export_adjustable_stop_print_project(
     output: Path,
     nozzle_diameter_mm: float = 0.8,
-    spec: TrunkBlockerSpec = TrunkBlockerSpec(),
+    spec: AdjustableStopSpec = AdjustableStopSpec(),
     *,
     stl: bool = True,
 ) -> Path:
-    """Export the complete H2D blocker kit through the ordinary job manifest path."""
+    """Export the complete H2D adjustable-stop kit through the ordinary job manifest path."""
     manifest = export_job(
-        trunk_blocker_print_job(nozzle_diameter_mm, spec),
+        adjustable_stop_print_job(nozzle_diameter_mm, spec),
         output,
         stl=stl,
-        bambu=trunk_blocker_h2d_settings(nozzle_diameter_mm, dual_material=True),
+        bambu=adjustable_stop_h2d_settings(nozzle_diameter_mm, dual_material=True),
     )
-    _apply_trunk_blocker_support_settings(output / "job.3mf")
+    _apply_adjustable_stop_support_settings(output / "job.3mf")
     return manifest
 
 
-def prepare_trunk_blocker_print_job(
+def prepare_adjustable_stop_print_job(
     job: Job,
     *,
     material_counts_by_plate: dict[int, int],
     nozzle_diameter_mm: float = 0.8,
 ) -> Job:
     """Reserve Bambu's default H2D tower only on plates using multiple materials."""
-    profile = _trunk_blocker_h2d_profile(nozzle_diameter_mm)
+    profile = _adjustable_stop_h2d_profile(nozzle_diameter_mm)
     if job.print_placements is None:
-        raise ValueError("trunk-blocker print jobs need explicit placements")
+        raise ValueError("adjustable-stop print jobs need explicit placements")
     plates = {placement.plate for placement in job.print_placements}
     if set(material_counts_by_plate) != plates:
-        raise ValueError("material counts must cover exactly the placed trunk-blocker plates")
+        raise ValueError("material counts must cover exactly the placed adjustable-stop plates")
     if any(
         isinstance(count, bool) or not isinstance(count, int) or count < 1
         for count in material_counts_by_plate.values()
@@ -396,7 +398,7 @@ def prepare_trunk_blocker_print_job(
         or job.prime_tower_reaches
         or job.prime_tower_clearances
     ):
-        raise ValueError("trunk-blocker print jobs must not supply a prime tower")
+        raise ValueError("adjustable-stop print jobs must not supply a prime tower")
 
     tower_plates = {plate for plate, count in material_counts_by_plate.items() if count > 1}
     if not tower_plates:
@@ -408,7 +410,7 @@ def prepare_trunk_blocker_print_job(
     for plate in sorted(tower_plates):
         build = job.plate_builds.get(plate, job.build)
         if build != h2d_common_build():
-            raise ValueError("multi-material blocker plates require the H2D common build")
+            raise ValueError("multi-material adjustable-stop plates require the H2D common build")
         height = max(
             design.bambu_size[2]
             for design, placement in zip(job.designs, job.print_placements, strict=True)
@@ -555,7 +557,9 @@ def _part_intersections(parts: tuple[Part, Part, Part]) -> list[dict]:
         for second in range(first + 1, len(parts)):
             volume = _shape_volume(parts[first].intersect(parts[second]))
             if volume >= VOLUME_TOLERANCE_MM3:
-                raise ValueError("manufactured blocker parts intersect in the requested pose")
+                raise ValueError(
+                    "manufactured adjustable-stop parts intersect in the requested pose"
+                )
             result.append(
                 {
                     "parts": [PART_NAMES[first], PART_NAMES[second]],
@@ -597,7 +601,7 @@ def _edge_continuity_counts(shape) -> dict[str, int]:
     return dict(sorted(counts.items()))
 
 
-def _finger_section_areas(pusher: Part, spec: TrunkBlockerSpec) -> dict:
+def _finger_section_areas(pusher: Part, spec: AdjustableStopSpec) -> dict:
     section_y = 50.0 + DIMENSIONS.pusher_y_offset - spec.extension_mm
     cross_section = section(
         pusher,
@@ -849,7 +853,7 @@ def _carrier_stop_proofs(base: Part, keeper: Part, pitch_sweep: list[dict]) -> d
             release_stroke=clearance_deflection,
         )
         pusher = _make_pusher(
-            TrunkBlockerSpec(
+            AdjustableStopSpec(
                 DIMENSIONS.extension,
                 released_illustration=clearance_deflection > 0,
             ),
@@ -883,7 +887,9 @@ def _carrier_stop_proofs(base: Part, keeper: Part, pitch_sweep: list[dict]) -> d
     if maximum_required_deflection >= DIMENSIONS.release_stroke:
         raise ValueError("controlled overtravel consumes the full release stroke")
 
-    released_end = _make_pusher(TrunkBlockerSpec(DIMENSIONS.extension, released_illustration=True))
+    released_end = _make_pusher(
+        AdjustableStopSpec(DIMENSIONS.extension, released_illustration=True)
+    )
     released_path = []
     for index in range(overtravel_sample_count + 1):
         overtravel = index / 10
@@ -959,7 +965,7 @@ def _carrier_stop_proofs(base: Part, keeper: Part, pitch_sweep: list[dict]) -> d
     }
 
 
-def _ratchet_proofs(parts: tuple[Part, Part, Part], spec: TrunkBlockerSpec) -> dict:
+def _ratchet_proofs(parts: tuple[Part, Part, Part], spec: AdjustableStopSpec) -> dict:
     base, pusher, keeper = parts
     base_ramps = _ratchet_ramp_faces(base, moving=False)
     moving_ramps = _ratchet_ramp_faces(pusher, moving=True)
@@ -972,7 +978,9 @@ def _ratchet_proofs(parts: tuple[Part, Part, Part], spec: TrunkBlockerSpec) -> d
         raise ValueError("rack and moving ramp faces no longer share one angle")
 
     contact_pusher = (
-        _make_pusher(TrunkBlockerSpec(spec.extension_mm)) if spec.released_illustration else pusher
+        _make_pusher(AdjustableStopSpec(spec.extension_mm))
+        if spec.released_illustration
+        else pusher
     )
     base_locks = _ratchet_lock_faces(base, moving=False)
     moving_locks = _ratchet_lock_faces(contact_pusher, moving=True)
@@ -1568,7 +1576,7 @@ def _guide_proofs(parts: tuple[Part, Part, Part]) -> dict:
     }
 
 
-def _pusher_bed_proofs(parts: tuple[Part, Part, Part], spec: TrunkBlockerSpec) -> dict:
+def _pusher_bed_proofs(parts: tuple[Part, Part, Part], spec: AdjustableStopSpec) -> dict:
     _, pusher, _ = parts
     bed_z = DIMENSIONS.finger_bottom_z
     nearby_downward_faces = []
@@ -1639,7 +1647,7 @@ def _disassembly_proofs(parts: tuple[Part, Part, Part]) -> dict:
     for index in range(DIMENSIONS.positions):
         extension_mm = index * DIMENSIONS.pitch
         for released in (False, True):
-            pose = _make_pusher(TrunkBlockerSpec(extension_mm, released))
+            pose = _make_pusher(AdjustableStopSpec(extension_mm, released))
             base_overlap = _shape_volume(pose.intersect(base))
             keeper_overlap = _shape_volume(pose.intersect(keeper))
             if base_overlap >= VOLUME_TOLERANCE_MM3 or keeper_overlap >= VOLUME_TOLERANCE_MM3:
@@ -1653,7 +1661,7 @@ def _disassembly_proofs(parts: tuple[Part, Part, Part]) -> dict:
                 }
             )
 
-    released_end = _make_pusher(TrunkBlockerSpec(DIMENSIONS.extension, True))
+    released_end = _make_pusher(AdjustableStopSpec(DIMENSIONS.extension, True))
     pad_to_keeper_y_gap = (
         DIMENSIONS.pad_start
         + DIMENSIONS.pusher_y_offset
@@ -1737,7 +1745,7 @@ def _disassembly_proofs(parts: tuple[Part, Part, Part]) -> dict:
 
     short_pad_dimensions = replace(DIMENSIONS, pad_height=16.0)
     old_base = _make_base(short_pad_dimensions)
-    old_pusher = _make_pusher(TrunkBlockerSpec(), short_pad_dimensions)
+    old_pusher = _make_pusher(AdjustableStopSpec(), short_pad_dimensions)
     old_keeper = _make_keeper(short_pad_dimensions, fill_channels=False)
     base_difference = _symmetric_difference_volume(base, old_base)
     keeper_removed_volume = _shape_volume(old_keeper.cut(keeper))
@@ -1757,11 +1765,13 @@ def _disassembly_proofs(parts: tuple[Part, Part, Part]) -> dict:
             _block(
                 centre_x - width / 2,
                 centre_x + width / 2,
-                DIMENSIONS.pad_start + DIMENSIONS.pusher_y_offset - TrunkBlockerSpec().extension_mm,
+                DIMENSIONS.pad_start
+                + DIMENSIONS.pusher_y_offset
+                - AdjustableStopSpec().extension_mm,
                 DIMENSIONS.pad_start
                 + DIMENSIONS.pad_length
                 + DIMENSIONS.pusher_y_offset
-                - TrunkBlockerSpec().extension_mm,
+                - AdjustableStopSpec().extension_mm,
                 DIMENSIONS.pusher_z + short_pad_dimensions.pad_height - DETAIL_EDGE_RADIUS_MM,
                 DIMENSIONS.pad_top + 0.1,
             )
@@ -1852,7 +1862,7 @@ def _disassembly_proofs(parts: tuple[Part, Part, Part]) -> dict:
 
 def _rounding_proofs(
     parts: tuple[Part, Part, Part],
-    spec: TrunkBlockerSpec,
+    spec: AdjustableStopSpec,
 ) -> dict:
     unrounded = (
         _make_base(round_edges=False),
@@ -2064,7 +2074,7 @@ def _placed_connector(height_mm: float, extension_mm: float) -> Part:
     )
 
 
-def _native_connector_proofs(pusher: Part, spec: TrunkBlockerSpec) -> tuple[list[dict], dict]:
+def _native_connector_proofs(pusher: Part, spec: AdjustableStopSpec) -> tuple[list[dict], dict]:
     body = _make_pusher_body(spec.released_illustration).moved(
         Location(
             (
@@ -2141,7 +2151,7 @@ def _checked_step_roundtrip(
         precision_mode = "least"
     restored_solids = list(restored.solids())
     if not restored.is_valid or len(restored_solids) != len(parts):
-        raise ValueError("complete blocker STEP must round-trip as three valid solids")
+        raise ValueError("complete adjustable-stop STEP must round-trip as three valid solids")
 
     source_bounds = [np.array(_bounds(part)) for part in parts]
     restored_bounds = [np.array(_bounds(part)) for part in restored_solids]
@@ -2209,7 +2219,7 @@ def _write_complete_3mf(
                 '<?xml version="1.0" encoding="utf-8"?>'
                 f'<model xmlns="{CORE_NAMESPACE}" unit="millimeter">'
                 f'<metadata name="Application">{escape(f"Cargo-Grid {__version__}")}</metadata>'
-                '<metadata name="Designer">Cargo-Grid native-BREP trunk blocker</metadata>'
+                '<metadata name="Designer">Cargo-Grid native-BREP adjustable stop</metadata>'
                 f'<metadata name="CargoGridVersion">{escape(__version__)}</metadata>'
                 '<metadata name="CargoGridXSource">'
                 "cargo_grid.accessories.make_bidirectional_panel_connector</metadata>"
@@ -2255,9 +2265,9 @@ def _read_complete_3mf(path: Path) -> dict[str, tuple[np.ndarray, np.ndarray]]:
         with ZipFile(path) as archive:
             root = ET.fromstring(archive.read("3D/3dmodel.model"))
     except (BadZipFile, KeyError, ET.ParseError) as error:
-        raise ValueError("generated trunk-blocker 3MF is unreadable") from error
+        raise ValueError("generated adjustable-stop 3MF is unreadable") from error
     if root.get("unit") != "millimeter":
-        raise ValueError("generated trunk-blocker 3MF lost millimeter units")
+        raise ValueError("generated adjustable-stop 3MF lost millimeter units")
     resources = {int(obj.get("id")): obj for obj in root.findall(f"{CORE}resources/{CORE}object")}
     result = {}
     for item in root.findall(f"{CORE}build/{CORE}item"):
@@ -2279,30 +2289,32 @@ def _read_complete_3mf(path: Path) -> dict[str, tuple[np.ndarray, np.ndarray]]:
         )
         result[name] = (vertices, faces)
     if set(result) != set(PART_NAMES):
-        raise ValueError("generated trunk-blocker 3MF must contain the three manufactured parts")
+        raise ValueError("generated adjustable-stop 3MF must contain the three manufactured parts")
     return result
 
 
-def export_trunk_blocker(
+def export_adjustable_stop(
     output: Path,
-    spec: TrunkBlockerSpec = TrunkBlockerSpec(),
+    spec: AdjustableStopSpec = AdjustableStopSpec(),
 ) -> Path:
-    """Export the complete native-CAD blocker and its checked mesh derivatives."""
+    """Export the complete native-CAD adjustable stop and its checked mesh derivatives."""
 
-    if not isinstance(spec, TrunkBlockerSpec):
-        raise ValueError("spec must be a TrunkBlockerSpec")
+    if not isinstance(spec, AdjustableStopSpec):
+        raise ValueError("spec must be an AdjustableStopSpec")
     output = Path(output)
     if output.exists() and (not output.is_dir() or any(output.iterdir())):
         raise ValueError(f"output directory is not empty: {output}; choose a new job directory")
 
-    parts = make_trunk_blocker_parts(spec)
+    parts = make_adjustable_stop_parts(spec)
     prepared_parts = tuple(PreparedShape(part) for part in parts)
     brep_facts = {name: _shape_facts(part) for name, part in zip(PART_NAMES, parts)}
     if not all(
         facts["valid"] and facts["solids"] == 1 and facts["volume_mm3"] > 0
         for facts in brep_facts.values()
     ):
-        raise ValueError("each manufactured blocker part must be one valid positive-volume solid")
+        raise ValueError(
+            "each manufactured adjustable-stop part must be one valid positive-volume solid"
+        )
     intersections = _part_intersections(parts)
     connector_proofs, protected_proof = _native_connector_proofs(parts[1], spec)
     base_anchor_proofs = _base_anchor_proofs(parts[0])
@@ -2313,7 +2325,7 @@ def export_trunk_blocker(
     disassembly_proofs = _disassembly_proofs(parts)
 
     output.mkdir(parents=True, exist_ok=True)
-    step_path = output / "trunk_blocker.step"
+    step_path = output / "adjustable_stop.step"
     step_facts, step_precision_mode = _checked_step_roundtrip(parts, step_path)
     meshes = []
     mesh_facts = {}
@@ -2328,7 +2340,7 @@ def export_trunk_blocker(
         path = output / f"{name}.stl"
         write_stl(path, vertices, faces)
         stl_paths[name] = path
-    package = output / "trunk_blocker.3mf"
+    package = output / "adjustable_stop.3mf"
     _write_complete_3mf(package, meshes)
     roundtrip = _read_complete_3mf(package)
     roundtrip_facts = {
@@ -2376,7 +2388,7 @@ def export_trunk_blocker(
     manifest = {
         "schema_version": 1,
         "generator": {"name": "cargo-grid", "version": __version__},
-        "kind": "trunk-blocker",
+        "kind": "adjustable-stop",
         "design_mode": {
             "workflow": "native Cargo-Grid BREP",
             "released_static_illustration": spec.released_illustration,
@@ -2494,7 +2506,7 @@ def export_trunk_blocker(
             ),
             "upright_tile": (
                 "The original 66 x 126 x 13 mm two-opening tile remains a separate accessory "
-                "and is not included in blocker output."
+                "and is not included in adjustable-stop output."
             ),
         },
         "limitations": [

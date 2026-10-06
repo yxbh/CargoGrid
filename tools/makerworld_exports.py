@@ -3,7 +3,7 @@
 Each variant is one ordinary ``cargo-grid`` command for every nozzle in
 ``cargo_grid.cli.H2D_PROFILES``: the H2D catalogue and the Zeekr 7X expansion set, with and
 without the 1.92 mm solid bottom and with auto roof support (PETG and a PLA interface), and
-the pull-handle set in PETG only, plus the trunk-blocker kit with PETG and a PLA support
+the pull-handle set in PETG only, plus the adjustable-stop kit with PETG and a PLA support
 interface. The handles have no tile-edge roofs or floor, and the strap-bar handle already
 carries its own object support. Every project is generated in a temporary folder first; the
 output folder only receives ``<name>.3mf`` and ``<name>.manifest.json`` after every variant
@@ -21,7 +21,7 @@ shows as a warning on the plate being previewed.
 ``--set NAME`` builds only that set, for every nozzle; repeat it for more than one set.
 
     uv run python tools/makerworld_exports.py --output FOLDER [--replace] [--jobs N]
-        [--set Full-Catalogue|Zeekr-7X-Expansion-Set|Pull-Handle-Set|Trunk-Blocker ...]
+        [--set Full-Catalogue|Zeekr-7X-Expansion-Set|Pull-Handle-Set|Adjustable-Stop ...]
         [--bambu-studio /Applications/BambuStudio.app/Contents/MacOS/BambuStudio]
 """
 
@@ -44,8 +44,8 @@ PLA_COLOUR = "#0A2989"
 SOLID_BOTTOM_MM = 1.92
 SETS = ((("catalogue",), "Full-Catalogue"), (("extras", "zeekr-7x"), "Zeekr-7X-Expansion-Set"))
 HANDLE_SET = (("extras", "pull-handle"), "Pull-Handle-Set")
-TRUNK_BLOCKER_SET = (("extras", "trunk-blocker"), "Trunk-Blocker")
-SET_NAMES = tuple(title for _, title in (*SETS, HANDLE_SET, TRUNK_BLOCKER_SET))
+ADJUSTABLE_STOP_SET = (("extras", "adjustable-stop"), "Adjustable-Stop")
+SET_NAMES = tuple(title for _, title in (*SETS, HANDLE_SET, ADJUSTABLE_STOP_SET))
 SUFFIXES = {"job.3mf": ".3mf", "manifest.json": ".manifest.json"}
 
 
@@ -123,7 +123,7 @@ def variants() -> list[Variant]:
                 title,
             )
         )
-        command, title = TRUNK_BLOCKER_SET
+        command, title = ADJUSTABLE_STOP_SET
         result.append(
             Variant(
                 f"CargoGrid_H2D_{title}_{nozzle:g}mm-Nozzle",
