@@ -314,11 +314,17 @@ def validate_roof_job(job: Job, settings: RoofSupportSettings, layer_height: flo
         if layer_height >= interface.body_height - interface.female_opening_height:
             raise ValueError("layer height is too large for the roof enforcer")
         found_female = True
-    if not found_female:
-        raise ValueError(
-            "this job has no retained original female pocket roofs to support; "
-            "add a tile with a west or south female edge, a female edge, corner or ramp"
-        )
+    if found_female:
+        return
+    # Auto mode also accepts accessories that already request object support on their own.
+    if settings.mode == "auto" and any(
+        d.bambu_object_settings == OBJECT_AUTO_SUPPORT for d in job.designs
+    ):
+        return
+    raise ValueError(
+        "this job has no retained original female pocket roofs to support; "
+        "add a tile with a west or south female edge, a female edge, corner or ramp"
+    )
 
 
 def roof_enforcers(

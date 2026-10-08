@@ -3,9 +3,9 @@
 Each variant is one ordinary ``cargo-grid`` command for every nozzle in
 ``cargo_grid.cli.H2D_PROFILES``: the H2D catalogue and the Zeekr 7X expansion set, with and
 without the 1.92 mm solid bottom and with auto roof support (PETG and a PLA interface), and
-the pull-handle set in PETG only, plus the adjustable-stop kit with PETG and a PLA support
-interface. The handles have no tile-edge roofs or floor, and the strap-bar handle already
-carries its own object support. Every project is generated in a temporary folder first; the
+the pull-handle set and the adjustable-stop kit with PETG and a PLA support interface. The
+handles have no tile-edge roofs or floor; auto support gives the strap-bar handle's own object
+support the PLA interface. Every project is generated in a temporary folder first; the
 output folder only receives ``<name>.3mf`` and ``<name>.manifest.json`` after every variant
 has succeeded. Names put underscores between their parts and hyphens inside a part, for
 example
@@ -110,39 +110,26 @@ def variants() -> list[Variant]:
                         title,
                     )
                 )
-        command, title = HANDLE_SET
-        result.append(
-            Variant(
-                f"CargoGrid_H2D_{title}_{nozzle:g}mm-Nozzle",
-                (
-                    *command,
-                    *_h2d_arguments(profiles),
-                    *_layer_arguments(nozzle, profiles),
-                    "--no-stl",
-                ),
-                title,
+        for command, title in (HANDLE_SET, ADJUSTABLE_STOP_SET):
+            result.append(
+                Variant(
+                    f"CargoGrid_H2D_{title}_{nozzle:g}mm-Nozzle",
+                    (
+                        *command,
+                        *_h2d_arguments(profiles),
+                        "--material",
+                        profiles.pla,
+                        "PLA",
+                        PLA_COLOUR,
+                        *_layer_arguments(nozzle, profiles),
+                        "--roof-support",
+                        "--roof-support-mode",
+                        "auto",
+                        "--no-stl",
+                    ),
+                    title,
+                )
             )
-        )
-        command, title = ADJUSTABLE_STOP_SET
-        result.append(
-            Variant(
-                f"CargoGrid_H2D_{title}_{nozzle:g}mm-Nozzle",
-                (
-                    *command,
-                    *_h2d_arguments(profiles),
-                    "--material",
-                    profiles.pla,
-                    "PLA",
-                    PLA_COLOUR,
-                    *_layer_arguments(nozzle, profiles),
-                    "--roof-support",
-                    "--roof-support-mode",
-                    "auto",
-                    "--no-stl",
-                ),
-                title,
-            )
-        )
     return result
 
 

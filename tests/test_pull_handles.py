@@ -11,7 +11,7 @@ from cargo_grid import pull_handle_set
 from cargo_grid.accessories import bambu_print_policy
 from cargo_grid.cli import main
 from cargo_grid.interfaces import x_profile
-from cargo_grid.jobs import Design
+from cargo_grid.jobs import Design, Job
 from cargo_grid.packing import h2d_common_build
 from cargo_grid.parameters import BuildVolume, Interface
 from cargo_grid.pull_handle_set import extras_job
@@ -33,7 +33,7 @@ from cargo_grid.pull_handles import (
     strap_bar_top_mm,
     width_cells,
 )
-from cargo_grid.roof_support import OBJECT_AUTO_SUPPORT
+from cargo_grid.roof_support import OBJECT_AUTO_SUPPORT, RoofSupportSettings, validate_roof_job
 
 H2D = BuildVolume(350, 320, 325)
 H2D_OPTIONS = [
@@ -401,40 +401,63 @@ def test_cli_pull_handle_extras_reject_options_that_do_not_apply(
     assert message in capsys.readouterr().err
 
 
-def test_cli_pull_handle_extras_reject_auto_roof_support(tmp_path, capsys):
-    with pytest.raises(SystemExit) as caught:
-        main(
-            [
-                "extras",
-                "pull-handle",
-                "--build-width-mm",
-                "256",
-                "--build-depth-mm",
-                "256",
-                "--build-height-mm",
-                "256",
-                "--bambu",
-                "--material",
-                "PETG",
-                "PETG",
-                "#637b70",
-                "--material",
-                "PLA",
-                "PLA",
-                "#ffffff",
-                "--nozzle-diameter-mm",
-                "0.4",
-                "--layer-height-mm",
-                "0.2",
-                "--roof-support",
-                "--roof-support-mode",
-                "auto",
-                "--output",
-                str(tmp_path / "set"),
-            ]
-        )
-    assert caught.value.code == 2
-    assert "no tile-edge pocket roofs" in capsys.readouterr().err
+H2D_PLA = ["--material", "Bambu PLA Basic @BBL H2D 0.8 nozzle", "PLA", "#0A2989"]
+AUTO_SUPPORT = ["--roof-support", "--roof-support-mode", "auto"]
+
+
+def test_cli_h2d_pull_handle_extras_give_the_strap_bar_support_a_pla_interface(tmp_path):
+    output = tmp_path / "handles"
+    arguments = ["extras", "pull-handle", *H2D_OPTIONS, *H2D_PLA, *AUTO_SUPPORT, "--no-stl"]
+    assert main([*arguments, "--output", str(output)]) == 0
+    manifest = json.loads((output / "manifest.json").read_text())
+    record = manifest["placement_policy"]["auto_roof_support"]
+    assert record["prime_tower_plates"] == [1]
+    assert record["prime_tower_groups"] == ["Pull handle - strap bar"]
+    supported = manifest["export"]["roof_support"]["supported_objects"]
+    assert [(entry["design"], entry["female_roofs"]) for entry in supported] == [(NAMES[True], [])]
+    assert manifest["export"]["roof_support"]["unsupported_designs"] == [NAMES[False]]
+    with ZipFile(output / "job.3mf") as archive:
+        project = json.loads(archive.read("Metadata/project_settings.config"))
+        objects = archive.read("Metadata/model_settings.config").decode()
+    assert project["filament_type"] == ["PETG", "PLA"]
+    assert project["enable_support"] == "0"
+    assert (project["support_filament"], project["support_interface_filament"]) == ("1", "2")
+    assert project["support_top_z_distance"] == "0"
+    assert objects.count('key="enable_support" value="1"') == 1
+    strap_bar = objects.split("Pull handle - 2x1 - no strap bar")[0]
+    assert 'key="enable_support" value="1"' in strap_bar
+
+
+def test_auto_support_reserves_a_tower_only_on_the_strap_bar_plate(monkeypatch):
+    monkeypatch.setattr(pull_handle_set, "pull_handle_design", _stand_in)
+    job = extras_job(
+        H2D,
+        placement_build=h2d_common_build(),
+        gap=4,
+        orient_for_bambu=True,
+        auto_roof_support=True,
+        layer_height_mm=0.24,
+    )
+    assert list(job.prime_tower_positions) == [0]
+    assert job.placement_policy["auto_roof_support"]["prime_tower_plates"] == [1]
+    assert job.placement_policy["plate_group_minimum_model_gap_mm"] == {
+        "Pull handle - strap bar": 8.0,
+        "Pull handle - no strap bar": 4,
+    }
+    plain = extras_job(H2D, placement_build=h2d_common_build(), gap=4, orient_for_bambu=True)
+    assert plain.prime_tower is None and not plain.prime_tower_positions
+    assert "auto_roof_support" not in plain.placement_policy
+
+
+def test_auto_support_accepts_accessory_support_but_not_a_job_with_nothing_to_support():
+    strap_bar = _stand_in(PullHandle(True))
+    no_bar = _stand_in(PullHandle(False))
+    auto = RoofSupportSettings(mode="auto")
+    validate_roof_job(Job([strap_bar, no_bar], H2D, "extras"), auto, 0.32)
+    with pytest.raises(ValueError, match="no retained original female pocket roofs"):
+        validate_roof_job(Job([no_bar], H2D, "extras"), auto, 0.32)
+    with pytest.raises(ValueError, match="no retained original female pocket roofs"):
+        validate_roof_job(Job([strap_bar, no_bar], H2D, "part"), RoofSupportSettings(), 0.32)
 
 
 def test_cli_h2d_pull_handle_extras_keep_the_standard_grid(tmp_path, capsys):

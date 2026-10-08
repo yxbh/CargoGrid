@@ -238,12 +238,7 @@ def _check_solid_bottom(args, interface: Interface) -> None:
         raise ValueError("stacking does not support --solid-bottom-thickness-mm yet")
 
 
-def _check_pull_handle_options(args, roof_support: RoofSupportSettings | None) -> None:
-    if roof_support is not None:
-        raise ValueError(
-            "the pull-handle set has no tile-edge pocket roofs, and the strap-bar handle "
-            "already has its own object support; omit --roof-support"
-        )
+def _check_pull_handle_options(args) -> None:
     if (
         getattr(args, "holes", None) is not None
         or getattr(args, "hole_diameter_mm", None) is not None
@@ -979,13 +974,15 @@ def main(argv: list[str] | None = None) -> int:
                     print(manifest)
                     return 0
                 if args.recipe == "pull-handle":
-                    _check_pull_handle_options(args, roof_support)
+                    _check_pull_handle_options(args)
                     job = pull_handle_extras_job(
                         build,
                         interface=interface,
                         placement_build=(h2d_common_build() if args.h2d_dual_safe else None),
                         gap=packing_gap,
                         orient_for_bambu=bool(bambu),
+                        auto_roof_support=bool(roof_support and roof_support.mode == "auto"),
+                        **({"layer_height_mm": bambu.layer_height} if bambu else {}),
                     )
                 else:
                     job = zeekr_7x.extras_job(
