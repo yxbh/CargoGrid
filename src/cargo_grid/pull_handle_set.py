@@ -146,8 +146,9 @@ def extras_job(
                 ),
                 "no_strap_bar": "lies on its front on the grip's top-front and seat edges",
                 "support": (
-                    "object-scoped normal Auto on both; with auto roof support it gets the PLA "
-                    "interface and each plate a prime tower"
+                    "normal Auto on both: an object override in PETG-only projects, or inherited "
+                    "global support with the PLA interface and a prime tower on each plate with "
+                    "auto roof support"
                 ),
                 "strap_bar_centre_of_mass_inside_rest_edges_mm": round(rest_margins[True], 2),
                 "no_strap_bar_centre_of_mass_inside_rest_edges_mm": round(rest_margins[False], 2),

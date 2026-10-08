@@ -398,7 +398,7 @@ H2D_PLA = ["--material", "Bambu PLA Basic @BBL H2D 0.8 nozzle", "PLA", "#0A2989"
 AUTO_SUPPORT = ["--roof-support", "--roof-support-mode", "auto"]
 
 
-def test_cli_h2d_pull_handle_extras_give_their_support_a_pla_interface(tmp_path):
+def test_cli_h2d_pull_handle_extras_inherit_global_support_with_a_pla_interface(tmp_path):
     output = tmp_path / "handles"
     arguments = ["extras", "pull-handle", *H2D_OPTIONS, *H2D_PLA, *AUTO_SUPPORT, "--no-stl"]
     assert main([*arguments, "--output", str(output)]) == 0
@@ -416,10 +416,12 @@ def test_cli_h2d_pull_handle_extras_give_their_support_a_pla_interface(tmp_path)
         project = json.loads(archive.read("Metadata/project_settings.config"))
         objects = archive.read("Metadata/model_settings.config").decode()
     assert project["filament_type"] == ["PETG", "PLA"]
-    assert project["enable_support"] == "0"
+    assert (project["enable_support"], project["support_type"]) == ("1", "normal(auto)")
     assert (project["support_filament"], project["support_interface_filament"]) == ("1", "2")
     assert project["support_top_z_distance"] == "0"
-    assert objects.count('key="enable_support" value="1"') == 2
+    # Both handles inherit global support, so neither carries a per-object override.
+    assert 'key="enable_support"' not in objects and 'key="support_type"' not in objects
+    assert [entry["object_settings"] for entry in supported] == [{}, {}]
 
 
 def test_auto_support_reserves_a_tower_on_both_plates(monkeypatch):

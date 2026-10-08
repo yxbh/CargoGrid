@@ -4,8 +4,8 @@ Each variant is one ordinary ``cargo-grid`` command for every nozzle in
 ``cargo_grid.cli.H2D_PROFILES``: the H2D catalogue and the Zeekr 7X expansion set, with and
 without the 1.92 mm solid bottom and with auto roof support (PETG and a PLA interface), and
 the pull-handle set and the adjustable-stop kit with PETG and a PLA support interface. The
-handles have no tile-edge roofs or floor; auto support gives each handle's own object support
-the PLA interface. Every project is generated in a temporary folder first; the
+handles have no tile-edge roofs or floor; both inherit the global Auto support and PLA interface.
+Every project is generated in a temporary folder first; the
 output folder only receives ``<name>.3mf`` and ``<name>.manifest.json`` after every variant
 has succeeded. Names put underscores between their parts and hyphens inside a part, for
 example
