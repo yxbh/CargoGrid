@@ -129,8 +129,7 @@ def test_designs_carry_the_validated_bambu_policy(designs, strap_bar):
     assert design.apply_orientation_to_bambu
     assert design.recommended_print_rotation_x == policy.rotation_x == print_rotation_x(strap_bar)
     assert design.recommended_print_rotation_y is policy.rotation_y is None
-    assert design.bambu_object_settings == policy.object_settings
-    assert design.bambu_object_settings == (OBJECT_AUTO_SUPPORT if strap_bar else {})
+    assert design.bambu_object_settings == policy.object_settings == OBJECT_AUTO_SUPPORT
 
 
 def _posed_points(shape, rotation):
@@ -164,7 +163,9 @@ def _front_rest_contacts(design, interface=Interface()):
     # Points near a rounded contact spread either side of its tangent line; use each band's middle.
     lines = [sum(ys) / len(ys) for ys in contacts.values() if ys]
     measured = min(centre_y - min(lines), max(lines) - centre_y)
-    assert measured == pytest.approx(front_rest_margin_mm(design.shape, interface), abs=0.1)
+    strap_bar = design.parameters["strap_bar"]
+    expected = front_rest_margin_mm(design.shape, interface, strap_bar)
+    assert measured == pytest.approx(expected, abs=0.1)
     assert measured >= 5
     return {name for name, ys in contacts.items() if ys}
 
@@ -174,19 +175,9 @@ def test_strap_bar_handle_rests_on_its_grip_and_bar_edges(designs):
     assert _front_rest_contacts(designs[True]) == {"grip", "bar"}
 
 
-def test_no_strap_bar_handle_prints_on_its_flat_grip_top(designs):
-    design = designs[False]
-    assert design.recommended_print_rotation_x == 180
-    posed = _posed_points(design.shape, 180)
-    bed = min(z for _, _, z in posed)
-    contacts = [source for source, _, z in posed if z < bed + 0.05]
-    assert all(z == pytest.approx(grip_top_mm(), abs=0.05) for _, _, z in contacts)
-    top = [
-        face
-        for face in design.shape.faces()
-        if face.bounding_box().min.Z > grip_top_mm() - 1e-5 and face.normal_at().Z > 0.999
-    ]
-    assert sum(face.area for face in top) > 1000
+def test_no_strap_bar_handle_rests_on_its_grip_and_seat_edges(designs):
+    assert designs[False].recommended_print_rotation_x == pytest.approx(106.693, abs=1e-3)
+    assert _front_rest_contacts(designs[False]) == {"grip", "seat"}
 
 
 def test_h2d_set_puts_each_version_on_its_own_named_plate(h2d_job):
@@ -202,10 +193,12 @@ def test_h2d_set_puts_each_version_on_its_own_named_plate(h2d_job):
             width, depth = depth, width
         assert common.contains_box(placement.x, placement.y, width, depth, height)
     assert h2d_job.placement_policy["collection"] == "pull-handle"
-    margin = h2d_job.manifest_metadata["print_poses"][
-        "strap_bar_centre_of_mass_inside_rest_edges_mm"
-    ]
-    assert margin == pytest.approx(front_rest_margin_mm(h2d_job.designs[0].shape), abs=0.01)
+    poses = h2d_job.manifest_metadata["print_poses"]
+    for design, key in zip(h2d_job.designs, ("strap_bar", "no_strap_bar")):
+        expected = front_rest_margin_mm(design.shape, strap_bar=design.parameters["strap_bar"])
+        assert poses[f"{key}_centre_of_mass_inside_rest_edges_mm"] == pytest.approx(
+            expected, abs=0.01
+        )
     assert h2d_job.manifest_metadata["inventory"] == {
         "pull_handle_with_strap_bar": 1,
         "pull_handle_without_strap_bar": 1,
@@ -373,11 +366,11 @@ def test_cli_h2d_pull_handle_extras_export_one_project(tmp_path):
         orientation = entry["recommended_print_orientation"]
         assert orientation["rotations"] == [{"axis": "X", "degrees": print_rotation_x(strap_bar)}]
         assert orientation["applied_to_exports"]["bambu_3mf"] is True
-        assert ("recommended_bambu_object_settings" in entry) is strap_bar
+        assert "recommended_bambu_object_settings" in entry
     with ZipFile(output / "job.3mf") as archive:
         settings = archive.read("Metadata/model_settings.config").decode()
     assert "Pull handle - strap bar" in settings and "Pull handle - no strap bar" in settings
-    assert settings.count('key="enable_support" value="1"') == 1
+    assert settings.count('key="enable_support" value="1"') == 2
     assert settings.count("Auto For Match") == 2
 
 
@@ -405,17 +398,20 @@ H2D_PLA = ["--material", "Bambu PLA Basic @BBL H2D 0.8 nozzle", "PLA", "#0A2989"
 AUTO_SUPPORT = ["--roof-support", "--roof-support-mode", "auto"]
 
 
-def test_cli_h2d_pull_handle_extras_give_the_strap_bar_support_a_pla_interface(tmp_path):
+def test_cli_h2d_pull_handle_extras_give_their_support_a_pla_interface(tmp_path):
     output = tmp_path / "handles"
     arguments = ["extras", "pull-handle", *H2D_OPTIONS, *H2D_PLA, *AUTO_SUPPORT, "--no-stl"]
     assert main([*arguments, "--output", str(output)]) == 0
     manifest = json.loads((output / "manifest.json").read_text())
     record = manifest["placement_policy"]["auto_roof_support"]
-    assert record["prime_tower_plates"] == [1]
-    assert record["prime_tower_groups"] == ["Pull handle - strap bar"]
+    assert record["prime_tower_plates"] == [1, 2]
+    assert record["prime_tower_groups"] == ["Pull handle - strap bar", "Pull handle - no strap bar"]
     supported = manifest["export"]["roof_support"]["supported_objects"]
-    assert [(entry["design"], entry["female_roofs"]) for entry in supported] == [(NAMES[True], [])]
-    assert manifest["export"]["roof_support"]["unsupported_designs"] == [NAMES[False]]
+    assert [(entry["design"], entry["female_roofs"]) for entry in supported] == [
+        (NAMES[True], []),
+        (NAMES[False], []),
+    ]
+    assert manifest["export"]["roof_support"]["unsupported_designs"] == []
     with ZipFile(output / "job.3mf") as archive:
         project = json.loads(archive.read("Metadata/project_settings.config"))
         objects = archive.read("Metadata/model_settings.config").decode()
@@ -423,12 +419,10 @@ def test_cli_h2d_pull_handle_extras_give_the_strap_bar_support_a_pla_interface(t
     assert project["enable_support"] == "0"
     assert (project["support_filament"], project["support_interface_filament"]) == ("1", "2")
     assert project["support_top_z_distance"] == "0"
-    assert objects.count('key="enable_support" value="1"') == 1
-    strap_bar = objects.split("Pull handle - 2x1 - no strap bar")[0]
-    assert 'key="enable_support" value="1"' in strap_bar
+    assert objects.count('key="enable_support" value="1"') == 2
 
 
-def test_auto_support_reserves_a_tower_only_on_the_strap_bar_plate(monkeypatch):
+def test_auto_support_reserves_a_tower_on_both_plates(monkeypatch):
     monkeypatch.setattr(pull_handle_set, "pull_handle_design", _stand_in)
     job = extras_job(
         H2D,
@@ -438,11 +432,11 @@ def test_auto_support_reserves_a_tower_only_on_the_strap_bar_plate(monkeypatch):
         auto_roof_support=True,
         layer_height_mm=0.24,
     )
-    assert list(job.prime_tower_positions) == [0]
-    assert job.placement_policy["auto_roof_support"]["prime_tower_plates"] == [1]
+    assert list(job.prime_tower_positions) == [0, 1]
+    assert job.placement_policy["auto_roof_support"]["prime_tower_plates"] == [1, 2]
     assert job.placement_policy["plate_group_minimum_model_gap_mm"] == {
         "Pull handle - strap bar": 8.0,
-        "Pull handle - no strap bar": 4,
+        "Pull handle - no strap bar": 8.0,
     }
     plain = extras_job(H2D, placement_build=h2d_common_build(), gap=4, orient_for_bambu=True)
     assert plain.prime_tower is None and not plain.prime_tower_positions
@@ -452,10 +446,13 @@ def test_auto_support_reserves_a_tower_only_on_the_strap_bar_plate(monkeypatch):
 def test_auto_support_accepts_accessory_support_but_not_a_job_with_nothing_to_support():
     strap_bar = _stand_in(PullHandle(True))
     no_bar = _stand_in(PullHandle(False))
+    unsupported = Design(
+        "unsupported_handle", Box(120, 60, 70), dict(no_bar.parameters), bambu_object_settings={}
+    )
     auto = RoofSupportSettings(mode="auto")
     validate_roof_job(Job([strap_bar, no_bar], H2D, "extras"), auto, 0.32)
     with pytest.raises(ValueError, match="no retained original female pocket roofs"):
-        validate_roof_job(Job([no_bar], H2D, "extras"), auto, 0.32)
+        validate_roof_job(Job([unsupported], H2D, "extras"), auto, 0.32)
     with pytest.raises(ValueError, match="no retained original female pocket roofs"):
         validate_roof_job(Job([strap_bar, no_bar], H2D, "part"), RoofSupportSettings(), 0.32)
 
