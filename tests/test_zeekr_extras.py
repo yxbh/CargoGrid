@@ -702,20 +702,13 @@ def test_real_expansion_set_exports_every_piece_in_one_project(expansion_set_job
         assert sorted(names) == sorted(name for name, _, _ in PLATES.values())
 
 
-AUTO_SUPPORTED = {
-    ("edge-y", None),
-    ("zeekr-rear-contour-side", "east"),
-}
-
-
 def _stand_in_needs_support(design):
-    family = design.parameters.get("family")
-    return (family, design.parameters.get("side")) in AUTO_SUPPORTED
+    return design.bambu_object_settings.get("enable_support") != "0"
 
 
 @pytest.fixture
 def auto_stand_ins(monkeypatch, accessory_metadata_shape, contour_stand_ins):
-    """Stand-in geometry where female edges and east caps carry pocket roofs."""
+    """Stand-in geometry whose pieces all inherit global support."""
     monkeypatch.setattr(plates_module, "needs_auto_support", _stand_in_needs_support)
     return _stand_in_needs_support
 
@@ -730,7 +723,14 @@ def _placed_by_plate(job):
 def test_auto_support_reserves_a_tower_on_plates_with_supported_pieces(auto_stand_ins):
     default = extras_job(H2D, placement_build=h2d_common_build(), edge_gap=4)
     job = extras_job(H2D, placement_build=h2d_common_build(), edge_gap=4, auto_roof_support=True)
-    assert job.plate_names == default.plate_names
+    assert list(job.plate_names.values()) == [
+        "Zeekr 7X - 40mm edges",
+        "Zeekr 7X - Rear panel contour side caps",
+        "Zeekr 7X - Rear panel south contour ramps 1",
+        "Zeekr 7X - Rear panel south contour ramps 2",
+        "Zeekr 7X - Rear panel south contour ramps 3",
+    ]
+    assert len(default.plate_names) == 4
     plates = _placed_by_plate(job)
     supported = {
         plate for plate, members in plates.items() if any(auto_stand_ins(d) for d, _ in members)
@@ -800,28 +800,27 @@ def test_cli_extras_accept_auto_roof_support_and_refuse_painted(
     assert "use auto mode (--roof-support-mode auto)" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("side,supported", [("east", True), ("west", False)])
-def test_real_contour_caps_get_object_support_only_on_female_roofs(side, supported):
+@pytest.mark.parametrize("side", ["east", "west"])
+def test_real_contour_caps_inherit_global_support(side):
     from cargo_grid.roof_support import RoofSupportSettings, effective_object_settings
 
     parameters = zeekr_7x_rear_review.RearReviewParameters()
     design = zeekr_7x_rear_review._side_design(side, "north", parameters)
     auto = RoofSupportSettings(mode="auto")
-    expected = {"enable_support": "1", "support_type": "normal(auto)"} if supported else {}
-    assert effective_object_settings(design, auto) == expected
-    assert needs_auto_support(design) is supported
+    assert effective_object_settings(design, auto) == {}
+    assert needs_auto_support(design)
 
 
-@pytest.mark.parametrize("family,supported", [("edge-y", True), ("edge-x", False)])
-def test_real_forty_mm_edges_get_object_support_only_when_female(family, supported):
+@pytest.mark.parametrize("family", ["edge-y", "edge-x"])
+def test_real_forty_mm_edges_inherit_global_support(family):
     (spec,) = [v for v in variants(H2D) if v.family == family and v.nx == 1]
     design = accessory_design(spec)
-    assert needs_auto_support(design) is supported
+    assert needs_auto_support(design)
 
 
 @pytest.mark.slow
-def test_real_male_south_ramp_stays_without_object_support():
+def test_real_male_south_ramp_can_inherit_global_support():
     parameters = zeekr_7x_rear_review.RearReviewParameters()
     x = parameters.field_x_min_mm + 8 * parameters.interface.pitch
     design = zeekr_7x_rear_review._south_design(2, 2, x, parameters)
-    assert not needs_auto_support(design)
+    assert needs_auto_support(design)

@@ -199,11 +199,12 @@ def test_complete_print_project_uses_shared_h2d_support_conventions(
     assert settings["printer_settings_id"] == profile.printer
     assert settings["print_settings_id"] == profile.process
     assert settings["filament_settings_id"] == [profile.petg, profile.pla]
-    assert settings["enable_support"] == "0"
+    assert settings["enable_support"] == "1"
+    assert settings["support_type"] == "normal(auto)"
     assert {key: settings[key] for key in BAMBU_PROCESS_DEFAULTS} == BAMBU_PROCESS_DEFAULTS
     overrides = set(settings["different_settings_to_system"][0].split(";"))
     assert set(BAMBU_PROCESS_DEFAULTS) <= overrides
-    assert "enable_support" not in overrides
+    assert {"enable_support", "support_type"} <= overrides
     assert {"wipe_tower_x", "wipe_tower_y"} <= overrides
 
     object_settings = {}
@@ -261,8 +262,7 @@ def test_complete_print_project_uses_shared_h2d_support_conventions(
     ]
     assert len(supported) == 2
     assert all(
-        values["enable_support"] == "1" and values["support_type"] == "normal(auto)"
-        for values in supported
+        "enable_support" not in values and "support_type" not in values for values in supported
     )
     assert len(unsupported) == 2
     assert all(

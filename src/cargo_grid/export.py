@@ -38,7 +38,6 @@ from cargo_grid.parameters import DEFAULT_HOLE_DIAMETER_MM, BuildVolume, Interfa
 from cargo_grid.prepared import Bounds, PreparedShape, rotated_points, rotation_matrix_3mf
 from cargo_grid.rods import ROD_FAMILIES, Rod, RodBrace, fit_evidence
 from cargo_grid.roof_support import (
-    OBJECT_AUTO_SUPPORT,
     RoofSupportSettings,
     auto_support_reason,
     effective_object_settings,
@@ -316,7 +315,15 @@ def _validate_request(job: Job, bambu: BambuSettings | None, stack: StackSetting
                 "create the design with accessory_design()"
             )
         required_object_settings = required_bambu_object_settings(design.parameters)
-        if bambu and design.bambu_object_settings != required_object_settings:
+        if (
+            bambu
+            and design.bambu_object_settings != required_object_settings
+            and not (
+                bambu.roof_support
+                and bambu.roof_support.mode == "auto"
+                and design.bambu_object_settings == {"enable_support": "0"}
+            )
+        ):
             raise ValueError(
                 f"{design.name}: Bambu accessory export requires its validated object settings; "
                 "create the design with accessory_design()"
@@ -1045,7 +1052,7 @@ def _auto_roof_support_record(job: Job, bambu: BambuSettings, batches, plates) -
                 "design": design.name,
                 "batch": batch + 1,
                 "family": design.parameters.get("family", "tile"),
-                "object_settings": dict(OBJECT_AUTO_SUPPORT),
+                "object_settings": effective_object_settings(design, settings),
                 "reason": reason,
                 "female_roofs": [{"side": roof.side, "index": roof.index} for roof in roofs],
                 "support_may_occupy_openings": sorted(
@@ -1063,8 +1070,8 @@ def _auto_roof_support_record(job: Job, bambu: BambuSettings, batches, plates) -
         "settings": asdict(settings),
         "contact_mode": settings.contact_mode,
         "contact_material_intent": "PETG model/base and distinct PLA interface; actual material compatibility and physical release must be checked",
-        "global_enable_support": False,
-        "object_support": "normal(auto) on every object with a retained original female pocket roof and every accessory that already requests object-scoped normal Auto",
+        "global_enable_support": True,
+        "object_support": "global normal(auto); objects inherit support unless a documented OFF override protects a fit surface",
         "supported_objects": objects,
         "unsupported_designs": sorted({d.name for d, _, _ in batches} - supported),
         "enforcer_count": 0,

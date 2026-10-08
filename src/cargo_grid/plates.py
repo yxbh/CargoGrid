@@ -23,7 +23,6 @@ from cargo_grid.packing import (
     pack_sizes,
 )
 from cargo_grid.parameters import BuildVolume, Exclusion, positive
-from cargo_grid.roof_support import OBJECT_AUTO_SUPPORT, female_roofs
 
 # Auto roof support prints a PLA interface, so every plate with supported parts needs a prime
 # tower. Bambu's default tower is used as it is; each plate only gets a tower position and a
@@ -97,8 +96,8 @@ def _bambu_min_tower_depth(height: float) -> float:
 
 
 def needs_auto_support(design: Design) -> bool:
-    """Whether auto roof support switches object support on, so the plate prints PLA."""
-    return bool(female_roofs(design)) or design.bambu_object_settings == OBJECT_AUTO_SUPPORT
+    """Whether global Auto support can print PLA on this design's plate."""
+    return design.bambu_object_settings.get("enable_support") != "0"
 
 
 def _keep_out(
@@ -329,7 +328,7 @@ def plan_plates(
 
     ``build`` is the base placement area (the H2D common reach or a generic usable area) and
     ``size`` returns each design's placed bounds. With ``auto_roof_support``, a group with any
-    design that gets object support prints PLA, so its plates use the tower layout for that
+    design that can get global support may print PLA, so its plates use the tower layout for that
     base area and add the support-foot allowance to the group gap. Designs that do not fit
     their group's area are returned in ``unfit`` for the caller to omit or reject. On the H2D
     the tower position follows Bambu's estimate for ``layer_height_mm`` and the group's

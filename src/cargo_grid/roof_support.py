@@ -64,18 +64,14 @@ class RoofSupportSettings:
     @property
     def process_override_keys(self) -> set[str]:
         keys = set(self.native_settings()) - {"filament_map", "filament_map_mode"}
-        if self.mode == "auto":
-            # Global support stays at the profile's off; objects switch it on individually.
-            keys.discard("enable_support")
         if self.contact_mode != "zero-contact":
             keys.discard("support_on_build_plate_only")
         return keys
 
     def native_settings(self) -> dict[str, str | list[str]]:
         settings: dict[str, str | list[str]] = {
-            "enable_support": "1" if self.mode == "painted" else "0",
-            # Auto mode leaves the support type to each object.
-            **({"support_type": "normal(manual)"} if self.mode == "painted" else {}),
+            "enable_support": "1",
+            "support_type": "normal(manual)" if self.mode == "painted" else "normal(auto)",
             "support_filament": "1",
             "support_interface_filament": "2",
             "support_on_build_plate_only": "0",
@@ -243,20 +239,24 @@ def female_roofs(design: Design) -> list[FemaleRoof]:
 
 
 def auto_support_reason(design: Design, settings: RoofSupportSettings) -> str | None:
-    """Why an auto-mode roof job switches object-scoped normal Auto support on, if it does."""
-    if settings.mode != "auto":
+    """Why a design participates in global Auto support, without predicting sliced support."""
+    if settings.mode != "auto" or design.bambu_object_settings.get("enable_support") == "0":
         return None
     if female_roofs(design):
         return "retained original female pocket roof"
     if design.bambu_object_settings == OBJECT_AUTO_SUPPORT:
-        return "object-scoped normal Auto support already recommended for this accessory"
-    return None
+        return "normal Auto support already recommended for this accessory"
+    return "global normal Auto support; the slicer detects overhangs"
 
 
 def effective_object_settings(design: Design, settings: RoofSupportSettings | None) -> dict:
     """Per-object Bambu settings written for one design in a roof-support job."""
-    if settings is not None and auto_support_reason(design, settings):
-        return dict(OBJECT_AUTO_SUPPORT)
+    if settings is not None and settings.mode == "auto":
+        return {
+            key: value
+            for key, value in design.bambu_object_settings.items()
+            if OBJECT_AUTO_SUPPORT.get(key) != value
+        }
     return dict(design.bambu_object_settings)
 
 
