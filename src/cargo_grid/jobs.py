@@ -52,6 +52,7 @@ class Design:
         if self.bambu_object_settings not in (
             {},
             {"enable_support": "1", "support_type": "normal(auto)"},
+            {"enable_support": "0"},
         ):
             raise ValueError("unsupported Bambu per-object settings")
 

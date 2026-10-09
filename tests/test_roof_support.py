@@ -96,7 +96,7 @@ def test_material_roles_must_be_explicit_petg_and_pla(support):
 def test_automatic_support_defaults_omit_custom_assignments(tmp_path):
     support = RoofSupportSettings(0.2, 2, 0)
     assert support.nozzle_map is None
-    assert support.native_settings()["support_on_build_plate_only"] == "0"
+    assert "support_on_build_plate_only" not in support.native_settings()
     assert "filament_map" not in support.native_settings()
     assert "filament_map_mode" not in support.native_settings()
     assert "raft_first_layer_expansion" not in support.native_settings()
@@ -113,8 +113,8 @@ def test_automatic_support_defaults_omit_custom_assignments(tmp_path):
     assert report["roof_support"]["settings"]["nozzle_map"] is None
     with ZipFile(path) as archive:
         settings = json.loads(archive.read("Metadata/project_settings.config"))
-        assert settings["support_filament"] == "1" and settings["support_interface_filament"] == "2"
-        assert settings["support_on_build_plate_only"] == "0"
+        assert "support_filament" not in settings and settings["support_interface_filament"] == "2"
+        assert "support_on_build_plate_only" not in settings
         assert "filament_map" not in settings
         assert settings["filament_map_mode"] == "Auto For Match"
         assert "raft_first_layer_expansion" not in settings
@@ -199,7 +199,7 @@ def test_native_modifier_types_rotation_and_dual_nozzle_settings(bambu, tmp_path
         settings = json.loads(archive.read("Metadata/project_settings.config"))
         assert settings["nozzle_diameter"] == ["0.4", "0.4"]
         assert settings["filament_map"] == ["2", "1"]
-        assert settings["support_filament"] == "1" and settings["support_interface_filament"] == "2"
+        assert "support_filament" not in settings and settings["support_interface_filament"] == "2"
         assert settings["support_type"] == "normal(manual)"
         assert "raft_first_layer_expansion" not in settings
         assert len(settings["different_settings_to_system"]) == 4

@@ -15,6 +15,15 @@ from cargo_grid.tiles import hole_placements, tile_joins
 RoofCoverage = Literal["critical", "full"]
 RoofSupportMode = Literal["painted", "auto"]
 OBJECT_AUTO_SUPPORT = {"enable_support": "1", "support_type": "normal(auto)"}
+# Shared by the official H2D processes and Bambu's base process defaults.
+BAMBU_SUPPORT_DEFAULTS = {
+    "support_on_build_plate_only": "0",
+    "support_interface_top_layers": "2",
+    "support_top_z_distance": "0.2",
+    "support_interface_spacing": "0.5",
+    "support_object_xy_distance": "0.35",
+    "support_expansion": "0",
+}
 CRITICAL_PAD_WIDTH_MM = 3.0
 MIN_ENFORCER_HALF_SPAN_MM = 1.0
 
@@ -63,20 +72,12 @@ class RoofSupportSettings:
 
     @property
     def process_override_keys(self) -> set[str]:
-        keys = set(self.native_settings()) - {"filament_map", "filament_map_mode"}
-        if self.mode == "auto":
-            # Global support stays at the profile's off; objects switch it on individually.
-            keys.discard("enable_support")
-        if self.contact_mode != "zero-contact":
-            keys.discard("support_on_build_plate_only")
-        return keys
+        return set(self.native_settings()) - {"filament_map", "filament_map_mode"}
 
     def native_settings(self) -> dict[str, str | list[str]]:
         settings: dict[str, str | list[str]] = {
-            "enable_support": "1" if self.mode == "painted" else "0",
-            # Auto mode leaves the support type to each object.
-            **({"support_type": "normal(manual)"} if self.mode == "painted" else {}),
-            "support_filament": "1",
+            "enable_support": "1",
+            "support_type": "normal(manual)" if self.mode == "painted" else "normal(auto)",
             "support_interface_filament": "2",
             "support_on_build_plate_only": "0",
             "support_interface_top_layers": str(self.interface_layers),
@@ -95,7 +96,11 @@ class RoofSupportSettings:
             )
         if self.foot_expansion is not None and self.foot_expansion != -1:
             settings["raft_first_layer_expansion"] = f"{self.foot_expansion:g}"
-        return settings
+        return {
+            key: value
+            for key, value in settings.items()
+            if BAMBU_SUPPORT_DEFAULTS.get(key) != value
+        }
 
 
 RoofSide = Literal["west", "south", "north", "east"]
@@ -243,20 +248,24 @@ def female_roofs(design: Design) -> list[FemaleRoof]:
 
 
 def auto_support_reason(design: Design, settings: RoofSupportSettings) -> str | None:
-    """Why an auto-mode roof job switches object-scoped normal Auto support on, if it does."""
-    if settings.mode != "auto":
+    """Why a design participates in global Auto support, without predicting sliced support."""
+    if settings.mode != "auto" or design.bambu_object_settings.get("enable_support") == "0":
         return None
     if female_roofs(design):
         return "retained original female pocket roof"
     if design.bambu_object_settings == OBJECT_AUTO_SUPPORT:
-        return "object-scoped normal Auto support already recommended for this accessory"
-    return None
+        return "normal Auto support already recommended for this accessory"
+    return "global normal Auto support; the slicer detects overhangs"
 
 
 def effective_object_settings(design: Design, settings: RoofSupportSettings | None) -> dict:
     """Per-object Bambu settings written for one design in a roof-support job."""
-    if settings is not None and auto_support_reason(design, settings):
-        return dict(OBJECT_AUTO_SUPPORT)
+    if settings is not None and settings.mode == "auto":
+        return {
+            key: value
+            for key, value in design.bambu_object_settings.items()
+            if OBJECT_AUTO_SUPPORT.get(key) != value
+        }
     return dict(design.bambu_object_settings)
 
 

@@ -113,7 +113,7 @@ The outer-finger centres are at X=+/-15.8 mm, each carries three 8 mm-pitch teet
 uv run cargo-grid extras adjustable-stop --h2d-dual-safe --build-width-mm 350 --build-depth-mm 320 --build-height-mm 325 --bambu --material "Bambu PETG Basic @BBL H2D 0.8 nozzle" PETG "#688197" --material "Bambu PLA Basic @BBL H2D 0.8 nozzle" PLA "#0A2989" --nozzle-diameter-mm 0.8 --layer-height-mm 0.32 --roof-support --roof-support-mode auto --no-stl --output outputs/adjustable-stop
 ```
 
-The published one-plate H2D kits are generated as the `Adjustable-Stop` set in `tools/makerworld_exports.py`. Each contains the base, moving wall, keeper and accepted undimpled v10b #1 collar clip, with global support off and object-scoped normal Auto support on the base and moving wall. The 0.8 mm/0.32 mm PETG geometry and clip have physical test results; the identical 0.4 mm/0.24 mm CAD export is supported but its fit, flex, bridge shape, retention and strength have not been physically tested. Try the clip before committing to the 0.4 mm kit. The Python API can also write source-oriented STEP, STL and core 3MF artifacts without adding another top-level CLI command.
+The published one-plate H2D kits are generated as the `Adjustable-Stop` set in `tools/makerworld_exports.py`. Each contains the base, moving wall, keeper and accepted undimpled v10b #1 collar clip, with global normal Auto support on and PLA Basic for the interface. All four objects inherit that setting; the slicer decides where support is needed. The clip's 0.80 mm rear clearance was sized for sag in its unsupported 10.10 mm rear bridge, so support can change its printed fit. Remove support and try the clip before relying on its retention. The 0.8 mm/0.32 mm PETG geometry and unsupported clip have physical test results; the identical 0.4 mm/0.24 mm CAD export is supported but its fit, flex, bridge shape, retention and strength have not been physically tested. The Python API can also write source-oriented STEP, STL and core 3MF artifacts without adding another top-level CLI command.
 
 Free exterior base, wall and reinforcement-ridge edges use 2 mm radii; finger, squeeze-pad, reinforcement-transition and feasible keeper edges use 1 mm radii. Both underside anchors retain the same R2 tip and root treatment. Native X, ratchet, tooth-carrier stop, guide, bearing, anchor and screw working geometry stays sharp where rounding would alter the interface. The keeper's two top side edges remain sharp to retain the 1.3 mm land beside each provisional 7 mm countersink mouth, and six wall-root side transitions remain sharp because the coupled BREP fillet does not construct there even at 0.05 mm. These exceptions preserve the existing load path and require visual and physical review rather than implying all edges are rounded.
 
@@ -153,7 +153,7 @@ The set needs the standard 60 mm unit, 13 mm thickness, original joints, zero fi
 
 Add `--solid-bottom-thickness-mm` to give every piece in the set a [solid bottom](#close-the-underside), and print the matching tiles and north edges with the same value. The outline doesn't change, but every piece is thicker and sits that much higher than in the test fit, so recheck clearance under the lift-out panel. The manifest records the thickness, and the contour piece names end in `_solid-bottom-<T>mm`.
 
-Add `--roof-support --roof-support-mode auto` and a second material to get [auto roof support](#auto-roof-support-for-catalogues-and-extras) under the female joint roofs. On the H2D that means the PETG Basic and PLA Basic profiles used in that section's example. Support is switched on for the female 40 mm edges and the female east caps; male edges, west caps and south ramps print without it. The female-edge and side-cap plates get the same prime-tower corner and wider part spacing; on the H2D the set still needs five plates. Support can fill the round holes next to the female roofs while printing; remove it from the underside before assembly. The PLA interface on these pieces hasn't been tested on a real print.
+Add `--roof-support --roof-support-mode auto` and a second material to get [auto roof support](#auto-roof-support-for-catalogues-and-extras). On the H2D that means the PETG Basic and PLA Basic profiles used in that section's example. Global support is on for every piece, and the slicer decides where it is needed. Every plate reserves the same prime-tower corner and wider part spacing as the catalogue; the manifest records the resulting plate count. Support can fill the round holes next to the female roofs while printing; remove it from the underside before assembly. The PLA interface on these pieces hasn't been tested on a real print.
 
 The 3MF is an unsliced project. Open it as a project, then slice and inspect every plate you plan to print.
 
@@ -278,18 +278,18 @@ For a two-nozzle PETG part with a PLA contact interface, Cargo-Grid can add remo
 uv run cargo-grid part --build-width-mm 350 --build-depth-mm 320 --build-height-mm 325 --build-margin-mm 37 --width-cells 2 --depth-cells 1 --copy-count 2 --bambu --material "Model PETG" PETG "#778877" --material "Interface PLA" PLA "#dddddd" --nozzle-diameter-mm 0.8 --layer-height-mm 0.32 --roof-support --output outputs/roof-job
 ```
 
-Open `outputs/roof-job/job.3mf` as a project and choose your actual printer, bed, process and filament profiles. Cargo-Grid sets PETG for the model/support base and PLA for the dense top interface, with:
+Open `outputs/roof-job/job.3mf` as a project and choose your actual printer, bed, process and filament profiles. Cargo-Grid leaves the support/raft base at the profile Default, which uses the part's PETG, and selects PLA for the dense top interface, with:
 
 | Setting | Value |
 | --- | --- |
 | Top contact distance | 0 mm |
 | Independent support layer height | off |
 | Top interface spacing | 0 mm |
-| Top interface layers | 2 |
-| Build plate only | off |
+| Top interface layers | profile default: 2 |
+| Build plate only | profile default: off |
 | Support/object XY distance | 0.40 mm |
 
-This zero-gap contact is only for the PETG/PLA pairing. Do not use it with the same material on both sides or an untested pair that may fuse.
+Only settings that differ from the audited Bambu defaults are written and marked as changed. The support base, two interface layers and build-plate-only off are inherited; a requested interface-layer count other than two is kept. If you choose another process profile, recheck those inherited defaults. This zero-gap contact is only for the PETG/PLA pairing. Do not use it with the same material on both sides or an untested pair that may fuse.
 
 Before printing:
 
@@ -307,15 +307,13 @@ Before printing:
 uv run cargo-grid catalogue --h2d-dual-safe --build-width-mm 350 --build-depth-mm 320 --build-height-mm 325 --solid-bottom-thickness-mm 1.92 --bambu --material "Bambu PETG Basic @BBL H2D 0.8 nozzle" PETG "#637b70" --material "Bambu PLA Basic @BBL H2D 0.8 nozzle" PLA "#dddddd" --nozzle-diameter-mm 0.8 --layer-height-mm 0.32 --roof-support --roof-support-mode auto --no-stl --output outputs/auto-support-catalogue
 ```
 
-The project keeps the same PETG/PLA zero-contact settings as above, but leaves global support off. Normal Auto support is switched on for each object that has a female pocket roof (tiles, female edges and corner sides, female ramps) and for the stops, shallow brackets and rods that already ask for it. Everything else, such as male edges, male ramps, plates, angled stops, braces, rails and rail ends, prints without support. Auto support covers whole overhangs, not just the small painted pads. Every support on those objects gets the PLA interface, including the stop, bracket and rod supports, which are all PETG without this option. That combination hasn't been tested on a real print.
+Published H2D projects with a PLA support interface open with global Enable support on, so someone downloading the project can see that support is intended. Auto mode uses normal Auto support and the same PETG/PLA zero-contact settings as above. Objects inherit it without redundant per-object ON settings, and the slicer decides which overhangs need support; enabling it does not mean every object will get support. An object should be switched off only when support would harm a documented fit surface. Auto support covers whole overhangs, not just the small painted pads, and every generated support gets the PLA interface. That combination hasn't been tested on a real print. Painted mode, projects without roof support and the PETG-only pull-handle set keep their existing settings.
 
-Each plate with supported parts uses PLA, so it needs a prime tower. The project uses Bambu Studio's default tower and only sets where it goes. On the H2D that is the front-right corner, at the spot where Bambu Studio leaves it when it opens the project: 15 mm from the front, and as far right as Bambu's own size estimate allows inside the X 25..325 area both nozzles reach. The estimate grows with thinner layers and taller plates, so the tower sits at X 284.49 with 0.32 mm layers, X 281.42 with 0.24 mm layers, and a little further left on the 120 mm bracket plate. Parts keep 6.5 mm from the estimated tower and its brim, or 1.5 mm on its left side, where the big tiles sit beside it. Auto support also spreads its first layer up to about 5 mm past each part, so those plates keep parts 8 mm apart and 6 mm from the front and back edges. The H2D catalogue then needs 26 plates (25 without auto support).
+Every plate that can inherit support reserves a prime tower because generated support can use PLA, even if a particular slice needs none. The project uses Bambu Studio's default tower and only sets where it goes. On the H2D that is the front-right corner, at the spot where Bambu Studio leaves it when it opens the project: 15 mm from the front, and as far right as Bambu's own size estimate allows inside the X 25..325 area both nozzles reach. The estimate grows with thinner layers and taller plates, so the tower sits at X 284.49 with 0.32 mm layers, X 281.42 with 0.24 mm layers, and a little further left on the 120 mm bracket plate. Parts keep 6.5 mm from the estimated tower and its brim, or 1.5 mm on its left side, where the big tiles sit beside it. Auto support also spreads its first layer up to about 5 mm past each part, so those plates keep parts 8 mm apart and 6 mm from the front and back edges. At either official nozzle size, the H2D catalogue uses 27 plates and the Zeekr set six, with or without the 1.92 mm solid bottom.
 
 If you switch to thicker layers in Bambu Studio, the tower stays put. Thinner layers make Bambu's estimate bigger, so it moves the tower left towards the parts; slice and check every plate again.
 
 Bambu Studio only warns about a tower running into a part on the plate you are previewing, but MakerWorld re-slices uploads and refuses those plates. Slice every plate and look for that warning before uploading.
-
-In test slices every plate of the H2D catalogues and Zeekr sets, at both nozzle sizes, sliced with PETG on either nozzle.
 
 As with painted support, support may fill round holes beside the pocket roofs while printing, so remove it from the underside before assembly. Slice every plate and check the tower and support paths before printing.
 

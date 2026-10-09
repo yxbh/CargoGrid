@@ -1,4 +1,4 @@
-"""Auto roof support: object-scoped normal Auto support with a PLA interface.
+"""Auto roof support: global normal Auto support with a PLA interface.
 
 These checks cover the generated settings, per-object flags and prime-tower reservations.
 Local Bambu Studio slicing is a separate check; support release, tower stability and print
@@ -81,37 +81,30 @@ def bambu():
     return BambuSettings(MATERIALS, 0.8, 0.32, AUTO, machine_nozzle_count=2)
 
 
-def test_auto_mode_keeps_the_zero_contact_keys_with_global_support_off():
+def test_auto_mode_keeps_the_zero_contact_keys_with_global_support_on():
     settings = AUTO.native_settings()
     assert settings == {
-        "enable_support": "0",
-        "support_filament": "1",
+        "enable_support": "1",
+        "support_type": "normal(auto)",
         "support_interface_filament": "2",
-        "support_on_build_plate_only": "0",
-        "support_interface_top_layers": "2",
         "support_top_z_distance": "0",
         "support_interface_spacing": "0",
         "independent_support_layer_height": "0",
         "support_object_xy_distance": "0.4",
     }
-    assert "enable_support" not in AUTO.process_override_keys
+    assert {"enable_support", "support_type"} <= AUTO.process_override_keys
     assert {
         "support_top_z_distance",
         "independent_support_layer_height",
         "support_interface_spacing",
-        "support_interface_top_layers",
-        "support_on_build_plate_only",
     } <= AUTO.process_override_keys
 
 
-def test_painted_mode_settings_and_key_order_are_unchanged():
+def test_painted_mode_keeps_manual_support_and_omits_inherited_defaults():
     assert list(RoofSupportSettings().native_settings()) == [
         "enable_support",
         "support_type",
-        "support_filament",
         "support_interface_filament",
-        "support_on_build_plate_only",
-        "support_interface_top_layers",
         "support_top_z_distance",
         "support_interface_spacing",
         "independent_support_layer_height",
@@ -160,27 +153,70 @@ def designs():
     return female, existing, plain
 
 
-def test_object_support_follows_female_roofs_and_existing_object_support(designs):
+def test_objects_inherit_global_support_without_redundant_overrides(designs):
     female, existing, plain = designs
     for design in female.values():
         assert auto_support_reason(design, AUTO) == "retained original female pocket roof"
-        assert effective_object_settings(design, AUTO) == OBJECT_AUTO_SUPPORT
+        assert effective_object_settings(design, AUTO) == {}
         assert needs_auto_support(design)
     for design in existing.values():
         assert design.bambu_object_settings == OBJECT_AUTO_SUPPORT
-        assert auto_support_reason(design, AUTO).startswith("object-scoped normal Auto")
+        assert auto_support_reason(design, AUTO).startswith("normal Auto")
+        assert effective_object_settings(design, AUTO) == {}
         assert needs_auto_support(design)
     for name, design in plain.items():
-        assert auto_support_reason(design, AUTO) is None, name
+        assert auto_support_reason(design, AUTO).startswith("global normal Auto"), name
         assert effective_object_settings(design, AUTO) == {}
-        assert not needs_auto_support(design)
+        assert needs_auto_support(design)
     # Painted roof jobs leave every accessory's own settings alone.
     painted = RoofSupportSettings()
     assert effective_object_settings(female["tile"], painted) == {}
     assert effective_object_settings(existing["rod"], painted) == OBJECT_AUTO_SUPPORT
 
 
-def test_one_plate_auto_job_writes_object_flags_tower_and_no_enforcers(designs, tmp_path):
+def test_global_auto_support_preserves_an_explicit_off_override(designs, tmp_path):
+    design = Design(
+        "protected",
+        Box(10, 10, 10),
+        {},
+        bambu_object_settings={"enable_support": "0"},
+    )
+    assert effective_object_settings(design, AUTO) == {"enable_support": "0"}
+    assert not needs_auto_support(design)
+    assert auto_support_reason(design, AUTO) is None
+    assert effective_object_settings(design, None) == design.bambu_object_settings
+    job = Job(
+        [designs[0]["tile"], design],
+        BUILD,
+        "part",
+        print_placements=[PrintPlacement(0, 40, 20, 0), PrintPlacement(0, 140, 20, 0)],
+        prime_tower=PrimeTower(),
+        prime_tower_positions={0: (290.5, 8)},
+    )
+    path = tmp_path / "protected.3mf"
+    report = write_3mf(job, path, bambu=bambu())
+    with ZipFile(path) as archive:
+        config = ET.fromstring(archive.read("Metadata/model_settings.config"))
+    protected = next(
+        item
+        for item in config.findall("object")
+        if any(
+            child.get("key") == "name" and child.get("value") == "protected_batch_2"
+            for child in item.findall("metadata")
+        )
+    )
+    metadata = {child.get("key"): child.get("value") for child in protected.findall("metadata")}
+    assert metadata["enable_support"] == "0" and "support_type" not in metadata
+    assert report["roof_support"]["unsupported_designs"] == ["protected"]
+    with pytest.raises(ValueError, match="validated object settings"):
+        write_3mf(
+            job,
+            tmp_path / "default.3mf",
+            bambu=BambuSettings(MATERIALS, 0.8, 0.32, machine_nozzle_count=2),
+        )
+
+
+def test_one_plate_auto_job_writes_global_support_tower_and_no_enforcers(designs, tmp_path):
     female, existing, plain = designs
     chosen = [female["tile"], plain["edge-x"], plain["plate"], existing["vertical-stop"]]
     tower = PrimeTower()
@@ -209,11 +245,11 @@ def test_one_plate_auto_job_writes_object_flags_tower_and_no_enforcers(designs, 
             metadata.get("support_type"),
             [part.get("subtype") for part in obj.findall("part")],
         )
-    assert flags[female["tile"].name] == ("1", "normal(auto)", ["normal_part"])
-    assert flags[existing["vertical-stop"].name] == ("1", "normal(auto)", ["normal_part"])
+    assert flags[female["tile"].name] == (None, None, ["normal_part"])
+    assert flags[existing["vertical-stop"].name] == (None, None, ["normal_part"])
     assert flags[plain["edge-x"].name] == (None, None, ["normal_part"])
     assert flags[plain["plate"].name] == (None, None, ["normal_part"])
-    assert project["enable_support"] == "0" and "support_type" not in project
+    assert project["enable_support"] == "1" and project["support_type"] == "normal(auto)"
     assert project["support_interface_filament"] == "2"
     # Bambu's default tower is used: only the per-plate position is written.
     assert project["wipe_tower_x"] == ["290.5"] and project["wipe_tower_y"] == ["8"]
@@ -223,21 +259,21 @@ def test_one_plate_auto_job_writes_object_flags_tower_and_no_enforcers(designs, 
         assert key not in project and key not in overrides
     export = manifest["export"]
     roof = export["roof_support"]
-    assert roof["mode"] == "auto" and roof["global_enable_support"] is False
+    assert roof["mode"] == "auto" and roof["global_enable_support"] is True
     assert roof["enforcer_count"] == 0
     supported = {entry["design"]: entry for entry in roof["supported_objects"]}
-    assert set(supported) == {female["tile"].name, existing["vertical-stop"].name}
+    assert set(supported) == {design.name for design in chosen}
     assert supported[female["tile"].name]["support_may_occupy_openings"] == [
         [0.0, 30.0],
         [30.0, 0.0],
     ]
-    assert set(roof["unsupported_designs"]) == {plain["edge-x"].name, plain["plate"].name}
+    assert roof["unsupported_designs"] == []
     (plate,) = export["prime_tower"]["plates"]
     assert plate["origin_mm"] == [290.5, 8]
     assert plate["reserved_extrusion_bounds_mm"] == [283, 1, 325, 39.5]
     assert "settings" not in export["prime_tower"]
     assert export["prime_tower"]["tower"].startswith("Bambu default")
-    assert export["plates"][0]["items"][0]["object_settings"] == OBJECT_AUTO_SUPPORT
+    assert "object_settings" not in export["plates"][0]["items"][0]
 
 
 @pytest.mark.parametrize(
@@ -307,11 +343,11 @@ def test_auto_mode_allows_catalogues_and_extras_but_painted_mode_does_not(design
         validate_roof_job(Job([tile], BUILD, "stack-review"), AUTO, 0.32)
 
 
-def test_auto_part_job_turns_rail_ends_over_without_support(designs):
+def test_auto_part_job_turns_rail_ends_over_without_object_overrides(designs):
     tile, rail_end = designs[0]["tile"], designs[2]["rail end"]
     assert rail_end.apply_orientation_to_bambu and rail_end.recommended_print_rotation_x == 180
     validate_roof_job(Job([tile, rail_end], BUILD, "part"), AUTO, 0.32)
-    assert effective_object_settings(tile, AUTO) == OBJECT_AUTO_SUPPORT
+    assert effective_object_settings(tile, AUTO) == {}
     assert effective_object_settings(rail_end, AUTO) == {}
     with pytest.raises(ValueError, match="no retained original female pocket roofs"):
         validate_roof_job(Job([rail_end], BUILD, "part"), AUTO, 0.32)
@@ -364,7 +400,7 @@ def test_cli_mode_needs_roof_support(tmp_path, capsys):
 
 @pytest.fixture
 def stubbed_h2d(monkeypatch):
-    """Stand-in tiles and accessories with real sizes; family decides which need support."""
+    """Stand-in tiles and accessories with real sizes that inherit global support."""
 
     def fake_tile(tile):
         size = (tile.nx * 60 + 6, tile.ny * 60 + 6, 13 + tile.interface.solid_bottom_mm)
@@ -373,16 +409,8 @@ def stubbed_h2d(monkeypatch):
 
     monkeypatch.setattr(catalogue_module, "tile_design", fake_tile)
     monkeypatch.setattr(catalogue_module, "make_accessory", lambda spec: Box(20, 30, 10))
-    supported = {"tile", "edge-y", "corner-in", "corner-out", "ramp", "vertical-stop", "rod"}
 
-    def fake_needs(design):
-        family = design.parameters.get("family", "tile")
-        if family == "ramp" and design.parameters.get("ramp_join") == "male":
-            return False
-        return family in supported
-
-    monkeypatch.setattr(plates_module, "needs_auto_support", fake_needs)
-    return fake_needs
+    return plates_module.needs_auto_support
 
 
 def _corner(size):
@@ -471,13 +499,13 @@ def test_plain_auto_catalogue_reserves_a_front_left_tower_corner(stubbed_h2d):
 @pytest.mark.slow
 def test_real_h2d_auto_plan_with_solid_bottom(tmp_path):
     job = h2d_dual_safe_catalogue_job(solid_bottom_mm=T, auto_roof_support=True)
-    assert max(p.plate for p in job.print_placements) + 1 == 26
+    assert max(p.plate for p in job.print_placements) + 1 == 27
     report = write_3mf(job, tmp_path / "auto.3mf", bambu=bambu())
     roof = report["roof_support"]
     assert len(job.designs) == 129
-    assert len(roof["supported_objects"]) == 74
+    assert len(roof["supported_objects"]) == 129
     for entry in roof["supported_objects"]:
-        assert entry["object_settings"] == OBJECT_AUTO_SUPPORT
+        assert entry["object_settings"] == {}
     families = {entry["family"] for entry in roof["supported_objects"]}
     assert families == {
         "tile",
@@ -488,5 +516,12 @@ def test_real_h2d_auto_plan_with_solid_bottom(tmp_path):
         "vertical-stop",
         "vertical-tile-bracket",
         "rod",
+        "edge-x",
+        "plate",
+        "lock-45",
+        "rod-brace",
+        "support",
+        "support-end",
+        "support-bit",
     }
-    assert len(report["prime_tower"]["plates"]) == len(job.prime_tower_positions) == 22
+    assert len(report["prime_tower"]["plates"]) == len(job.prime_tower_positions) == 27

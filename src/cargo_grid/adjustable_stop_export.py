@@ -109,7 +109,6 @@ ADJUSTABLE_STOP_SUPPORT_CLEARANCE_MM = (
     ADJUSTABLE_STOP_MODEL_CLEARANCE_MM + AUTO_SUPPORT_FOOT_ALLOWANCE_MM
 )
 ADJUSTABLE_STOP_PLATE_NAME = "ADJUSTABLE STOP - PETG WITH PLA INTERFACE"
-_ADJUSTABLE_STOP_SUPPORT_OBJECTS = {"fixed_base", "moving_wall"}
 
 
 def _adjustable_stop_h2d_profile(nozzle_diameter_mm: float) -> H2DProfiles:
@@ -231,8 +230,8 @@ def adjustable_stop_print_job(
                         "prong_lock_clip": "X=+90, flat side on the bed",
                     },
                     "support": (
-                        "Global support is off. Normal Auto support is object-scoped to the "
-                        "fixed base and moving wall; the keeper and clip have no object override."
+                        "Global normal Auto support is on with a PLA Basic interface so "
+                        "downloaders can see that support is intended. Objects inherit it."
                     ),
                     "assembly": (
                         "Slide the moving wall into the base, fasten the keeper with four "
@@ -299,21 +298,15 @@ def _apply_adjustable_stop_support_settings(path: Path) -> None:
         )
         if design is None:
             raise ValueError(f"unknown adjustable-stop print object: {name}")
-        configured[design] = set(metadata)
-        if design in _ADJUSTABLE_STOP_SUPPORT_OBJECTS:
-            for key, value in OBJECT_AUTO_SUPPORT.items():
-                child = metadata.get(key)
-                if child is None:
-                    child = ET.SubElement(item, "metadata", key=key)
-                child.set("value", value)
-    expected = {
-        *_ADJUSTABLE_STOP_SUPPORT_OBJECTS,
-        "keeper",
-        "prong_lock_clip",
-    }
+        for key, value in OBJECT_AUTO_SUPPORT.items():
+            child = metadata.get(key)
+            if child is not None and child.get("value") == value:
+                item.remove(child)
+        configured[design] = {child.get("key") for child in item.findall("metadata")}
+    expected = {"fixed_base", "moving_wall", "keeper", "prong_lock_clip"}
     if set(configured) != expected:
         raise ValueError("adjustable-stop project does not contain its four expected objects")
-    for design in ("keeper", "prong_lock_clip"):
+    for design in expected:
         if configured[design] & OBJECT_AUTO_SUPPORT.keys():
             raise ValueError(f"{design} must not have an object support override")
 

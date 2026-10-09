@@ -93,6 +93,20 @@ def test_h2d_auto_support_needs_the_layer_height(stub_support):
         plan_plates(groups, h2d_common_build(), size=_size, auto_roof_support=True)
 
 
+def test_global_auto_support_reserves_every_inheriting_plate():
+    designs = [_design("plain", (50, 50, 10)), _design("protected", (50, 50, 10))]
+    designs[1].bambu_object_settings = {"enable_support": "0"}
+    plan = plan_plates(
+        [PlateGroup(design.name, [design], 4) for design in designs],
+        h2d_common_build(),
+        size=_size,
+        auto_roof_support=True,
+        layer_height_mm=0.32,
+    )
+    assert set(plan.prime_tower_positions) == {0}
+    assert plan.group_gaps == {"plain": 8, "protected": 4}
+
+
 @pytest.mark.parametrize(
     "layer_height,height,side,origin",
     [
