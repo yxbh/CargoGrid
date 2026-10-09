@@ -341,7 +341,7 @@ def validate_roof_job(job: Job, settings: RoofSupportSettings, layer_height: flo
         return
     # Auto mode also accepts accessories that already request object support on their own.
     if settings.mode == "auto" and any(
-        d.bambu_object_settings == OBJECT_AUTO_SUPPORT for d in job.designs
+        d.bambu_object_settings == GLOBAL_AUTO_SUPPORT_SETTINGS for d in job.designs
     ):
         return
     raise ValueError(
