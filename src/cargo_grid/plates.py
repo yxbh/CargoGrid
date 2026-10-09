@@ -96,8 +96,8 @@ def _bambu_min_tower_depth(height: float) -> float:
 
 
 def needs_auto_support(design: Design) -> bool:
-    """Whether global Auto support can print PLA on this design's plate."""
-    return design.bambu_object_settings.get("enable_support") != "0"
+    """Compatibility helper: every design inherits global Auto support when it is enabled."""
+    return True
 
 
 def _keep_out(
@@ -327,8 +327,8 @@ def plan_plates(
     """Pack ordered groups onto consecutive plates, reserving prime towers for auto support.
 
     ``build`` is the base placement area (the H2D common reach or a generic usable area) and
-    ``size`` returns each design's placed bounds. With ``auto_roof_support``, a group with any
-    design that can get global support may print PLA, so its plates use the tower layout for that
+    ``size`` returns each design's placed bounds. With ``auto_roof_support``, every nonempty
+    group inherits global support and may print PLA, so its plates use the tower layout for that
     base area and add the support-foot allowance to the group gap. Designs that do not fit
     their group's area are returned in ``unfit`` for the caller to omit or reject. On the H2D
     the tower position follows Bambu's estimate for ``layer_height_mm`` and the group's
@@ -340,7 +340,7 @@ def plan_plates(
     towered_groups, towered_gaps = [], []
     for group in groups:
         positive("plate group gap", group.gap, zero=True)
-        towered = tower is not None and any(needs_auto_support(d) for d in group.designs)
+        towered = tower is not None and bool(group.designs)
         gap = group.gap + AUTO_SUPPORT_FOOT_ALLOWANCE_MM if towered else group.gap
         reservation = (
             tower.reserve(max(size(design)[2] for design in group.designs)) if towered else None
@@ -409,7 +409,7 @@ def plan_plates(
             plan.projected_clearances[offset] = gap
         for design, placement in zip(members, packed):
             plate = placement.plate + offset
-            if towered and needs_auto_support(design):
+            if towered:
                 plan.prime_tower_positions[plate] = reservation.origin
                 plan.prime_tower_reaches[plate] = reservation.reach
                 plan.prime_tower_clearances[plate] = reservation.clearance

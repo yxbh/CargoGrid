@@ -11,7 +11,7 @@ import pytest
 from build123d import Align, Axis, Box, GeomType, Location, Part, Pos, Shape, ShapeList, import_step
 from OCP.BRepAdaptor import BRepAdaptor_Surface
 
-from cargo_grid import AdjustableStopSpec, prepared
+from cargo_grid import AdjustableStopSpec, adjustable_stop_export, prepared
 from cargo_grid.accessories import make_bidirectional_panel_connector
 from cargo_grid.adjustable_stop import (
     BASE_ANCHOR_CENTRES_Y_MM,
@@ -177,6 +177,7 @@ def test_adjustable_stop_h2d_settings_defaults_to_tested_0p8_profile():
 def test_complete_print_project_uses_shared_h2d_support_conventions(
     tmp_path,
     nozzle_diameter_mm,
+    monkeypatch,
 ):
     job = adjustable_stop_print_job(nozzle_diameter_mm)
     assert [design.name for design in job.designs] == [
@@ -190,11 +191,31 @@ def test_complete_print_project_uses_shared_h2d_support_conventions(
     assert set(job.prime_tower_positions) == {0}
     assert job.tower_bounds(0)[2] == pytest.approx(H2D_SHARED_REACH_X_MM[1])
 
+    original_model = []
+    apply_settings = adjustable_stop_export._apply_adjustable_stop_support_settings
+
+    def check_unpatched_objects(path):
+        with ZipFile(path) as archive:
+            data = archive.read("Metadata/model_settings.config")
+        model = ET.fromstring(data)
+        assert all(
+            child.get("key") not in ("enable_support", "support_type")
+            for item in model.findall("object")
+            for child in item.findall("metadata")
+        )
+        original_model.append(data)
+        apply_settings(path)
+
+    monkeypatch.setattr(
+        adjustable_stop_export, "_apply_adjustable_stop_support_settings", check_unpatched_objects
+    )
     project = tmp_path / f"adjustable-stop-{nozzle_diameter_mm:g}.3mf"
     write_adjustable_stop_print_project(project, nozzle_diameter_mm)
     with ZipFile(project) as archive:
         settings = json.loads(archive.read("Metadata/project_settings.config"))
-        model = ET.fromstring(archive.read("Metadata/model_settings.config"))
+        model_data = archive.read("Metadata/model_settings.config")
+        assert original_model == [model_data]
+        model = ET.fromstring(model_data)
     profile = H2D_PROFILES[nozzle_diameter_mm]
     assert settings["printer_settings_id"] == profile.printer
     assert settings["print_settings_id"] == profile.process

@@ -39,9 +39,9 @@ from cargo_grid.prepared import Bounds, PreparedShape, rotated_points, rotation_
 from cargo_grid.rods import ROD_FAMILIES, Rod, RodBrace, fit_evidence
 from cargo_grid.roof_support import (
     RoofSupportSettings,
-    auto_support_reason,
     effective_object_settings,
     female_roofs,
+    global_auto_support_reason,
     roof_enforcers,
     validate_roof_job,
 )
@@ -315,15 +315,7 @@ def _validate_request(job: Job, bambu: BambuSettings | None, stack: StackSetting
                 "create the design with accessory_design()"
             )
         required_object_settings = required_bambu_object_settings(design.parameters)
-        if (
-            bambu
-            and design.bambu_object_settings != required_object_settings
-            and not (
-                bambu.roof_support
-                and bambu.roof_support.mode == "auto"
-                and design.bambu_object_settings == {"enable_support": "0"}
-            )
-        ):
+        if bambu and design.bambu_object_settings != required_object_settings:
             raise ValueError(
                 f"{design.name}: Bambu accessory export requires its validated object settings; "
                 "create the design with accessory_design()"
@@ -1043,9 +1035,6 @@ def _auto_roof_support_record(job: Job, bambu: BambuSettings, batches, plates) -
     settings = bambu.roof_support
     objects = []
     for batch, (design, _, _) in enumerate(batches):
-        reason = auto_support_reason(design, settings)
-        if reason is None:
-            continue
         roofs = female_roofs(design)
         objects.append(
             {
@@ -1053,7 +1042,7 @@ def _auto_roof_support_record(job: Job, bambu: BambuSettings, batches, plates) -
                 "batch": batch + 1,
                 "family": design.parameters.get("family", "tile"),
                 "object_settings": effective_object_settings(design, settings),
-                "reason": reason,
+                "reason": global_auto_support_reason(design),
                 "female_roofs": [{"side": roof.side, "index": roof.index} for roof in roofs],
                 "support_may_occupy_openings": sorted(
                     {
@@ -1071,7 +1060,7 @@ def _auto_roof_support_record(job: Job, bambu: BambuSettings, batches, plates) -
         "contact_mode": settings.contact_mode,
         "contact_material_intent": "PETG model/base and distinct PLA interface; actual material compatibility and physical release must be checked",
         "global_enable_support": True,
-        "object_support": "global normal(auto); objects inherit support unless a documented OFF override protects a fit surface",
+        "object_support": "global normal(auto); all objects inherit support",
         "supported_objects": objects,
         "unsupported_designs": sorted({d.name for d, _, _ in batches} - supported),
         "enforcer_count": 0,

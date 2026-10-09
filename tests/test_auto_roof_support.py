@@ -15,7 +15,6 @@ from tower_checks import assert_towers_stay_where_bambu_keeps_them
 
 from cargo_grid import BuildVolume, Interface, Tile
 from cargo_grid import catalogue as catalogue_module
-from cargo_grid import plates as plates_module
 from cargo_grid.accessories import Accessory
 from cargo_grid.catalogue import accessory_design, h2d_dual_safe_catalogue_job
 from cargo_grid.cli import main
@@ -174,46 +173,18 @@ def test_objects_inherit_global_support_without_redundant_overrides(designs):
     assert effective_object_settings(existing["rod"], painted) == OBJECT_AUTO_SUPPORT
 
 
-def test_global_auto_support_preserves_an_explicit_off_override(designs, tmp_path):
-    design = Design(
-        "protected",
-        Box(10, 10, 10),
-        {},
-        bambu_object_settings={"enable_support": "0"},
-    )
-    assert effective_object_settings(design, AUTO) == {"enable_support": "0"}
-    assert not needs_auto_support(design)
-    assert auto_support_reason(design, AUTO) is None
-    assert effective_object_settings(design, None) == design.bambu_object_settings
-    job = Job(
-        [designs[0]["tile"], design],
-        BUILD,
-        "part",
-        print_placements=[PrintPlacement(0, 40, 20, 0), PrintPlacement(0, 140, 20, 0)],
-        prime_tower=PrimeTower(),
-        prime_tower_positions={0: (290.5, 8)},
-    )
-    path = tmp_path / "protected.3mf"
-    report = write_3mf(job, path, bambu=bambu())
-    with ZipFile(path) as archive:
-        config = ET.fromstring(archive.read("Metadata/model_settings.config"))
-    protected = next(
-        item
-        for item in config.findall("object")
-        if any(
-            child.get("key") == "name" and child.get("value") == "protected_batch_2"
-            for child in item.findall("metadata")
-        )
-    )
-    metadata = {child.get("key"): child.get("value") for child in protected.findall("metadata")}
-    assert metadata["enable_support"] == "0" and "support_type" not in metadata
-    assert report["roof_support"]["unsupported_designs"] == ["protected"]
+def test_object_support_off_is_not_an_accepted_design_setting():
+    with pytest.raises(ValueError, match="unsupported Bambu per-object settings"):
+        Design("protected", Box(10, 10, 10), {}, bambu_object_settings={"enable_support": "0"})
+
+
+def test_auto_job_cannot_bypass_required_accessory_settings(designs, tmp_path):
+    from dataclasses import replace
+
+    rod = replace(designs[1]["rod"], bambu_object_settings={})
+    job = Job([designs[0]["tile"], rod], BUILD, "part")
     with pytest.raises(ValueError, match="validated object settings"):
-        write_3mf(
-            job,
-            tmp_path / "default.3mf",
-            bambu=BambuSettings(MATERIALS, 0.8, 0.32, machine_nozzle_count=2),
-        )
+        write_3mf(job, tmp_path / "invalid.3mf", bambu=bambu())
 
 
 def test_one_plate_auto_job_writes_global_support_tower_and_no_enforcers(designs, tmp_path):
@@ -410,8 +381,6 @@ def stubbed_h2d(monkeypatch):
     monkeypatch.setattr(catalogue_module, "tile_design", fake_tile)
     monkeypatch.setattr(catalogue_module, "make_accessory", lambda spec: Box(20, 30, 10))
 
-    return plates_module.needs_auto_support
-
 
 def _corner(size):
     from build123d import Location
@@ -429,11 +398,7 @@ def test_h2d_auto_plan_reserves_a_tower_corner_on_every_support_plate(stubbed_h2
     plates = {}
     for design, placement in zip(job.designs, job.print_placements):
         plates.setdefault(placement.plate, []).append((design, placement))
-    tower_plates = {
-        plate
-        for plate, members in plates.items()
-        if any(stubbed_h2d(design) for design, _ in members)
-    }
+    tower_plates = set(plates)
     assert set(job.prime_tower_positions) == tower_plates
     assert_towers_stay_where_bambu_keeps_them(job, layer_height)
     for plate in tower_plates:
@@ -487,11 +452,7 @@ def test_plain_auto_catalogue_reserves_a_front_left_tower_corner(stubbed_h2d):
     for design, placement in zip(job.designs, job.print_placements):
         if placement.plate in job.prime_tower_positions:
             assert placement.x >= x1 + clear - 1e-6 or placement.y >= y1 + clear - 1e-6
-    supported_plates = {
-        placement.plate
-        for design, placement in zip(job.designs, job.print_placements)
-        if stubbed_h2d(design)
-    }
+    supported_plates = {placement.plate for placement in job.print_placements}
     assert set(job.prime_tower_positions) == supported_plates
     assert job.part_gap == 2
 

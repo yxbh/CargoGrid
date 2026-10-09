@@ -13,7 +13,6 @@ from build123d import Box
 from tower_checks import assert_towers_stay_where_bambu_keeps_them
 
 from cargo_grid import cli
-from cargo_grid import plates as plates_module
 from cargo_grid.accessories import EDGE_OUTWARD_OPTIONS_MM, Accessory, tile_matched_perimeter
 from cargo_grid.catalogue import (
     H2D_DEFAULT_PART_CLEARANCE_MM,
@@ -702,15 +701,9 @@ def test_real_expansion_set_exports_every_piece_in_one_project(expansion_set_job
         assert sorted(names) == sorted(name for name, _, _ in PLATES.values())
 
 
-def _stand_in_needs_support(design):
-    return design.bambu_object_settings.get("enable_support") != "0"
-
-
 @pytest.fixture
-def auto_stand_ins(monkeypatch, accessory_metadata_shape, contour_stand_ins):
+def auto_stand_ins(accessory_metadata_shape, contour_stand_ins):
     """Stand-in geometry whose pieces all inherit global support."""
-    monkeypatch.setattr(plates_module, "needs_auto_support", _stand_in_needs_support)
-    return _stand_in_needs_support
 
 
 def _placed_by_plate(job):
@@ -732,9 +725,7 @@ def test_auto_support_reserves_a_tower_on_plates_with_supported_pieces(auto_stan
     ]
     assert len(default.plate_names) == 4
     plates = _placed_by_plate(job)
-    supported = {
-        plate for plate, members in plates.items() if any(auto_stand_ins(d) for d, _ in members)
-    }
+    supported = set(plates)
     assert supported and set(job.prime_tower_positions) == supported
     assert_towers_stay_where_bambu_keeps_them(job, 0.32, size=lambda design: design.size)
     gaps = job.placement_policy["plate_group_minimum_model_gap_mm"]
