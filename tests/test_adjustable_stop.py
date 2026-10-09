@@ -206,6 +206,10 @@ def test_complete_print_project_uses_shared_h2d_support_conventions(
     assert set(BAMBU_PROCESS_DEFAULTS) <= overrides
     assert {"enable_support", "support_type"} <= overrides
     assert {"wipe_tower_x", "wipe_tower_y"} <= overrides
+    inherited = {"support_filament", "support_interface_top_layers", "support_on_build_plate_only"}
+    assert inherited.isdisjoint(settings)
+    assert inherited.isdisjoint(overrides)
+    assert settings["support_interface_filament"] == "2"
 
     object_settings = {}
     part_names = set()

@@ -15,6 +15,15 @@ from cargo_grid.tiles import hole_placements, tile_joins
 RoofCoverage = Literal["critical", "full"]
 RoofSupportMode = Literal["painted", "auto"]
 OBJECT_AUTO_SUPPORT = {"enable_support": "1", "support_type": "normal(auto)"}
+# Shared by the official H2D processes and Bambu's base process defaults.
+BAMBU_SUPPORT_DEFAULTS = {
+    "support_on_build_plate_only": "0",
+    "support_interface_top_layers": "2",
+    "support_top_z_distance": "0.2",
+    "support_interface_spacing": "0.5",
+    "support_object_xy_distance": "0.35",
+    "support_expansion": "0",
+}
 CRITICAL_PAD_WIDTH_MM = 3.0
 MIN_ENFORCER_HALF_SPAN_MM = 1.0
 
@@ -63,16 +72,12 @@ class RoofSupportSettings:
 
     @property
     def process_override_keys(self) -> set[str]:
-        keys = set(self.native_settings()) - {"filament_map", "filament_map_mode"}
-        if self.contact_mode != "zero-contact":
-            keys.discard("support_on_build_plate_only")
-        return keys
+        return set(self.native_settings()) - {"filament_map", "filament_map_mode"}
 
     def native_settings(self) -> dict[str, str | list[str]]:
         settings: dict[str, str | list[str]] = {
             "enable_support": "1",
             "support_type": "normal(manual)" if self.mode == "painted" else "normal(auto)",
-            "support_filament": "1",
             "support_interface_filament": "2",
             "support_on_build_plate_only": "0",
             "support_interface_top_layers": str(self.interface_layers),
@@ -91,7 +96,11 @@ class RoofSupportSettings:
             )
         if self.foot_expansion is not None and self.foot_expansion != -1:
             settings["raft_first_layer_expansion"] = f"{self.foot_expansion:g}"
-        return settings
+        return {
+            key: value
+            for key, value in settings.items()
+            if BAMBU_SUPPORT_DEFAULTS.get(key) != value
+        }
 
 
 RoofSide = Literal["west", "south", "north", "east"]

@@ -278,18 +278,18 @@ For a two-nozzle PETG part with a PLA contact interface, Cargo-Grid can add remo
 uv run cargo-grid part --build-width-mm 350 --build-depth-mm 320 --build-height-mm 325 --build-margin-mm 37 --width-cells 2 --depth-cells 1 --copy-count 2 --bambu --material "Model PETG" PETG "#778877" --material "Interface PLA" PLA "#dddddd" --nozzle-diameter-mm 0.8 --layer-height-mm 0.32 --roof-support --output outputs/roof-job
 ```
 
-Open `outputs/roof-job/job.3mf` as a project and choose your actual printer, bed, process and filament profiles. Cargo-Grid sets PETG for the model/support base and PLA for the dense top interface, with:
+Open `outputs/roof-job/job.3mf` as a project and choose your actual printer, bed, process and filament profiles. Cargo-Grid leaves the support/raft base at the profile Default, which uses the part's PETG, and selects PLA for the dense top interface, with:
 
 | Setting | Value |
 | --- | --- |
 | Top contact distance | 0 mm |
 | Independent support layer height | off |
 | Top interface spacing | 0 mm |
-| Top interface layers | 2 |
-| Build plate only | off |
+| Top interface layers | profile default: 2 |
+| Build plate only | profile default: off |
 | Support/object XY distance | 0.40 mm |
 
-This zero-gap contact is only for the PETG/PLA pairing. Do not use it with the same material on both sides or an untested pair that may fuse.
+Only settings that differ from the audited Bambu defaults are written and marked as changed. The support base, two interface layers and build-plate-only off are inherited; a requested interface-layer count other than two is kept. If you choose another process profile, recheck those inherited defaults. This zero-gap contact is only for the PETG/PLA pairing. Do not use it with the same material on both sides or an untested pair that may fuse.
 
 Before printing:
 

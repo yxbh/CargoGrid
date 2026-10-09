@@ -86,10 +86,7 @@ def test_auto_mode_keeps_the_zero_contact_keys_with_global_support_on():
     assert settings == {
         "enable_support": "1",
         "support_type": "normal(auto)",
-        "support_filament": "1",
         "support_interface_filament": "2",
-        "support_on_build_plate_only": "0",
-        "support_interface_top_layers": "2",
         "support_top_z_distance": "0",
         "support_interface_spacing": "0",
         "independent_support_layer_height": "0",
@@ -100,19 +97,14 @@ def test_auto_mode_keeps_the_zero_contact_keys_with_global_support_on():
         "support_top_z_distance",
         "independent_support_layer_height",
         "support_interface_spacing",
-        "support_interface_top_layers",
-        "support_on_build_plate_only",
     } <= AUTO.process_override_keys
 
 
-def test_painted_mode_settings_and_key_order_are_unchanged():
+def test_painted_mode_keeps_manual_support_and_omits_inherited_defaults():
     assert list(RoofSupportSettings().native_settings()) == [
         "enable_support",
         "support_type",
-        "support_filament",
         "support_interface_filament",
-        "support_on_build_plate_only",
-        "support_interface_top_layers",
         "support_top_z_distance",
         "support_interface_spacing",
         "independent_support_layer_height",

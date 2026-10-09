@@ -13,18 +13,21 @@ from cargo_grid import BuildVolume, Tile
 from cargo_grid.cli import main
 from cargo_grid.export import BambuSettings, Material, write_3mf
 from cargo_grid.jobs import Job, tile_design
-from cargo_grid.roof_support import RoofSupportSettings
+from cargo_grid.roof_support import BAMBU_SUPPORT_DEFAULTS, RoofSupportSettings
 
 CONTACT = {
     "support_top_z_distance": "0",
     "independent_support_layer_height": "0",
     "support_interface_spacing": "0",
-    "support_interface_top_layers": "2",
-    "support_on_build_plate_only": "0",
+}
+INHERITED_SUPPORT = {
+    "support_filament",
+    "support_interface_top_layers",
+    "support_on_build_plate_only",
 }
 
 
-def test_default_contact_has_all_five_explicit_invariants():
+def test_default_contact_overrides_only_changed_settings():
     settings = RoofSupportSettings()
     native = settings.native_settings()
     assert settings.contact_mode == "zero-contact"
@@ -32,7 +35,9 @@ def test_default_contact_has_all_five_explicit_invariants():
     assert set(CONTACT) <= settings.process_override_keys
     assert native["support_object_xy_distance"] == "0.4"
     assert "support_object_xy_distance" in settings.process_override_keys
-    assert native["support_filament"] == "1" and native["support_interface_filament"] == "2"
+    assert native["support_interface_filament"] == "2"
+    assert INHERITED_SUPPORT.isdisjoint(native)
+    assert INHERITED_SUPPORT.isdisjoint(settings.process_override_keys)
     assert (
         not {
             "support_expansion",
@@ -62,9 +67,37 @@ def test_zero_contact_rejects_insufficient_or_sparse_interface(changes):
 def test_explicit_gapped_mode_does_not_force_synchronized_contact():
     settings = RoofSupportSettings(0.2, 1, 0.5)
     assert settings.contact_mode == "gapped"
-    assert settings.native_settings()["support_top_z_distance"] == "0.2"
-    assert settings.native_settings()["support_object_xy_distance"] == "0.35"
+    assert "support_top_z_distance" not in settings.native_settings()
+    assert "support_object_xy_distance" not in settings.native_settings()
+    assert "support_expansion" not in settings.native_settings()
+    assert "support_interface_spacing" not in settings.native_settings()
     assert "independent_support_layer_height" not in settings.native_settings()
+
+
+@pytest.mark.parametrize("mode", ["painted", "auto"])
+@pytest.mark.parametrize(
+    "changes,expected",
+    [
+        ({}, {}),
+        ({"interface_layers": 3}, {"support_interface_top_layers": "3"}),
+        (
+            {"top_gap": 0.3, "interface_layers": 1, "interface_spacing": 0.6},
+            {
+                "support_top_z_distance": "0.3",
+                "support_interface_top_layers": "1",
+                "support_interface_spacing": "0.6",
+            },
+        ),
+        ({"foot_expansion": 0}, {"raft_first_layer_expansion": "0"}),
+    ],
+)
+def test_default_filtering_preserves_requested_nondefault_values(mode, changes, expected):
+    settings = RoofSupportSettings(mode=mode, **changes)
+    native = settings.native_settings()
+    assert {key: native[key] for key in expected} == expected
+    assert expected.keys() <= settings.process_override_keys
+    assert all(BAMBU_SUPPORT_DEFAULTS.get(key) != value for key, value in native.items())
+    assert "support_filament" not in native
 
 
 def test_zero_contact_selects_the_passing_side_clearance_witness():
@@ -135,6 +168,8 @@ def test_cli_defaults_encode_contact_intent_and_preserve_markers(tmp_path):
         settings = json.loads(archive.read("Metadata/project_settings.config"))
         assert {key: settings[key] for key in CONTACT} == CONTACT
         assert set(CONTACT) <= set(settings["different_settings_to_system"][0].split(";"))
+        assert INHERITED_SUPPORT.isdisjoint(settings)
+        assert INHERITED_SUPPORT.isdisjoint(settings["different_settings_to_system"][0].split(";"))
 
 
 def test_general_same_material_project_gets_no_contact_override(tmp_path):
