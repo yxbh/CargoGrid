@@ -417,7 +417,9 @@ def test_cli_h2d_pull_handle_extras_inherit_global_support_with_a_pla_interface(
         objects = archive.read("Metadata/model_settings.config").decode()
     assert project["filament_type"] == ["PETG", "PLA"]
     assert (project["enable_support"], project["support_type"]) == ("1", "normal(auto)")
-    assert (project["support_filament"], project["support_interface_filament"]) == ("1", "2")
+    # The support base inherits the profile Default (the part's PETG); only the interface is PLA.
+    assert "support_filament" not in project and project["support_interface_filament"] == "2"
+    assert "support_filament" not in project["different_settings_to_system"][0].split(";")
     assert project["support_top_z_distance"] == "0"
     # Both handles inherit global support, so neither carries a per-object override.
     assert 'key="enable_support"' not in objects and 'key="support_type"' not in objects
