@@ -4,7 +4,6 @@ import pytest
 from build123d import Box
 from tower_checks import assert_towers_stay_where_bambu_keeps_them
 
-from cargo_grid import plates as plates_module
 from cargo_grid.jobs import Design, Job
 from cargo_grid.packing import TowerClearance, h2d_common_build
 from cargo_grid.parameters import BuildVolume, Exclusion
@@ -21,15 +20,8 @@ from cargo_grid.plates import (
 )
 
 
-def _design(name, size, supported=False):
-    return Design(name, Box(*size), {"family": "test", "supported": supported})
-
-
-@pytest.fixture
-def stub_support(monkeypatch):
-    monkeypatch.setattr(
-        plates_module, "needs_auto_support", lambda design: design.parameters["supported"]
-    )
+def _design(name, size):
+    return Design(name, Box(*size), {"family": "test"})
 
 
 def _size(design):
@@ -51,12 +43,12 @@ def test_groups_get_consecutive_named_plates_without_towers_by_default():
     assert set(plan.plate_builds.values()) == {h2d_common_build()}
 
 
-def test_h2d_auto_support_towers_only_plates_with_supported_designs(stub_support):
+def test_h2d_global_auto_support_reserves_towers_for_every_group():
     groups = [
         PlateGroup("Plain", [_design("p", (50, 50, 10))], 4),
         PlateGroup(
             "Supported",
-            [_design("s", (50, 50, 10), True), _design("t", (50, 50, 10))],
+            [_design("s", (50, 50, 10)), _design("t", (50, 50, 10))],
             4,
         ),
     ]
@@ -64,38 +56,38 @@ def test_h2d_auto_support_towers_only_plates_with_supported_designs(stub_support
         groups, h2d_common_build(), size=_size, auto_roof_support=True, layer_height_mm=0.32
     )
     reservation = _H2DTowerLayout(BambuTowerEstimate(0.32)).reserve(10)
-    assert plan.prime_tower_positions == {1: (284.49, 15.0)} == {1: reservation.origin}
-    assert plan.prime_tower_reaches == {1: reservation.reach}
+    assert plan.prime_tower_positions == {0: reservation.origin, 1: reservation.origin}
+    assert plan.prime_tower_reaches == {0: reservation.reach, 1: reservation.reach}
     clear = TowerClearance(
         H2D_TOWER_LEFT_CLEARANCE_MM,
         AUTO_SUPPORT_TOWER_CLEARANCE_MM,
         AUTO_SUPPORT_TOWER_CLEARANCE_MM,
         AUTO_SUPPORT_TOWER_CLEARANCE_MM,
     )
-    assert plan.prime_tower_clearances == {1: clear}
-    assert plan.group_gaps == {"Plain": 4, "Supported": 4 + AUTO_SUPPORT_FOOT_ALLOWANCE_MM}
-    assert plan.plate_builds[0] == h2d_common_build()
+    assert plan.prime_tower_clearances == {0: clear, 1: clear}
+    assert plan.group_gaps == dict.fromkeys(
+        ("Plain", "Supported"), 4 + AUTO_SUPPORT_FOOT_ALLOWANCE_MM
+    )
+    assert plan.plate_builds[0] == reservation.build
     assert plan.plate_builds[1] == reservation.build
     k0, _, _, l1 = clear.grow(reservation.bounds)
     for design, placement in zip(plan.designs, plan.placements):
-        if placement.plate == 1:
-            assert placement.x + _size(design)[0] <= k0 or placement.y >= l1
+        assert placement.x + _size(design)[0] <= k0 or placement.y >= l1
     record = plan.auto_roof_support
-    assert record["prime_tower_plates"] == [2]
-    assert record["prime_tower_groups"] == ["Supported"]
-    assert record["prime_tower_origins_mm"] == {2: (284.49, 15.0)}
+    assert record["prime_tower_plates"] == [1, 2]
+    assert record["prime_tower_groups"] == ["Plain", "Supported"]
+    assert record["prime_tower_origins_mm"] == {1: reservation.origin, 2: reservation.origin}
     assert record["model_clearance_to_tower_bounds_mm"]["left"] == H2D_TOWER_LEFT_CLEARANCE_MM
 
 
-def test_h2d_auto_support_needs_the_layer_height(stub_support):
-    groups = [PlateGroup("S", [_design("s", (50, 50, 10), True)], 4)]
+def test_h2d_auto_support_needs_the_layer_height():
+    groups = [PlateGroup("S", [_design("s", (50, 50, 10))], 4)]
     with pytest.raises(ValueError, match="layer height"):
         plan_plates(groups, h2d_common_build(), size=_size, auto_roof_support=True)
 
 
 def test_global_auto_support_reserves_every_inheriting_plate():
-    designs = [_design("plain", (50, 50, 10)), _design("protected", (50, 50, 10))]
-    designs[1].bambu_object_settings = {"enable_support": "0"}
+    designs = [_design("plain", (50, 50, 10)), _design("other", (50, 50, 10))]
     plan = plan_plates(
         [PlateGroup(design.name, [design], 4) for design in designs],
         h2d_common_build(),
@@ -103,8 +95,8 @@ def test_global_auto_support_reserves_every_inheriting_plate():
         auto_roof_support=True,
         layer_height_mm=0.32,
     )
-    assert set(plan.prime_tower_positions) == {0}
-    assert plan.group_gaps == {"plain": 8, "protected": 4}
+    assert set(plan.prime_tower_positions) == {0, 1}
+    assert plan.group_gaps == {"plain": 8, "other": 8}
 
 
 @pytest.mark.parametrize(
@@ -132,9 +124,9 @@ def test_bambu_tower_estimate_matches_bambu_positions(layer_height, height, side
     assert BambuTowerEstimate.brim_mm(50) == 4 and BambuTowerEstimate.brim_mm(150) == 8
 
 
-def test_h2d_towers_keep_tiles_with_a_five_cell_side_beside_them(stub_support):
+def test_h2d_towers_keep_tiles_with_a_five_cell_side_beside_them():
     """A 246 mm-wide tile at the inset edge still fits beside the 0.24 mm-layer tower."""
-    wide = _design("wide", (246, 306, 14.92), True)
+    wide = _design("wide", (246, 306, 14.92))
     plan = plan_plates(
         [PlateGroup("Tiles", [wide], 8)],
         h2d_common_build(),
@@ -157,10 +149,10 @@ def test_h2d_towers_keep_tiles_with_a_five_cell_side_beside_them(stub_support):
     assert_towers_stay_where_bambu_keeps_them(job, 0.24, size=_size)
 
 
-def test_generic_build_uses_a_front_left_corner_and_reports_unfit_designs(stub_support):
+def test_generic_build_uses_a_front_left_corner_and_reports_unfit_designs():
     build = BuildVolume(200, 200, 50)
     wide = _design("wide", (190, 190, 10))
-    groups = [PlateGroup("G", [_design("s", (40, 40, 10), True), wide], 2)]
+    groups = [PlateGroup("G", [_design("s", (40, 40, 10)), wide], 2)]
     plan = plan_plates(groups, build, size=_size, auto_roof_support=True)
     assert plan.unfit == [wide]
     (origin,) = set(plan.prime_tower_positions.values())

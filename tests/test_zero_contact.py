@@ -10,10 +10,14 @@ from zipfile import ZipFile
 import pytest
 
 from cargo_grid import BuildVolume, Tile
-from cargo_grid.cli import main
+from cargo_grid.cli import H2D_PROFILES, main
 from cargo_grid.export import BambuSettings, Material, write_3mf
 from cargo_grid.jobs import Job, tile_design
-from cargo_grid.roof_support import BAMBU_SUPPORT_DEFAULTS, RoofSupportSettings
+from cargo_grid.roof_support import (
+    BAMBU_SUPPORT_DEFAULT_PROCESSES,
+    BAMBU_SUPPORT_DEFAULTS,
+    RoofSupportSettings,
+)
 
 CONTACT = {
     "support_top_z_distance": "0",
@@ -98,6 +102,77 @@ def test_default_filtering_preserves_requested_nondefault_values(mode, changes, 
     assert expected.keys() <= settings.process_override_keys
     assert all(BAMBU_SUPPORT_DEFAULTS.get(key) != value for key, value in native.items())
     assert "support_filament" not in native
+
+
+def test_audited_support_processes_match_the_supported_h2d_pairs():
+    assert BAMBU_SUPPORT_DEFAULT_PROCESSES == {profile.process for profile in H2D_PROFILES.values()}
+
+
+@pytest.mark.parametrize("mode", ["painted", "auto"])
+@pytest.mark.parametrize(
+    "settings",
+    [RoofSupportSettings(), RoofSupportSettings(top_gap=0.2, interface_spacing=0.5)],
+    ids=["zero-contact", "gapped"],
+)
+def test_unknown_process_keeps_all_requested_support_values(mode, settings):
+    settings = replace(settings, mode=mode)
+    native = settings.native_settings(process_profile="0.16mm Optimal @BBL X1C")
+    assert native["support_on_build_plate_only"] == "0"
+    assert native["support_interface_top_layers"] == "2"
+    assert native["support_top_z_distance"] == f"{settings.top_gap:g}"
+    assert native["support_interface_spacing"] == f"{settings.interface_spacing:g}"
+    overrides = settings.native_process_override_keys(process_profile="0.16mm Optimal @BBL X1C")
+    assert set(native) == overrides
+    if settings.contact_mode == "gapped":
+        assert native["support_expansion"] == "0"
+        assert native["support_object_xy_distance"] == "0.35"
+        assert "independent_support_layer_height" not in native
+    else:
+        assert native["independent_support_layer_height"] == "0"
+        assert native["support_object_xy_distance"] == "0.4"
+        assert "support_expansion" not in native
+
+
+@pytest.fixture(scope="module")
+def profile_test_tile():
+    return tile_design(Tile(1, 1))
+
+
+@pytest.mark.parametrize(
+    "process_profile",
+    [None, *(profile.process for profile in H2D_PROFILES.values()), "0.16mm Optimal @BBL X1C"],
+)
+def test_export_filters_only_audited_process_defaults(process_profile, profile_test_tile, tmp_path):
+    support = RoofSupportSettings(top_gap=0.2, interface_spacing=0.5)
+    bambu = BambuSettings(
+        (Material("model", "PETG", "#778877"), Material("interface", "PLA", "#dddddd")),
+        0.4,
+        0.2,
+        support,
+        printer_settings_id="Bambu Lab X1 Carbon 0.4 nozzle" if process_profile else None,
+        print_settings_id=process_profile,
+    )
+    project = tmp_path / "gapped.3mf"
+    write_3mf(Job([profile_test_tile], BuildVolume(150, 150, 50), "part"), project, bambu=bambu)
+    with ZipFile(project) as archive:
+        native = json.loads(archive.read("Metadata/project_settings.config"))
+    overrides = set(native["different_settings_to_system"][0].split(";"))
+    requested = {
+        "support_top_z_distance": "0.2",
+        "support_interface_spacing": "0.5",
+        "support_interface_top_layers": "2",
+        "support_on_build_plate_only": "0",
+        "support_expansion": "0",
+        "support_object_xy_distance": "0.35",
+    }
+    if process_profile is None or process_profile in BAMBU_SUPPORT_DEFAULT_PROCESSES:
+        assert requested.keys().isdisjoint(native)
+        assert requested.keys().isdisjoint(overrides)
+    else:
+        assert {key: native[key] for key in requested} == requested
+        assert requested.keys() <= overrides
+    assert "support_filament" not in native
+    assert "independent_support_layer_height" not in native
 
 
 def test_zero_contact_selects_the_passing_side_clearance_witness():

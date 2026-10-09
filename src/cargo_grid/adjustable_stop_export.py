@@ -94,7 +94,7 @@ from cargo_grid.plates import (
     BambuTowerEstimate,
 )
 from cargo_grid.prepared import PreparedShape
-from cargo_grid.roof_support import OBJECT_AUTO_SUPPORT, RoofSupportSettings
+from cargo_grid.roof_support import GLOBAL_AUTO_SUPPORT_SETTINGS, RoofSupportSettings
 from cargo_grid.tiles import make_tile
 
 CORE_NAMESPACE = "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"
@@ -268,11 +268,12 @@ def _apply_adjustable_stop_support_settings(path: Path) -> None:
         entries = {name: source.read(name) for name in source.namelist()}
     settings = json.loads(entries["Metadata/project_settings.config"])
     support = RoofSupportSettings(mode="auto")
-    settings.update(support.native_settings())
+    process_profile = settings["print_settings_id"]
+    settings.update(support.native_settings(process_profile=process_profile))
     existing = settings.get("different_settings_to_system", [""])
     overrides = set(existing[0].split(";")) if existing and existing[0] else set()
     overrides.update(BAMBU_PROCESS_DEFAULTS)
-    overrides.update(support.process_override_keys)
+    overrides.update(support.native_process_override_keys(process_profile=process_profile))
     settings["different_settings_to_system"] = [
         ";".join(sorted(overrides)),
         *[""] * (len(settings["filament_settings_id"]) + 1),
@@ -298,23 +299,13 @@ def _apply_adjustable_stop_support_settings(path: Path) -> None:
         )
         if design is None:
             raise ValueError(f"unknown adjustable-stop print object: {name}")
-        for key, value in OBJECT_AUTO_SUPPORT.items():
-            child = metadata.get(key)
-            if child is not None and child.get("value") == value:
-                item.remove(child)
         configured[design] = {child.get("key") for child in item.findall("metadata")}
     expected = {"fixed_base", "moving_wall", "keeper", "prong_lock_clip"}
     if set(configured) != expected:
         raise ValueError("adjustable-stop project does not contain its four expected objects")
     for design in expected:
-        if configured[design] & OBJECT_AUTO_SUPPORT.keys():
+        if configured[design] & GLOBAL_AUTO_SUPPORT_SETTINGS.keys():
             raise ValueError(f"{design} must not have an object support override")
-
-    entries["Metadata/model_settings.config"] = ET.tostring(
-        model,
-        encoding="utf-8",
-        xml_declaration=True,
-    )
     patched = path.with_suffix(".patched")
     with ZipFile(patched, "w", ZIP_DEFLATED) as target:
         for name, data in entries.items():
