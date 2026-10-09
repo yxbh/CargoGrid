@@ -46,8 +46,7 @@ STRAP_BAR_DEPTH_MM = 12.0
 STRAP_BAR_THICKNESS_MM = 8.0
 STRAP_BAR_CENTRE_OFFSET_MM = 25.0
 STRAP_BAR_TOP_RADIUS_MM = 3.0
-NO_STRAP_BAR_PRINT_ROTATION_X = 180.0
-# Provisional margin against tipping while the strap-bar handle prints on its front; not measured.
+# Provisional margin against tipping while a handle prints on its front; not measured.
 MIN_FRONT_REST_MARGIN_MM = 5.0
 
 _SHARP_EDGE_DEGREES = 5.0
@@ -140,7 +139,9 @@ def _tangent_tilt(lower: tuple[float, float], radius: float, grip, grip_radius: 
     return atan2(dy, dz) + asin((radius - grip_radius) / hypot(dy, dz))
 
 
-def _front_rest(interface: Interface) -> tuple[float, list[tuple[tuple[float, float], float]]]:
+def _front_rest(
+    interface: Interface, strap_bar: bool = True
+) -> tuple[float, list[tuple[tuple[float, float], float]]]:
     """Front rest tilt and the two YZ arcs (centre, radius) it touches: grip, then lower edge."""
     front = grip_front_y_mm(interface)
     grip = (
@@ -162,7 +163,7 @@ def _front_rest(interface: Interface) -> tuple[float, list[tuple[tuple[float, fl
     seat = ((bisector[0] * offset, bisector[1] * offset), SEAT_EDGE_RADIUS_MM)
     tilt, lower = max(
         (_tangent_tilt(centre, radius, grip[0], grip[1]), (centre, radius))
-        for centre, radius in (bar, seat)
+        for centre, radius in ((bar, seat) if strap_bar else (seat,))
     )
     if not 0 < tilt < atan2(front, FLARE_NECK_MM):
         raise ValueError("pull handle front rest face is outside its contact edges")
@@ -170,25 +171,25 @@ def _front_rest(interface: Interface) -> tuple[float, list[tuple[tuple[float, fl
 
 
 def print_rotation_x(strap_bar: bool, interface: Interface = Interface()) -> float:
-    """X rotation that lays each version on its least-support resting face.
+    """X rotation that lays either version on its front, its least-support resting face.
 
-    Without the strap bar the flat grip top goes on the bed. With it, the handle lies on its
-    front against the rounded top-front grip edge and the next convex edge below it: the strap
-    bar's top-front edge, or the front seat edge on deeper handles. These edges run along X, so
-    the rest face is a common tangent in the side (YZ) view. Of the candidate tangents through
-    the grip, the hull face is the one tilted furthest toward the top.
+    The handle rests on the rounded top-front grip edge and the next convex edge below it: the
+    strap bar's top-front edge, or the front seat edge on deeper handles and on the version
+    without the bar. These edges run along X, so the rest face is a common tangent in the side
+    (YZ) view. Of the candidate tangents through the grip, the hull face is the one tilted
+    furthest toward the top.
     """
-    if not strap_bar:
-        return NO_STRAP_BAR_PRINT_ROTATION_X
-    return 90.0 + degrees(_front_rest(interface)[0])
+    return 90.0 + degrees(_front_rest(interface, strap_bar)[0])
 
 
-def front_rest_margin_mm(shape: Part, interface: Interface = Interface()) -> float:
-    """How far the centre of mass sits inside the strap-bar handle's front rest contacts.
+def front_rest_margin_mm(
+    shape: Part, interface: Interface = Interface(), strap_bar: bool = True
+) -> float:
+    """How far the centre of mass sits inside the handle's front rest contacts.
 
     Measured in the bed plane across the two contact lines; negative means it would tip over.
     """
-    tilt, arcs = _front_rest(interface)
+    tilt, arcs = _front_rest(interface, strap_bar)
     normal = (-cos(tilt), sin(tilt))
     along = (sin(tilt), cos(tilt))
     contacts = [
@@ -395,15 +396,15 @@ def make_pull_handle(spec: PullHandle = PullHandle()) -> Part:
     part = part.fillet(PLUG_ROOT_RADIUS_MM, roots).clean()
     if not part.is_valid or len(part.solids()) != 1 or part.volume <= 0:
         raise ValueError("pull handle: invalid or disconnected geometry")
-    if spec.strap_bar:
-        margin = front_rest_margin_mm(part, interface)
-        if margin < MIN_FRONT_REST_MARGIN_MM:
-            raise ValueError(
-                f"the strap-bar pull handle wouldn't rest steadily on its front for printing "
-                f"with {interface.height:g} mm tiles: its centre of mass is {margin:.1f} mm "
-                f"inside its resting edges, and at least {MIN_FRONT_REST_MARGIN_MM:g} mm is "
-                "needed; use a thinner tile setting"
-            )
+    margin = front_rest_margin_mm(part, interface, spec.strap_bar)
+    if margin < MIN_FRONT_REST_MARGIN_MM:
+        raise ValueError(
+            f"the {'strap-bar' if spec.strap_bar else 'no-strap-bar'} pull handle wouldn't "
+            f"rest steadily on its front for printing "
+            f"with {interface.height:g} mm tiles: its centre of mass is {margin:.1f} mm "
+            f"inside its resting edges, and at least {MIN_FRONT_REST_MARGIN_MM:g} mm is "
+            "needed; use a thinner tile setting"
+        )
     return part
 
 

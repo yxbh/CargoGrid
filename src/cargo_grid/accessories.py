@@ -1033,11 +1033,8 @@ def bambu_print_policy(parameters: dict) -> BambuPrintPolicy:
     elif family == "vertical-tile-bracket" and panel_height_cells is not None:
         object_settings = {"enable_support": "1", "support_type": "normal(auto)"}
     elif family == PULL_HANDLE_FAMILY:
-        object_settings = (
-            {"enable_support": "1", "support_type": "normal(auto)"}
-            if parameters["strap_bar"]
-            else {}
-        )
+        # Both versions print on their front, over the hand opening and the strap bar.
+        object_settings = {"enable_support": "1", "support_type": "normal(auto)"}
     else:
         object_settings = dict(BAMBU_OBJECT_SETTINGS.get(family, {}))
     return BambuPrintPolicy(rotation_x, rotation_y, object_settings)

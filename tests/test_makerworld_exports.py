@@ -30,24 +30,15 @@ def test_variants_cover_each_published_set_and_nozzle_once():
         assert args.h2d_dual_safe and args.bambu and args.no_stl
         assert args.layer_height_mm == profiles.layer_height_mm
         assert variant.name.split("_")[:2] == ["CargoGrid", "H2D"]
-        if args.command == "extras" and args.recipe == "pull-handle":
-            assert variant.name == (
-                f"CargoGrid_H2D_Pull-Handle-Set_{args.nozzle_diameter_mm:g}mm-Nozzle"
-            )
-            assert not args.roof_support and args.roof_support_mode is None
-            assert [material[0] for material in args.material] == [profiles.petg]
-            assert args.solid_bottom_thickness_mm == 0
-            continue
-        if args.command == "extras" and args.recipe == "adjustable-stop":
-            assert variant.name == (
-                f"CargoGrid_H2D_Adjustable-Stop_{args.nozzle_diameter_mm:g}mm-Nozzle"
-            )
-            assert args.roof_support and args.roof_support_mode == "auto"
-            assert [material[0] for material in args.material] == [profiles.petg, profiles.pla]
-            assert args.solid_bottom_thickness_mm == 0
-            continue
         assert args.roof_support and args.roof_support_mode == "auto"
         assert [material[0] for material in args.material] == [profiles.petg, profiles.pla]
+        titles = {"pull-handle": "Pull-Handle-Set", "adjustable-stop": "Adjustable-Stop"}
+        if args.command == "extras" and args.recipe in titles:
+            assert variant.name == (
+                f"CargoGrid_H2D_{titles[args.recipe]}_{args.nozzle_diameter_mm:g}mm-Nozzle"
+            )
+            assert args.solid_bottom_thickness_mm == 0
+            continue
         assert variant.name.endswith(f"_Auto-Support_{args.nozzle_diameter_mm:g}mm-Nozzle")
         assert ("_Solid-Bottom-1.92mm_" in variant.name) == (args.solid_bottom_thickness_mm > 0)
         assert ("Zeekr" in variant.name) == (args.command == "extras")

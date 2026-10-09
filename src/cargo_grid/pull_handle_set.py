@@ -61,20 +61,25 @@ def extras_job(
     placement_build: BuildVolume | None = None,
     gap: float = 2,
     orient_for_bambu: bool = False,
+    auto_roof_support: bool = False,
+    layer_height_mm: float = 0.32,
 ) -> Job:
     """One handle of each version, each on its own named plate.
 
     ``orient_for_bambu`` packs the Bambu print poses; otherwise the source orientation.
+    ``auto_roof_support`` reserves a prime tower on the strap-bar handle's plate, whose object
+    support then gets the PLA interface; ``layer_height_mm`` sets where Bambu keeps the tower.
     """
     positive("pull handle packing gap", gap, zero=True)
     specs = [PullHandle(strap_bar=strap_bar, interface=interface) for strap_bar in (True, False)]
     datums = pull_handle_datums(specs[0])
     envelope = placement_build or build
-    designs, sizes = [], {}
+    designs, sizes, rest_margins = [], {}, {}
     for spec in specs:
         design = pull_handle_design(spec)
-        if spec.strap_bar:
-            rest_margin = front_rest_margin_mm(design.shape, spec.interface)
+        rest_margins[spec.strap_bar] = front_rest_margin_mm(
+            design.shape, spec.interface, spec.strap_bar
+        )
         size = design.bambu_size if orient_for_bambu else design.size
         if envelope.placement(size) is None or build.placement(size) is None:
             raise ValueError(
@@ -89,6 +94,8 @@ def extras_job(
         ],
         envelope,
         size=lambda design: sizes[id(design)],
+        auto_roof_support=auto_roof_support,
+        layer_height_mm=layer_height_mm,
     )
     if plates.unfit:
         raise ValueError(f"{plates.unfit[0].name} does not fit its plate area")
@@ -100,12 +107,21 @@ def extras_job(
         print_placements=plates.placements,
         plate_names=plates.plate_names,
         plate_builds=plates.plate_builds,
+        prime_tower=plates.prime_tower,
+        prime_tower_positions=plates.prime_tower_positions,
+        prime_tower_reaches=plates.prime_tower_reaches,
+        prime_tower_clearances=plates.prime_tower_clearances,
         placement_policy={
             "collection": PULL_HANDLE_FAMILY,
             "minimum_model_gap_mm": gap,
             "plate_group_minimum_model_gap_mm": plates.group_gaps,
             "one_plate_per_version": True,
             "print_poses_packed": orient_for_bambu,
+            **(
+                {"auto_roof_support": plates.auto_roof_support}
+                if plates.auto_roof_support is not None
+                else {}
+            ),
         },
         manifest_metadata={
             "scope": (
@@ -126,22 +142,28 @@ def extras_job(
             "print_poses": {
                 "strap_bar": (
                     "lies on its front on the grip's top-front edge and the strap-bar or "
-                    "seat edge below it, with object-scoped normal Auto support"
+                    "seat edge below it"
                 ),
-                "no_strap_bar": "grip top on the bed, plugs upward, no object support",
-                "strap_bar_centre_of_mass_inside_rest_edges_mm": round(rest_margin, 2),
+                "no_strap_bar": "lies on its front on the grip's top-front and seat edges",
+                "support": (
+                    "normal Auto on both: an object override in PETG-only projects, or inherited "
+                    "global support with the PLA interface and a prime tower on each plate with "
+                    "auto roof support"
+                ),
+                "strap_bar_centre_of_mass_inside_rest_edges_mm": round(rest_margins[True], 2),
+                "no_strap_bar_centre_of_mass_inside_rest_edges_mm": round(rest_margins[False], 2),
             },
             "physical_evidence": (
                 "An earlier 2x1 strap-bar prototype at the standard 60/13 settings with a 34 mm "
                 "hand opening was printed in the same front-down pose in PETG with a 0.8 mm "
                 "nozzle and 0.32 mm layers; the user reported that the X plugs fitted a tile and "
-                "the support came off cleanly, and that the opening was too tight. This 40 mm "
-                "version, the no-strap-bar version, other unit sizes and thicknesses, insertion "
+                "the support came off cleanly, and that the opening was too tight. That support "
+                "was PETG only. This 40 mm version, the PLA support interface, the no-strap-bar "
+                "version in its front-down pose, other unit sizes and thicknesses, insertion "
                 "force, retention and pull strength have not been tested."
             ),
             "limitations": (
-                "No load, pull or restraint rating. The X plugs are held only by their fit, "
-                "and the no-strap-bar print pose loads the posts across their layers."
+                "No load, pull or restraint rating. The X plugs are held only by their fit."
             ),
         },
     )
