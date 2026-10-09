@@ -27,6 +27,12 @@ BAMBU_SUPPORT_DEFAULTS = {
     "support_object_xy_distance": "0.35",
     "support_expansion": "0",
 }
+BAMBU_SUPPORT_DEFAULT_PROCESSES = frozenset(
+    (
+        "0.32mm Balanced Strength @BBL H2D 0.8 nozzle",
+        "0.24mm Standard @BBL H2D",
+    )
+)
 CRITICAL_PAD_WIDTH_MM = 3.0
 MIN_ENFORCER_HALF_SPAN_MM = 1.0
 
@@ -75,9 +81,19 @@ class RoofSupportSettings:
 
     @property
     def process_override_keys(self) -> set[str]:
-        return set(self.native_settings()) - {"filament_map", "filament_map_mode"}
+        return self.native_process_override_keys()
 
-    def native_settings(self) -> dict[str, str | list[str]]:
+    def native_process_override_keys(self, *, process_profile: str | None = None) -> set[str]:
+        return set(self.native_settings(process_profile=process_profile)) - {
+            "filament_map",
+            "filament_map_mode",
+        }
+
+    def native_settings(self, *, process_profile: str | None = None) -> dict[str, str | list[str]]:
+        """Inherit audited defaults only for the common base or supported H2D processes."""
+        inherit_defaults = (
+            process_profile is None or process_profile in BAMBU_SUPPORT_DEFAULT_PROCESSES
+        )
         settings: dict[str, str | list[str]] = {
             "enable_support": "1",
             "support_type": "normal(manual)" if self.mode == "painted" else "normal(auto)",
@@ -86,9 +102,13 @@ class RoofSupportSettings:
             "support_top_z_distance": f"{self.top_gap:g}",
             "support_interface_spacing": f"{self.interface_spacing:g}",
         }
+        if not inherit_defaults:
+            settings["support_on_build_plate_only"] = "0"
         if self.contact_mode == "zero-contact":
             settings["independent_support_layer_height"] = "0"
             settings["support_object_xy_distance"] = "0.4"
+        elif not inherit_defaults:
+            settings.update(support_expansion="0", support_object_xy_distance="0.35")
         if self.nozzle_map is not None:
             settings.update(
                 filament_map=[str(n) for n in self.nozzle_map],
@@ -99,7 +119,7 @@ class RoofSupportSettings:
         return {
             key: value
             for key, value in settings.items()
-            if BAMBU_SUPPORT_DEFAULTS.get(key) != value
+            if not inherit_defaults or BAMBU_SUPPORT_DEFAULTS.get(key) != value
         }
 
 

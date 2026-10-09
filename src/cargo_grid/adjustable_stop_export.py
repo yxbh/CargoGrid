@@ -268,11 +268,12 @@ def _apply_adjustable_stop_support_settings(path: Path) -> None:
         entries = {name: source.read(name) for name in source.namelist()}
     settings = json.loads(entries["Metadata/project_settings.config"])
     support = RoofSupportSettings(mode="auto")
-    settings.update(support.native_settings())
+    process_profile = settings["print_settings_id"]
+    settings.update(support.native_settings(process_profile=process_profile))
     existing = settings.get("different_settings_to_system", [""])
     overrides = set(existing[0].split(";")) if existing and existing[0] else set()
     overrides.update(BAMBU_PROCESS_DEFAULTS)
-    overrides.update(support.process_override_keys)
+    overrides.update(support.native_process_override_keys(process_profile=process_profile))
     settings["different_settings_to_system"] = [
         ";".join(sorted(overrides)),
         *[""] * (len(settings["filament_settings_id"]) + 1),

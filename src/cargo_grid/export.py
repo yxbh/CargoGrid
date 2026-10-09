@@ -181,8 +181,10 @@ def _bambu_project_settings(job: Job, bambu: BambuSettings, plate_count: int = 1
         settings["curr_bed_type"] = bambu.bed_type
     overrides = set(BAMBU_PROCESS_DEFAULTS)
     if bambu.roof_support:
-        settings.update(bambu.roof_support.native_settings())
-        overrides.update(bambu.roof_support.process_override_keys)
+        settings.update(bambu.roof_support.native_settings(process_profile=bambu.print_settings_id))
+        overrides.update(
+            bambu.roof_support.native_process_override_keys(process_profile=bambu.print_settings_id)
+        )
     default = next(iter(job.prime_tower_positions.values()), None)
     if job.prime_tower is not None and default is not None:
         # Bambu's default tower is used; only its per-plate position is written.
