@@ -48,7 +48,8 @@ TOWER_BACK_ALLOWANCE_MM = 1.0
 # with a rotated tile and an edge strip whose supported sides faced it.
 TOWER_LEFT_CLEARANCE_MM = 1.5
 H2D_TOWER_LEFT_CLEARANCE_MM = TOWER_LEFT_CLEARANCE_MM
-RECTANGULAR_TOWER_FRONT_ALLOWANCE_MM = 2.0
+# Perimeter plates can put first-layer tower paths 4.914 mm ahead of its stored origin.
+RECTANGULAR_TOWER_FRONT_ALLOWANCE_MM = 5.0
 # At 0.32 mm, native line-rounded rectangular depth needs another millimetre behind the brim.
 RECTANGULAR_TOWER_BACK_ALLOWANCE_MM = {0.24: 1.0, 0.32: 2.0}
 RECTANGULAR_TOWER_WIPE_REACH_MM = 9.75

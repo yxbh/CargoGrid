@@ -252,6 +252,7 @@ def test_rectangular_x2d_estimate_keeps_volume_height_and_body_brim_reservation(
         (0.24, 14.92, (25.75, 12.086, 63.25, 55.414)),
         (0.32, 13, (34.086, 13.586, 63.0, 47.414)),
         (0.32, 14.92, (26.0, 13.586, 54.914, 47.414)),
+        (0.32, 13, (34.086, 10.086, 63.0, 43.914)),
     ],
 )
 def test_rectangular_reservation_covers_measured_all_layer_tower_extrusion(layer, height, printed):
