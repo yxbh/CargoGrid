@@ -245,6 +245,24 @@ def test_rectangular_x2d_estimate_keeps_volume_height_and_body_brim_reservation(
     assert x0 >= 20.5 and y0 >= 0 and y1 <= 256
 
 
+@pytest.mark.parametrize(
+    "layer,height,printed",
+    [
+        (0.24, 13, (25.75, 12.086, 63.25, 55.414)),
+        (0.24, 14.92, (25.75, 12.086, 63.25, 55.414)),
+        (0.32, 13, (34.086, 13.586, 63.0, 47.414)),
+        (0.32, 14.92, (26.0, 13.586, 54.914, 47.414)),
+    ],
+)
+def test_rectangular_reservation_covers_measured_all_layer_tower_extrusion(layer, height, printed):
+    layout = _DualNozzleTowerLayout(
+        X2D, BambuTowerEstimate(layer, prime_volume_mm3=45, width_mm=18)
+    )
+    x0, y0, x1, y1 = layout.reserve(height, front_left=True).bounds
+    assert x0 <= printed[0] and y0 <= printed[1]
+    assert x1 >= printed[2] and y1 >= printed[3]
+
+
 @pytest.mark.parametrize("layer", [0.24, 0.32])
 def test_rectangular_tower_rescues_both_wide_tiles_at_the_ordinary_right_inset(layer):
     from dataclasses import replace
@@ -280,6 +298,11 @@ def test_rectangular_tower_rescues_both_wide_tiles_at_the_ordinary_right_inset(l
 def test_rectangular_estimate_rejects_invalid_widths(width):
     with pytest.raises(ValueError, match="width"):
         BambuTowerEstimate(0.24, width_mm=width)
+
+
+def test_rectangular_estimate_rejects_unmeasured_layers():
+    with pytest.raises(ValueError, match="0.24 or 0.32 mm"):
+        BambuTowerEstimate(0.2, width_mm=18)
 
 
 def test_real_diagonal_rod_fits_above_the_deeper_rectangular_tower():

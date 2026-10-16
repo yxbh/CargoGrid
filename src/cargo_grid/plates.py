@@ -49,6 +49,8 @@ TOWER_BACK_ALLOWANCE_MM = 1.0
 TOWER_LEFT_CLEARANCE_MM = 1.5
 H2D_TOWER_LEFT_CLEARANCE_MM = TOWER_LEFT_CLEARANCE_MM
 RECTANGULAR_TOWER_FRONT_ALLOWANCE_MM = 2.0
+# At 0.32 mm, native line-rounded rectangular depth needs another millimetre behind the brim.
+RECTANGULAR_TOWER_BACK_ALLOWANCE_MM = {0.24: 1.0, 0.32: 2.0}
 RECTANGULAR_TOWER_WIPE_REACH_MM = 9.75
 SIDES = ("left", "front", "right", "back")
 
@@ -77,6 +79,8 @@ class BambuTowerEstimate:
             positive("tower width", self.width_mm)
             if self.width_mm < 2:
                 raise ValueError("Bambu tower width must be at least 2 mm")
+            if self.layer_height not in RECTANGULAR_TOWER_BACK_ALLOWANCE_MM:
+                raise ValueError("rectangular towers require 0.24 or 0.32 mm layers")
 
     def size_mm(self, height: float) -> tuple[float, float]:
         """GUI load-range estimate; a specified width selects the rib-free rectangle."""
@@ -285,7 +289,7 @@ class _DualNozzleTowerLayout(_TowerLayout):
                 max(brim + 1.0, RECTANGULAR_TOWER_WIPE_REACH_MM),
                 brim + RECTANGULAR_TOWER_FRONT_ALLOWANCE_MM,
                 width + max(brim + 1.0, RECTANGULAR_TOWER_WIPE_REACH_MM),
-                depth + brim + TOWER_BACK_ALLOWANCE_MM,
+                depth + brim + RECTANGULAR_TOWER_BACK_ALLOWANCE_MM[self.estimate.layer_height],
             )
             clearance = TowerClearance.uniform(AUTO_SUPPORT_TOWER_CLEARANCE_MM)
             return self._with_keep_out((x, y), reach, clearance)
