@@ -15,6 +15,8 @@ With ``--bambu-studio PATH`` every plate is also sliced by that Bambu Studio exe
 with PETG on each nozzle, before anything is written. The check copy gets the full printer,
 process and filament profiles from that installation and a fixed filament-to-nozzle map; the
 written project is unchanged. Any G-code path conflict or unprintable plate stops the run.
+Generated extrusion must stay inside common reach and the bed; rectangular towers must
+also stay inside the manifest's reserved footprint.
 MakerWorld re-slices uploads and rejects the same conflicts, which the Bambu Studio GUI only
 shows as a warning on the plate being previewed.
 
@@ -251,7 +253,7 @@ def check_copy(project: Path, effective: dict, mapping: tuple[str, ...], target:
     return plates
 
 
-def extrusion_bounds(gcode: str) -> tuple[float, ...] | None:
+def extrusion_bounds(gcode: str, feature: str | None = None) -> tuple[float, ...] | None:
     """Bound generated extrusion, including line width and XY arc extrema, not startup macros."""
     x = y = z = e = width = 0.0
     absolute_e, absolute_xyz = False, True
@@ -283,6 +285,7 @@ def extrusion_bounds(gcode: str) -> tuple[float, ...] | None:
             if (
                 delta > 0
                 and role not in ("unknown", "Custom")
+                and (feature is None or role == feature)
                 and (nx != x or ny != y or "I" in fields or "J" in fields)
             ):
                 if width <= 0:
@@ -319,14 +322,15 @@ def extrusion_bounds(gcode: str) -> tuple[float, ...] | None:
     return bounds
 
 
-def extrusion_problem(sliced: Path) -> str | None:
+def extrusion_problem(sliced: Path, reserved_tower: tuple[float, ...] | None = None) -> str | None:
     with ZipFile(sliced) as archive:
         settings = json.loads(archive.read("Metadata/project_settings.config"))
         printer = next(p for p in PRINTERS.values() if p.model == settings["printer_model"])
         names = [name for name in archive.namelist() if name.endswith(".gcode")]
         if len(names) != 1:
             return f"expected one sliced plate, found {len(names)} G-code files"
-        bounds = extrusion_bounds(archive.read(names[0]).decode())
+        gcode = archive.read(names[0]).decode()
+        bounds = extrusion_bounds(gcode)
     if bounds is None:
         return "sliced plate has no generated extrusion"
     x0, y0, z0, x1, y1, z1 = bounds
@@ -339,10 +343,27 @@ def extrusion_problem(sliced: Path) -> str | None:
         or z1 > printer.common_height_mm
     ):
         return f"all-layer extrusion bounds {bounds} exceed {printer.name} common reach/bed"
+    if reserved_tower is not None:
+        tower = extrusion_bounds(gcode, feature="Prime tower")
+        if tower is not None and (
+            tower[0] < reserved_tower[0]
+            or tower[1] < reserved_tower[1]
+            or tower[3] > reserved_tower[2]
+            or tower[4] > reserved_tower[3]
+        ):
+            return (
+                f"prime-tower extrusion bounds {tower} exceed reserved footprint {reserved_tower}"
+            )
     return None
 
 
-def slice_plate(bambu: Path, project: Path, plate: int, work: Path) -> str | None:
+def slice_plate(
+    bambu: Path,
+    project: Path,
+    plate: int,
+    work: Path,
+    reserved_tower: tuple[float, ...] | None = None,
+) -> str | None:
     """Slice one plate; return Bambu's complaint, or None when it slices cleanly."""
     log = work / f"slice-{plate}.log"
     arguments = ["--datadir", str(work / f"datadir-{plate}"), "--debug", "1", "--arrange", "0"]
@@ -350,7 +371,7 @@ def slice_plate(bambu: Path, project: Path, plate: int, work: Path) -> str | Non
     arguments += ["--export-3mf", str(work / f"sliced-{plate}.3mf"), str(project)]
     code = _run(bambu, arguments, log)
     if code == 0:
-        problem = extrusion_problem(work / f"sliced-{plate}.3mf")
+        problem = extrusion_problem(work / f"sliced-{plate}.3mf", reserved_tower)
         (work / f"sliced-{plate}.3mf").unlink()
         return problem
     (work / f"sliced-{plate}.3mf").unlink(missing_ok=True)
@@ -358,7 +379,13 @@ def slice_plate(bambu: Path, project: Path, plate: int, work: Path) -> str | Non
     return found[0].strip() if found else f"Bambu Studio exited with code {code}"
 
 
-def bambu_problems(project: Path, bambu: Path, work: Path, jobs: int) -> list[str]:
+def bambu_problems(
+    project: Path,
+    bambu: Path,
+    work: Path,
+    jobs: int,
+    tower_bounds: dict[int, tuple[float, ...]] | None = None,
+) -> list[str]:
     """Slice every plate with PETG on each nozzle; list what Bambu Studio refuses."""
     work.mkdir(parents=True)
     effective = effective_settings(project, bambu, work)
@@ -370,7 +397,15 @@ def bambu_problems(project: Path, bambu: Path, work: Path, jobs: int) -> list[st
         plates = check_copy(project, effective, mapping, copy)
         tasks += [(mapping, copy, plate, folder) for plate in range(1, plates + 1)]
     with ThreadPoolExecutor(jobs) as pool:
-        results = list(pool.map(lambda task: slice_plate(bambu, *task[1:]), tasks))
+        reservations = tower_bounds or {}
+        results = list(
+            pool.map(
+                lambda task: slice_plate(
+                    bambu, *task[1:], reserved_tower=reservations.get(task[2])
+                ),
+                tasks,
+            )
+        )
     side = {"1": "left", "2": "right"}
     return [
         f"plate {plate} with PETG on the {side[mapping[0]]} nozzle: {problem}"
@@ -443,8 +478,22 @@ def main(argv: list[str] | None = None) -> int:
             bambu = args.bambu_studio.resolve()
             problems = []
             for variant, folder in zip(selected, folders):
+                manifest = json.loads((folder / "manifest.json").read_text())
+                tower = manifest["export"].get("prime_tower", {})
+                tower_bounds = (
+                    {
+                        plate["plate"]: tuple(plate["reserved_extrusion_bounds_mm"])
+                        for plate in tower["plates"]
+                    }
+                    if "prime_tower_width" in tower.get("process_settings", {})
+                    else None
+                )
                 found = bambu_problems(
-                    folder / "job.3mf", bambu, scratch / f"{variant.name}-check", args.jobs
+                    folder / "job.3mf",
+                    bambu,
+                    scratch / f"{variant.name}-check",
+                    args.jobs,
+                    tower_bounds,
                 )
                 result = f"{len(found)} plate slices refused" if found else "every plate sliced"
                 print(f"{variant.name}: Bambu Studio check, {result}")

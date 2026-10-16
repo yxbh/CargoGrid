@@ -311,6 +311,22 @@ def test_common_reach_check_uses_printed_width_not_just_the_centerline(tmp_path,
         assert "exceed X2D common reach/bed" in problem
 
 
+@pytest.mark.parametrize("rear,passes", [(47.5, True), (47.3, False)])
+def test_rectangular_tower_check_uses_its_actual_reserved_envelope(tmp_path, rear, passes):
+    path = tmp_path / "sliced.3mf"
+    with ZipFile(path, "w") as archive:
+        archive.writestr("Metadata/project_settings.config", '{"printer_model":"Bambu Lab X2D"}')
+        archive.writestr(
+            "Metadata/plate_1.gcode",
+            "M83\nG0 X40 Y45 Z0.4\n; FEATURE: Prime tower\n; LINE_WIDTH: 0.8\n"
+            "G1 Y47 E1\nG0 X100 Y100\n; FEATURE: Outer wall\nG1 X110 E1\n",
+        )
+    problem = _tool().extrusion_problem(path, (25.75, 12, 63.25, rear))
+    assert (problem is None) == passes
+    if not passes:
+        assert "exceed reserved footprint" in problem
+
+
 def test_bambu_problems_name_the_plate_and_petg_nozzle(monkeypatch, tmp_path):
     tool = _tool()
     source = tmp_path / "job.3mf"
@@ -318,7 +334,8 @@ def test_bambu_problems_name_the_plate_and_petg_nozzle(monkeypatch, tmp_path):
     monkeypatch.setattr(tool, "effective_settings", lambda project, bambu, work: settings)
     seen = []
 
-    def fake_slice(bambu, project, plate, work):
+    def fake_slice(bambu, project, plate, work, reserved_tower=None):
+        assert reserved_tower == ((25.75, 12, 63.25, 48) if plate == 2 else None)
         mapping = json.loads(ZipFile(project).read("Metadata/project_settings.config"))[
             "filament_map"
         ]
@@ -326,7 +343,13 @@ def test_bambu_problems_name_the_plate_and_petg_nozzle(monkeypatch, tmp_path):
         return "conflict" if (mapping[0], plate) == ("2", 2) else None
 
     monkeypatch.setattr(tool, "slice_plate", fake_slice)
-    problems = tool.bambu_problems(source, tmp_path / "bambu", tmp_path / "check", jobs=2)
+    problems = tool.bambu_problems(
+        source,
+        tmp_path / "bambu",
+        tmp_path / "check",
+        jobs=2,
+        tower_bounds={2: (25.75, 12, 63.25, 48)},
+    )
     assert problems == ["plate 2 with PETG on the right nozzle: conflict"]
     assert sorted(seen) == [(("1", "2"), 1), (("1", "2"), 2), (("2", "1"), 1), (("2", "1"), 2)]
 
@@ -340,7 +363,7 @@ def test_bambu_check_runs_before_anything_is_written(monkeypatch, tmp_path, caps
     output.mkdir()
     refused = tool.variants()[1].name
 
-    def fake_problems(project, executable, work, jobs):
+    def fake_problems(project, executable, work, jobs, tower_bounds=None):
         assert executable == bambu.resolve() and project.name == "job.3mf"
         return ["plate 9 with PETG on the left nozzle: conflict"] if refused in str(work) else []
 
@@ -352,6 +375,33 @@ def test_bambu_check_runs_before_anything_is_written(monkeypatch, tmp_path, caps
     assert tool.main(["--output", str(output), "--bambu-studio", str(bambu)]) == 0
     assert len(list(output.iterdir())) == 2 * len(tool.variants())
     assert "Bambu Studio check, every plate sliced" in capsys.readouterr().out
+
+
+def test_bambu_check_passes_rectangular_reservations_from_the_manifest(monkeypatch, tmp_path):
+    tool = _tool()
+
+    def generate(variant, scratch):
+        folder = _fake_generate(variant, scratch)
+        manifest = folder / "manifest.json"
+        data = json.loads(manifest.read_text())
+        data["export"]["prime_tower"] = {
+            "process_settings": {"prime_tower_width": "18"},
+            "plates": [{"plate": 1, "reserved_extrusion_bounds_mm": [25.75, 12, 63.25, 48]}],
+        }
+        manifest.write_text(json.dumps(data))
+        return folder
+
+    def problems(project, executable, work, jobs, tower_bounds):
+        assert tower_bounds == {1: (25.75, 12, 63.25, 48)}
+        return []
+
+    monkeypatch.setattr(tool, "generate", generate)
+    monkeypatch.setattr(tool, "bambu_problems", problems)
+    bambu = tmp_path / "BambuStudio"
+    bambu.touch()
+    output = tmp_path / "out"
+    output.mkdir()
+    assert tool.main(["--output", str(output), "--bambu-studio", str(bambu)]) == 0
 
 
 def test_bambu_studio_must_be_an_existing_file(tmp_path, capsys):
