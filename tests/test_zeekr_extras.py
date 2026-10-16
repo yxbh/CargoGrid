@@ -25,6 +25,7 @@ from cargo_grid.jobs import Design
 from cargo_grid.packing import h2d_common_build
 from cargo_grid.parameters import BuildVolume, Exclusion, Interface, interface_parameters
 from cargo_grid.plates import needs_auto_support
+from cargo_grid.printers import X2D
 from cargo_grid.rods import Rod, RodBrace
 from cargo_grid.vehicles import zeekr_7x, zeekr_7x_rear_review
 from cargo_grid.vehicles.zeekr_7x import CONTOUR_GAP_MM, extras_job, variants
@@ -199,6 +200,64 @@ def test_standard_catalogue_inventory_and_all_accessory_ids_stay_unchanged(
     assert sha256(json.dumps(names).encode()).hexdigest() == (
         "b6ca62c04cd1b530a56a8abf9a1dd5195967841d42f5fb17de9a9f9c521ae89b"
     )
+
+
+def test_x2d_expansion_set_records_large_strips_and_keeps_contour_inventory(contour_stand_ins):
+    job = extras_job(
+        X2D.build,
+        placement_build=X2D.common_build(),
+        inventory_build=H2D,
+        omit_unfit=True,
+        edge_gap=4,
+        auto_roof_support=True,
+        layer_height_mm=0.24,
+    )
+    assert len(job.designs) == 17
+    assert {
+        (entry["parameters"]["family"], entry["parameters"]["nx"]) for entry in job.omitted
+    } == {("edge-x", 5), ("edge-y", 5)}
+    assert all("actual bounds" in entry["reason"] for entry in job.omitted)
+    assert job.manifest_metadata["inventory"] == {
+        "straight_40mm_male_edges": 4,
+        "straight_40mm_female_edges": 4,
+        "rear_panel_side_caps": 4,
+        "rear_panel_south_contour_ramps": 5,
+        "standard_tiles_and_north_edges_included": False,
+    }
+    assert set(job.prime_tower_positions) == set(job.plate_builds)
+    assert set(job.prime_tower_positions.values()) == {(208.64, 15)}
+    for design, placement in zip(job.designs, job.print_placements, strict=True):
+        w, d, h = design.size
+        if placement.rotation == 90:
+            w, d = d, w
+        assert job.plate_builds[placement.plate].contains_box(placement.x, placement.y, w, d, h)
+
+
+def test_contour_omissions_cover_common_reach_and_support_reservation(
+    monkeypatch, accessory_metadata_shape
+):
+    sizes = {
+        **SIDE_CAP_SIZES,
+        ("west", "north"): (500, 147.673, 13),
+        ("west", "south"): (186, 246, 13),
+    }
+    monkeypatch.setattr(zeekr_7x_rear_review, "rear_panel_designs", _stand_in_contours(sizes))
+    options = {
+        "placement_build": X2D.common_build(),
+        "inventory_build": H2D,
+        "auto_roof_support": True,
+        "layer_height_mm": 0.24,
+    }
+    with pytest.raises(ValueError, match="west_north_cap.*exceed"):
+        extras_job(X2D.build, **options)
+    job = extras_job(X2D.build, omit_unfit=True, **options)
+    omitted = {entry["name"]: entry for entry in job.omitted}
+    assert set(omitted) == {"zeekr_rear_west_north_cap", "zeekr_rear_west_south_cap"}
+    assert "exceed usable envelope" in omitted["zeekr_rear_west_north_cap"]["reason"]
+    assert "reserved prime tower" in omitted["zeekr_rear_west_south_cap"]["reason"]
+    assert all("no scaling applied" in entry["reason"] for entry in omitted.values())
+    assert job.manifest_metadata["inventory"]["rear_panel_side_caps"] == 2
+    assert not set(omitted) & {design.name for design in job.designs}
 
 
 @pytest.mark.parametrize(

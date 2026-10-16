@@ -14,10 +14,12 @@ from cargo_grid.plates import (
     H2D_TOWER_LEFT_CLEARANCE_MM,
     BambuTowerEstimate,
     PlateGroup,
-    _H2DTowerLayout,
+    _DualNozzleTowerLayout,
     _projected_bounds,
+    dual_nozzle_tower_reservation,
     plan_plates,
 )
+from cargo_grid.printers import H2D, X2D
 
 
 def _design(name, size):
@@ -27,6 +29,33 @@ def _design(name, size):
 def _size(design):
     box = design.shape.bounding_box()
     return (box.size.X, box.size.Y, box.size.Z)
+
+
+def test_diagonal_fallback_is_opt_in_and_keeps_the_horizontal_pose_and_source():
+    rod = Design(
+        "long",
+        Box(18, 18, 252),
+        {"family": "rod"},
+        recommended_print_rotation_y=90,
+        apply_orientation_to_bambu=True,
+    )
+    groups = [PlateGroup("Rods", [rod], 4)]
+    options = {
+        "size": lambda d: d.bambu_size,
+        "auto_roof_support": True,
+        "layer_height_mm": 0.24,
+    }
+    assert plan_plates(groups, X2D.common_build(), **options).unfit == [rod]
+    plan = plan_plates(groups, X2D.common_build(), diagonal_fallback=True, **options)
+    assert not plan.unfit and plan.plate_count == 1
+    placed = plan.designs[0]
+    assert placed.shape is rod.shape and placed.parameters == rod.parameters
+    assert placed.recommended_print_rotation_y == 90
+    assert placed.recommended_print_rotation_z == 45
+    assert rod.recommended_print_rotation_z is None
+    p = plan.placements[0]
+    w, d, h = placed.bambu_size
+    assert plan.plate_builds[0].contains_box(p.x, p.y, w, d, h)
 
 
 def test_groups_get_consecutive_named_plates_without_towers_by_default():
@@ -55,7 +84,7 @@ def test_h2d_global_auto_support_reserves_towers_for_every_group():
     plan = plan_plates(
         groups, h2d_common_build(), size=_size, auto_roof_support=True, layer_height_mm=0.32
     )
-    reservation = _H2DTowerLayout(BambuTowerEstimate(0.32)).reserve(10)
+    reservation = _DualNozzleTowerLayout(H2D, BambuTowerEstimate(0.32)).reserve(10)
     assert plan.prime_tower_positions == {0: reservation.origin, 1: reservation.origin}
     assert plan.prime_tower_reaches == {0: reservation.reach, 1: reservation.reach}
     clear = TowerClearance(
@@ -114,7 +143,7 @@ def test_global_auto_support_reserves_every_inheriting_plate():
 def test_bambu_tower_estimate_matches_bambu_positions(layer_height, height, side, origin):
     estimate = BambuTowerEstimate(layer_height)
     assert estimate.side_mm(height) == pytest.approx(side, abs=1e-3)
-    reservation = _H2DTowerLayout(estimate).reserve(height)
+    reservation = _DualNozzleTowerLayout(H2D, estimate).reserve(height)
     assert reservation.origin == origin
     x, y = origin
     brim = estimate.brim_mm(height)
@@ -170,9 +199,42 @@ def test_generic_build_uses_a_front_left_corner_and_reports_unfit_designs():
 
 def test_projected_bounds_keep_side_exclusions_and_return_corner_obstacles():
     assert _projected_bounds(h2d_common_build()) == ((30, 5, 320, 315), ())
-    reservation = _H2DTowerLayout(BambuTowerEstimate(0.32)).reserve(14.92)
+    reservation = _DualNozzleTowerLayout(H2D, BambuTowerEstimate(0.32)).reserve(14.92)
     bounds, (area,) = _projected_bounds(reservation.build)
     assert bounds == (30, 6, 320, 314)
     assert area == pytest.approx(reservation.clearance.grow(reservation.bounds))
     inner = BuildVolume(200, 200, 50, exclusions=(Exclusion(50, 50, 10, 10),))
     assert _projected_bounds(inner) == ((0, 0, 200, 200), ((50, 50, 60, 60),))
+
+
+@pytest.mark.parametrize(
+    "layer,side,origin",
+    [(0.32, 28.778761, (212.22, 15)), (0.24, 32.355733, (208.64, 15))],
+)
+def test_x2d_tower_uses_its_larger_petg_prime_volume(layer, side, origin):
+    tower = dual_nozzle_tower_reservation(X2D, layer, 13)
+    estimate = BambuTowerEstimate(layer, prime_volume_mm3=45)
+    assert estimate.side_mm(13) == pytest.approx(side, abs=1e-6)
+    assert tower.origin == origin
+    x, y = origin
+    assert x >= 20.5 + 15 and x + 15 + side <= 256
+    assert tower.bounds == pytest.approx((x - 1.04, y - 1.04, 256, y + side + 1.04 + 1), abs=1e-6)
+    bounds, obstacles = _projected_bounds(tower.build)
+    assert bounds == (25.5, 6, 250, 250)
+    x0, y0, _, y1 = tower.clearance.grow(tower.bounds)
+    assert obstacles == ((x0, y0, 256, y1),)
+
+
+@pytest.mark.parametrize("layer", [0.32, 0.24])
+def test_x2d_support_foot_inset_can_omit_a_four_cell_tile_that_fits_without_support(layer):
+    small = _design("3x3", (186, 186, 13))
+    long = _design("3x4", (186, 246, 13))
+    groups = [PlateGroup("Tiles", [small, long], 4)]
+    plain = plan_plates(groups, X2D.common_build(), size=_size)
+    supported = plan_plates(
+        groups, X2D.common_build(), size=_size, auto_roof_support=True, layer_height_mm=layer
+    )
+    assert plain.unfit == []
+    assert supported.designs == [small] and supported.unfit == [long]
+    assert supported.prime_tower_positions == {0: (212.22 if layer == 0.32 else 208.64, 15)}
+    assert supported.group_gaps == {"Tiles": 8}

@@ -84,11 +84,14 @@ def extras_job(
     contour_gap: float = CONTOUR_GAP_MM,
     auto_roof_support: bool = False,
     layer_height_mm: float = 0.32,
+    inventory_build: BuildVolume | None = None,
+    omit_unfit: bool = False,
 ) -> Job:
     """Build the whole expansion set: 40 mm straight edges plus rear-panel contour pieces.
 
-    ``auto_roof_support`` reserves a prime tower on every plate with a piece that gets
-    object-scoped Auto support (female edges and the female east caps).
+    ``auto_roof_support`` reserves a prime tower on every plate. ``inventory_build`` keeps
+    the candidate inventory stable on smaller printers; ``omit_unfit`` records missing pieces
+    rather than refusing the whole expansion set.
     """
     if interface.joint_style != "original":
         raise ValueError("Zeekr 7X extras require original roofed tile-edge joints")
@@ -107,7 +110,9 @@ def extras_job(
     envelope = placement_build or build
 
     edges, sizes, omitted = [], {}, []
-    for spec in variants(envelope, interface, hole_diameter=hole_diameter, hole_scope=hole_scope):
+    for spec in variants(
+        inventory_build or envelope, interface, hole_diameter=hole_diameter, hole_scope=hole_scope
+    ):
         design = accessory_design(spec)
         size = design.size
         if envelope.placement(size) is None or build.placement(size) is None:
@@ -130,10 +135,22 @@ def extras_job(
     for design in side_caps + south_ramps:
         size = design.size
         if envelope.placement(size) is None or build.placement(size) is None:
+            if omit_unfit:
+                omitted.append(
+                    {
+                        "name": design.name,
+                        "parameters": design.parameters,
+                        "size_mm": size,
+                        "reason": "actual bounds exceed usable envelope; no scaling applied",
+                    }
+                )
+                continue
             raise ValueError(
                 f"{design.name}: actual bounds {size} exceed the configured build envelope"
             )
         sizes[id(design)] = size
+    side_caps = [design for design in side_caps if id(design) in sizes]
+    south_ramps = [design for design in south_ramps if id(design) in sizes]
 
     male = [design for design in edges if design.parameters["family"] == "edge-x"]
     female = [design for design in edges if design.parameters["family"] == "edge-y"]
@@ -146,7 +163,7 @@ def extras_job(
             auto_roof_support=auto_roof_support,
             layer_height_mm=layer_height_mm,
         )
-        if result.unfit:
+        if result.unfit and not omit_unfit:
             raise ValueError(f"{result.unfit[0].name} does not fit its plate area")
         return result
 
@@ -163,6 +180,24 @@ def extras_job(
         PlateGroup(f"{PLATE_PREFIX}Rear panel south contour ramps", south_ramps, contour_gap),
     ]
     plates = plan(groups)
+    omitted.extend(
+        {
+            "name": design.name,
+            "parameters": design.parameters,
+            "size_mm": sizes[id(design)],
+            "reason": (
+                "actual bounds do not fit the plate area with the reserved prime tower, "
+                "brim clearance and 6 mm support-foot inset; no scaling applied"
+            ),
+        }
+        for design in plates.unfit
+    )
+    retained = {id(design) for design in plates.designs}
+    edges = [design for design in edges if id(design) in retained]
+    male = [design for design in male if id(design) in retained]
+    female = [design for design in female if id(design) in retained]
+    side_caps = [design for design in side_caps if id(design) in retained]
+    south_ramps = [design for design in south_ramps if id(design) in retained]
     job_gap = min(edge_gap, contour_gap)
     return Job(
         plates.designs,

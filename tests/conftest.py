@@ -9,6 +9,7 @@ from cargo_grid import catalogue
 # long enough that building a copy per worker finishes sooner than one chain.
 EARLY_FIXTURES = {
     "h2d_plan": "h2d-plan",
+    "x2d_plan": "x2d-plan",
     "expansion_set_job": "zeekr-expansion-set",
     "review_job": None,
 }

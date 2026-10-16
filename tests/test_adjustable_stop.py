@@ -35,6 +35,7 @@ from cargo_grid.adjustable_stop_export import (
     _rounding_proofs,
     adjustable_stop_h2d_settings,
     adjustable_stop_print_job,
+    adjustable_stop_settings,
     export_adjustable_stop,
     prepare_adjustable_stop_print_job,
     write_adjustable_stop_print_project,
@@ -50,7 +51,9 @@ from cargo_grid.plates import (
     H2D_TOWER_LEFT_CLEARANCE_MM,
     TOWER_BACK_ALLOWANCE_MM,
     BambuTowerEstimate,
+    dual_nozzle_tower_reservation,
 )
+from cargo_grid.printers import X2D
 
 
 def _overlap_volume(first, second) -> float:
@@ -171,6 +174,34 @@ def test_adjustable_stop_h2d_settings_defaults_to_tested_0p8_profile():
     assert settings.layer_height == profile.layer_height_mm
     assert settings.printer_settings_id == profile.printer
     assert settings.print_settings_id == profile.process
+
+
+@pytest.mark.parametrize("nozzle", [0.8, 0.4])
+def test_adjustable_stop_x2d_uses_the_shared_profiles_and_tower_reservation(nozzle):
+    settings = adjustable_stop_settings(nozzle, dual_material=True, printer=X2D)
+    profile = X2D.profiles[nozzle]
+    assert settings.printer_settings_id == profile.printer
+    assert settings.print_settings_id == profile.process
+    assert settings.printer_model == X2D.model
+    assert tuple(m.name for m in settings.materials) == (profile.petg, profile.pla)
+    build = X2D.common_build()
+    job = prepare_adjustable_stop_print_job(
+        Job(
+            [Design("stop tower witness", Box(20, 20, 120.25), {})],
+            build,
+            "adjustable-stop-test",
+            print_placements=[PrintPlacement(0, 25.5, 6, 0)],
+            plate_builds={0: build},
+        ),
+        material_counts_by_plate={0: 2},
+        nozzle_diameter_mm=nozzle,
+        printer=X2D,
+    )
+    tower = dual_nozzle_tower_reservation(X2D, profile.layer_height_mm, 120.25)
+    assert job.prime_tower_positions == {0: tower.origin}
+    assert job.prime_tower_reaches == {0: tower.reach}
+    assert job.prime_tower_clearances == {0: tower.clearance}
+    assert job.tower_bounds(0)[2] == 256
 
 
 @pytest.mark.parametrize("nozzle_diameter_mm", H2D_PROFILES)

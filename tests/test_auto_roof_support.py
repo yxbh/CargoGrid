@@ -25,9 +25,10 @@ from cargo_grid.plates import (
     AUTO_SUPPORT_TOWER_CLEARANCE_MM,
     DEFAULT_PRIME_TOWER,
     BambuTowerEstimate,
-    _H2DTowerLayout,
+    _DualNozzleTowerLayout,
     needs_auto_support,
 )
+from cargo_grid.printers import H2D
 from cargo_grid.rods import Rod, RodBrace
 from cargo_grid.roof_support import (
     OBJECT_AUTO_SUPPORT,
@@ -271,7 +272,7 @@ def test_prime_tower_must_stay_on_the_plate_and_clear_of_models(
 def test_planned_tower_clearance_allows_touching_and_names_each_side(
     designs, tmp_path, offset, fits
 ):
-    reservation = _H2DTowerLayout(BambuTowerEstimate(0.2)).reserve(14.92)
+    reservation = _DualNozzleTowerLayout(H2D, BambuTowerEstimate(0.2)).reserve(14.92)
     area = reservation.build.exclusions[-1]
     job = Job(
         [designs[0]["tile"]],

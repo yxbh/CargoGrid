@@ -1,0 +1,81 @@
+"""Audited printer envelopes and profile pairs, without inferring printed fit."""
+
+import pytest
+from build123d import Box
+
+from cargo_grid.export import BambuSettings, Material, write_3mf
+from cargo_grid.jobs import Design, Job
+from cargo_grid.packing import PrintPlacement, h2d_common_build
+from cargo_grid.parameters import BuildVolume
+from cargo_grid.plates import dual_nozzle_tower_reservation
+from cargo_grid.printers import H2D, PRINTERS, X2D, printer_for_common_build
+
+
+def test_h2d_shared_build_keeps_the_existing_envelope():
+    assert H2D.build == BuildVolume(350, 320, 325)
+    assert H2D.common_build() == h2d_common_build()
+    assert H2D.placement_policy() == {
+        "name": "H2D dual-nozzle safe",
+        "common_reach_mm": {"min_x": 25, "max_x": 325, "min_y": 0, "max_y": 320, "max_z": 320},
+        "common_model_inset_mm": 5,
+    }
+
+
+def test_x2d_models_use_the_common_reach_not_the_whole_256mm_bed():
+    assert X2D.build == BuildVolume(256, 256, 261)
+    build = X2D.common_build()
+    assert build.contains_box(25.5, 5, 225.5, 246, 256)
+    assert not build.contains_box(25.49, 5, 225.5, 246, 256)
+    assert not build.contains_box(25.5, 4.99, 225.5, 246, 256)
+    assert not build.contains_box(25.5, 5, 225.51, 246, 256)
+    assert not build.contains_box(25.5, 5, 225.5, 246.01, 256)
+    assert not build.contains_box(25.5, 5, 225.5, 246, 256.01)
+    assert build.placement((186, 246, 13)) is not None
+    assert build.placement((246, 246, 13)) is None
+    assert build.placement((66, 306, 13)) is None
+
+
+@pytest.mark.parametrize("printer", PRINTERS.values(), ids=PRINTERS)
+def test_supported_profile_pairs_and_build_lookup(printer):
+    assert {nozzle: p.layer_height_mm for nozzle, p in printer.profiles.items()} == {
+        0.8: 0.32,
+        0.4: 0.24,
+    }
+    assert printer_for_common_build(printer.common_build()) is printer
+    assert all(p.printer.startswith(printer.model) for p in printer.profiles.values())
+    assert printer_for_common_build(printer.build) is None
+
+
+def test_profile_names_keep_printer_specific_bambu_spelling():
+    assert H2D.profiles[0.4].pla == "Bambu PLA Basic @BBL H2D"
+    assert X2D.profiles[0.4].pla == "Bambu PLA Basic @BBL X2D 0.4 nozzle"
+    assert X2D.profiles[0.8].process == "0.32mm Balanced Quality @BBL X2D 0.8 nozzle"
+    assert X2D.profiles[0.4].process == "0.24mm Standard @BBL X2D"
+    assert H2D.tower_prime_volume_mm3 == 30
+    assert X2D.tower_prime_volume_mm3 == 45
+
+
+@pytest.mark.parametrize("printer", PRINTERS.values(), ids=PRINTERS)
+def test_tower_manifest_names_the_selected_printer(printer, tmp_path):
+    profile = printer.profiles[0.8]
+    tower = dual_nozzle_tower_reservation(printer, 0.32, 10)
+    job = Job(
+        [Design("box", Box(10, 10, 10), {})],
+        printer.build,
+        "part",
+        print_placements=[PrintPlacement(0, 30, 80, 0)],
+        prime_tower=tower.reach,
+        prime_tower_positions={0: tower.origin},
+        prime_tower_clearances={0: tower.clearance},
+    )
+    settings = BambuSettings(
+        (Material(profile.petg, "PETG", "#637B70"), Material(profile.pla, "PLA", "#DDDDDD")),
+        0.8,
+        0.32,
+        printer_settings_id=profile.printer,
+        print_settings_id=profile.process,
+        machine_nozzle_count=2,
+        printer_model=printer.model,
+    )
+    result = write_3mf(job, tmp_path / "printer.3mf", bambu=settings)
+    assert f"On the {printer.name} " in result["prime_tower"]["note"]

@@ -36,6 +36,7 @@ from cargo_grid.meshes import write_stl
 from cargo_grid.packing import PrintPlacement, TowerClearance, pack_sizes
 from cargo_grid.parameters import DEFAULT_HOLE_DIAMETER_MM, BuildVolume, Interface, count, positive
 from cargo_grid.prepared import Bounds, PreparedShape, rotated_points, rotation_matrix_3mf
+from cargo_grid.printers import PRINTERS
 from cargo_grid.rods import ROD_FAMILIES, Rod, RodBrace, fit_evidence
 from cargo_grid.roof_support import (
     RoofSupportSettings,
@@ -490,7 +491,7 @@ class _PreparedProject:
         self.job = deepcopy(job)
         self.job.validate_plate_builds()
         self.geometries: dict[int, PreparedShape] = {}
-        self.mesh_sources: dict[int, tuple[PreparedShape, float, float]] = {}
+        self.mesh_sources: dict[int, tuple[PreparedShape, float, float, float]] = {}
         self.project_geometry: dict[int, PreparedShape] = {}
         self.batches: list[tuple[Design, list[Volume], int]] = []
         for design in self.job.designs:
@@ -501,6 +502,7 @@ class _PreparedProject:
                 source,
                 (design.recommended_print_rotation_x or 0) if oriented else 0,
                 (design.recommended_print_rotation_y or 0) if oriented else 0,
+                (design.recommended_print_rotation_z or 0) if oriented else 0,
             )
             # Keep the posed object alive even when a stack uses separate volumes.
             self.project_geometry[id(design)] = self.geometry(posed)
@@ -620,14 +622,14 @@ class _PreparedProject:
         return result
 
     def mesh(self, shape, packing_rotation: int):
-        geometry, rx, ry = self.mesh_source(shape)
+        geometry, rx, ry, rz = self.mesh_source(shape)
         points, faces, _ = geometry.mesh
-        return rotated_points(points, rx, ry, packing_rotation), faces
+        return rotated_points(points, rx, ry, rz + packing_rotation), faces
 
-    def mesh_source(self, shape) -> tuple[PreparedShape, float, float]:
+    def mesh_source(self, shape) -> tuple[PreparedShape, float, float, float]:
         if id(shape) in self.mesh_sources:
             return self.mesh_sources[id(shape)]
-        return self.geometry(shape), 0, 0
+        return self.geometry(shape), 0, 0, 0
 
     def batch_geometries(self, design: Design, volumes: list[Volume]) -> list[PreparedShape]:
         return [
@@ -837,13 +839,17 @@ def _write_3mf(
         if bambu and design.apply_orientation_to_bambu:
             angle_x = design.recommended_print_rotation_x or 0
             angle_y = design.recommended_print_rotation_y or 0
+            angle_z = design.recommended_print_rotation_z or 0
             # 3MF stores basis columns; this translation includes the displayed plate origin.
             transform = {
                 "packing_rotation_z_degrees": rotation,
                 "translation_mm": translation,
                 "packed_size_mm": tuple(rotated_bounds.size),
                 "plate_local_lower_corner_mm": (px, py, 0),
-                "matrix_3mf": (*rotation_matrix_3mf(angle_x, angle_y, rotation), *translation),
+                "matrix_3mf": (
+                    *rotation_matrix_3mf(angle_x, angle_y, angle_z + rotation),
+                    *translation,
+                ),
                 "applied_to_mesh": True,
             }
             if design.recommended_print_rotation_x is not None:
@@ -859,6 +865,13 @@ def _write_3mf(
                     configured,
                     "cargo_grid_source_rotation_y",
                     design.recommended_print_rotation_y,
+                )
+            if design.recommended_print_rotation_z is not None:
+                transform["rotation_z_degrees"] = design.recommended_print_rotation_z
+                _metadata(
+                    configured,
+                    "cargo_grid_source_rotation_z",
+                    design.recommended_print_rotation_z,
                 )
             record["items"][-1]["source_to_project_transform"] = transform
         record["volumes"].extend(
@@ -917,6 +930,14 @@ def _write_3mf(
                 "Metadata/project_settings.config",
                 json.dumps(_bambu_project_settings(job, bambu, plate_count), indent=2),
             )
+    tower_printer = next(
+        (
+            printer.name
+            for printer in PRINTERS.values()
+            if bambu and printer.model == bambu.printer_model
+        ),
+        "H2D",
+    )
     return {
         "format": "bambu-project" if bambu else "core-geometry",
         "plates": plates,
@@ -966,7 +987,7 @@ def _write_3mf(
                         }
                         for plate, (x, y) in sorted(job.prime_tower_positions.items())
                     ],
-                    "note": "Each plate sets only the tower origin. On the H2D it is where Bambu Studio 02.08.02.61 places the tower when it opens the project, and the reserved bounds cover its estimated tower, automatic brim and the extra depth seen in local slices. They are not a guarantee for other profiles or materials.",
+                    "note": f"Each plate sets only the tower origin. On the {tower_printer} it is where Bambu Studio 02.08.02.61 places the tower when it opens the project, and the reserved bounds cover its estimated tower, automatic brim and the extra depth seen in local slices. They are not a guarantee for other profiles or materials.",
                 }
             }
         ),
@@ -1113,6 +1134,7 @@ def export_job(
         for design in job.designs
         if design.recommended_print_rotation_x is not None
         or design.recommended_print_rotation_y is not None
+        or design.recommended_print_rotation_z is not None
     }
     output.mkdir(parents=True, exist_ok=True)
     entries = []
@@ -1225,6 +1247,7 @@ def export_job(
         if (
             design.recommended_print_rotation_x is not None
             or design.recommended_print_rotation_y is not None
+            or design.recommended_print_rotation_z is not None
         ):
             bounds = recommendations[id(design)]
             rotations = []
@@ -1232,6 +1255,8 @@ def export_job(
                 rotations.append({"axis": "X", "degrees": design.recommended_print_rotation_x})
             if design.recommended_print_rotation_y is not None:
                 rotations.append({"axis": "Y", "degrees": design.recommended_print_rotation_y})
+            if design.recommended_print_rotation_z is not None:
+                rotations.append({"axis": "Z", "degrees": design.recommended_print_rotation_z})
             recommendation = {
                 "rotations": rotations,
                 "translation_mm": tuple(-value for value in bounds.minimum),

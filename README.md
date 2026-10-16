@@ -139,6 +139,29 @@ The project names the H2D 0.8 nozzle, 0.32 mm Balanced Strength process, Texture
 
 For 0.4 mm nozzles, use `--nozzle-diameter-mm 0.4 --layer-height-mm 0.24` and `--material "Bambu PETG Basic @BBL H2D 0.4 nozzle" PETG "#637b70"`. The project then names the H2D 0.4 nozzle and the 0.24 mm Standard process; the parts and plates are the same. With 0.2 mm layers the prime tower for [auto roof support](#auto-roof-support-for-catalogues-and-extras) gets too big for two catalogue plates. With auto roof support the matching PLA profile is `Bambu PLA Basic @BBL H2D`, which Bambu names without a nozzle size. `--h2d-dual-safe` accepts only these two nozzle and layer-height pairs.
 
+## Generate X2D MakerWorld files
+
+The Bambu Lab X2D is the smaller-bed dual-nozzle option. It keeps the same PETG Basic body, PLA Basic interface, global normal Auto support and automatic filament matching as the H2D projects. Its bed is 256x256 mm, but both nozzles share only X 20.5..256, Y 0..256 and Z up to 256. Model, support-foot and prime-tower allowances reduce that further. Parts are never scaled to fit; each manifest lists the omitted designs and why. These are X2D projects, not a claim that a dual-material profile works on every single-nozzle 256 mm printer.
+
+The shared MakerWorld script generates both 0.8 mm/0.32 mm and 0.4 mm/0.24 mm projects. It includes the catalogue and Zeekr expansion set with and without a 1.92 mm solid bottom, plus the pull-handle and adjustable-stop kits. Set `BAMBU_STUDIO` to your installed Bambu Studio executable, then run:
+
+```sh
+mkdir -p outputs/makerworld-x2d
+uv run python tools/makerworld_exports.py --printer x2d --output outputs/makerworld-x2d --bambu-studio "$BAMBU_STUDIO"
+```
+
+The script slices every plate with PETG on either nozzle before writing any named files. A refused plate stops the batch. Existing files are left alone unless you pass `--replace`; uploading is separate. `--set Full-Catalogue`, `--set Zeekr-7X-Expansion-Set`, `--set Pull-Handle-Set` or `--set Adjustable-Stop` limits the rebuild, and either selection option can be repeated. Omit `--printer` for the existing H2D files, or use `--printer h2d --printer x2d` for both printers.
+
+To generate a single X2D catalogue through the ordinary CLI:
+
+```sh
+uv run cargo-grid catalogue --printer x2d --build-width-mm 256 --build-depth-mm 256 --build-height-mm 261 --bambu --material "Bambu PETG Basic @BBL X2D 0.8 nozzle" PETG "#688197" --material "Bambu PLA Basic @BBL X2D 0.8 nozzle" PLA "#0A2989" --nozzle-diameter-mm 0.8 --layer-height-mm 0.32 --roof-support --roof-support-mode auto --no-stl --output outputs/x2d-catalogue
+```
+
+For 0.4 mm nozzles, use 0.24 mm layers and the `Bambu PETG Basic @BBL X2D 0.4 nozzle` and `Bambu PLA Basic @BBL X2D 0.4 nozzle` materials. The X2D processes are 0.32 mm Balanced Quality and 0.24 mm Standard. `--printer h2d` is equivalent to the existing `--h2d-dual-safe`; both printer selections require the standard 60/13 geometry and the unmodified physical build envelope.
+
+The X2D auto-support catalogue includes 1x4, 2x4, 4x1 and 4x2 tiles and the four-cell support rail on plates with a measured 5 mm front/back inset. The 3x4 and 4x3 tiles still conflict with the default prime tower at 0.24 mm layers, and larger five-cell designs remain omitted. The existing 240 mm above-mat rod fits diagonally: its horizontal Y=90-degree pose gets another Z=45-degree turn, with the exact transform recorded in the manifest. No shorter rod or scaled geometry is needed. The Zeekr set is only an expansion set; its manifest still names the large standard rear-panel tiles printed separately, which do not all fit this X2D auto-support layout. No X2D physical fit, support-removal or strength result is implied.
+
 ## Make the Zeekr 7X expansion set
 
 `extras zeekr-7x` makes every Zeekr-specific piece in one project: the ten 40 mm straight edges and the nine measured rear lift-out-panel contour pieces, 19 parts in all. The tiles and 30 mm north edges used with the rear panel are ordinary catalogue parts, so they are not in the set; print them with the commands further down.

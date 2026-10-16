@@ -68,15 +68,15 @@ class PreparedShape:
 
 
 def rotated_points(
-    points: np.ndarray, rotation_x: float, rotation_y: float, rotation_z: int
+    points: np.ndarray, rotation_x: float, rotation_y: float, rotation_z: float
 ) -> np.ndarray:
-    """Apply the same world-axis X, then Y, then packing Z rotations as CAD."""
+    """Apply world-axis X, then Y, then the combined pose/packing Z turn."""
     if not (rotation_x or rotation_y or rotation_z):
         return points
     return points @ rotation_matrix(rotation_x, rotation_y, rotation_z).T
 
 
-def rotation_matrix(rotation_x: float, rotation_y: float, rotation_z: int) -> np.ndarray:
+def rotation_matrix(rotation_x: float, rotation_y: float, rotation_z: float) -> np.ndarray:
     """Return the column-vector matrix for world-axis X, then Y, then Z rotations."""
     cx, sx = cos(radians(rotation_x)), sin(radians(rotation_x))
     cy, sy = cos(radians(rotation_y)), sin(radians(rotation_y))
@@ -90,7 +90,9 @@ def rotation_matrix(rotation_x: float, rotation_y: float, rotation_z: int) -> np
     )
 
 
-def rotation_matrix_3mf(rotation_x: float, rotation_y: float, rotation_z: int) -> tuple[float, ...]:
+def rotation_matrix_3mf(
+    rotation_x: float, rotation_y: float, rotation_z: float
+) -> tuple[float, ...]:
     """Return 3MF's basis-column ordering as JSON-serializable Python floats."""
     matrix = rotation_matrix(rotation_x, rotation_y, rotation_z)
     return tuple(float(value) for value in matrix.T.flat)

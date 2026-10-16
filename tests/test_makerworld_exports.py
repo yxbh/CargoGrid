@@ -7,6 +7,8 @@ from zipfile import ZipFile
 import pytest
 
 from cargo_grid.cli import H2D_PROFILES, parser
+from cargo_grid.printers import PRINTERS, X2D
+from cargo_grid.roof_support import BAMBU_SUPPORT_DEFAULTS
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -82,6 +84,66 @@ def test_every_variant_belongs_to_one_named_set():
     assert {variant.set_name for variant in variants} == set(tool.SET_NAMES)
     for variant in variants:
         assert variant.name.split("_")[2] == variant.set_name
+
+
+def test_x2d_variants_use_the_shared_sets_and_both_official_profile_pairs():
+    variants = _tool().variants(("x2d",))
+    assert len(variants) == 12
+    assert len({v.name for v in variants}) == 12
+    for variant in variants:
+        args = parser().parse_args([*variant.arguments, "--output", "unused"])
+        profile = X2D.profiles[args.nozzle_diameter_mm]
+        assert args.printer == "x2d" and not args.h2d_dual_safe
+        assert (args.build_width_mm, args.build_depth_mm, args.build_height_mm) == (256, 256, 261)
+        assert args.layer_height_mm == profile.layer_height_mm
+        assert args.roof_support and args.roof_support_mode == "auto"
+        assert [m[0] for m in args.material] == [profile.petg, profile.pla]
+        assert variant.name.split("_")[:2] == ["CargoGrid", "X2D"]
+        assert args.no_stl and args.bambu
+
+
+def test_printer_selection_composes_with_set_selection(monkeypatch, tmp_path, capsys):
+    tool = _tool()
+    monkeypatch.setattr(tool, "generate", _fake_generate)
+    assert (
+        tool.main(
+            [
+                "--output",
+                str(tmp_path),
+                "--printer",
+                "x2d",
+                "--printer",
+                "x2d",
+                "--set",
+                "Pull-Handle-Set",
+            ]
+        )
+        == 0
+    )
+    variants = [v for v in tool.variants(("x2d",)) if v.set_name == "Pull-Handle-Set"]
+    assert {p.name for p in tmp_path.iterdir()} == {
+        p.name for variant in variants for p in tool.destinations(tmp_path, variant).values()
+    }
+    capsys.readouterr()
+    assert (
+        tool.main(
+            [
+                "--output",
+                str(tmp_path),
+                "--printer",
+                "h2d",
+                "--printer",
+                "x2d",
+                "--set",
+                "Adjustable-Stop",
+                "--dry-run",
+            ]
+        )
+        == 0
+    )
+    lines = capsys.readouterr().out.splitlines()
+    assert len(lines) == 4
+    assert {line.split("_")[1] for line in lines} == {"H2D", "X2D"}
 
 
 def test_set_filter_builds_only_the_chosen_sets(monkeypatch, tmp_path, capsys):
@@ -263,3 +325,37 @@ def test_native_bambu_check_slices_a_real_zeekr_set(tmp_path):
         folder / "job.3mf", Path(executable).resolve(strict=True), tmp_path / "check", jobs=4
     )
     assert problems == []
+
+
+@pytest.mark.native
+@pytest.mark.parametrize("printer", PRINTERS.values(), ids=PRINTERS)
+@pytest.mark.parametrize("nozzle", [0.8, 0.4])
+def test_native_system_presets_match_the_audited_printer_and_support_defaults(printer, nozzle):
+    executable = os.environ.get("CARGO_GRID_BAMBU")
+    if not executable:
+        pytest.skip("Set CARGO_GRID_BAMBU to explicitly enable local Bambu Studio profile checks")
+    tool = _tool()
+    root = tool._profiles(Path(executable).resolve(strict=True))
+    profiles = printer.profiles[nozzle]
+    machine = tool._resolve(root, "machine", profiles.printer)
+    assert machine["printer_model"] == printer.model
+    assert [float(v) for v in machine["nozzle_diameter"]] == [nozzle, nozzle]
+    assert float(machine["printable_height"]) == printer.build.z
+    assert min(map(float, machine["extruder_printable_height"])) == printer.common_height_mm
+    areas = [
+        [tuple(map(float, point.split("x"))) for point in polygon.split(",")]
+        for polygon in machine["extruder_printable_area"]
+    ]
+    assert max(min(x for x, y in area) for area in areas) == printer.common_x_mm[0]
+    assert min(max(x for x, y in area) for area in areas) == printer.common_x_mm[1]
+    assert all(min(y for x, y in area) == 0 for area in areas)
+    assert all(max(y for x, y in area) == printer.build.y for area in areas)
+    process = tool._resolve(root, "process", profiles.process)
+    assert profiles.printer in process["compatible_printers"]
+    assert float(process["layer_height"]) == profiles.layer_height_mm
+    assert {key: process[key] for key in BAMBU_SUPPORT_DEFAULTS} == BAMBU_SUPPORT_DEFAULTS
+    filaments = [tool._resolve(root, "filament", name) for name in (profiles.petg, profiles.pla)]
+    assert all(profiles.printer in p["compatible_printers"] for p in filaments)
+    assert max(float(p["filament_prime_volume"][0]) for p in filaments) == (
+        printer.tower_prime_volume_mm3
+    )

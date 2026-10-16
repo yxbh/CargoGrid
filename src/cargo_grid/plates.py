@@ -5,7 +5,7 @@ decides which plates need a prime tower for auto roof support, reserves the towe
 support-foot allowance, packs each group and returns the plates, names and tower positions.
 """
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from math import floor, pi, sqrt
 
 from cargo_grid.footprints import (
@@ -19,10 +19,10 @@ from cargo_grid.packing import (
     PrimeTower,
     PrintPlacement,
     TowerClearance,
-    h2d_common_build,
     pack_sizes,
 )
 from cargo_grid.parameters import BuildVolume, Exclusion, positive
+from cargo_grid.printers import H2D, DualNozzlePrinter, printer_for_common_build
 
 # Auto roof support prints a PLA interface, so every plate with supported parts needs a prime
 # tower. Bambu's default tower is used as it is; each plate only gets a tower position and a
@@ -36,18 +36,20 @@ AUTO_SUPPORT_TOWER_CLEARANCE_MM = 6.5
 # parts a further 1 mm from the front and back plate edges.
 AUTO_SUPPORT_FOOT_ALLOWANCE_MM = 4.0
 AUTO_SUPPORT_PLATE_MARGIN_MM = 6.0
-H2D_FOOTPRINT_SEARCH_ALLOWANCE_MM = 0.75
+FOOTPRINT_SEARCH_ALLOWANCE_MM = 0.75
+H2D_FOOTPRINT_SEARCH_ALLOWANCE_MM = FOOTPRINT_SEARCH_ALLOWANCE_MM
 # When Bambu Studio 02.08.02.61 opens a project it moves any tower whose estimated square is
 # not at least this far inside the area every nozzle reaches, so towers are written in range.
 BAMBU_TOWER_MARGIN_MM = 15.0
-H2D_SHARED_REACH_X_MM = (25.0, 325.0)
+H2D_SHARED_REACH_X_MM = H2D.common_x_mm
 # Local slices put the real tower up to 0.6 mm behind its estimated square and brim.
 TOWER_BACK_ALLOWANCE_MM = 1.0
 # Models beside the H2D tower keep this much less than the support-foot clearance so the 246 mm
 # wide tiles with a 5-cell side still fit on tower plates. Every published plate passed Bambu's
 # path-conflict check with it at 0.32 and 0.24 mm layers; at 0.2 mm the larger tower conflicted
 # with a rotated tile and an edge strip whose supported sides faced it.
-H2D_TOWER_LEFT_CLEARANCE_MM = 1.5
+TOWER_LEFT_CLEARANCE_MM = 1.5
+H2D_TOWER_LEFT_CLEARANCE_MM = TOWER_LEFT_CLEARANCE_MM
 SIDES = ("left", "front", "right", "back")
 
 
@@ -56,9 +58,9 @@ class BambuTowerEstimate:
     """Bambu Studio 02.08.02.61's pre-slice rib-wall tower estimate for one PETG and one PLA.
 
     It is the square Bambu uses to decide whether a stored tower position is in range. The
-    inputs are the H2D PETG/PLA Basic values that reproduce the positions Bambu Studio wrote
-    into saved 0.32 and 0.2 mm projects: 30 mm³ purge per filament, 10 mm of 1.75 mm filament
-    per nozzle change, a 150% infill gap and 8 mm ribs.
+    Defaults reproduce the H2D positions: 30 mm³ purge per filament, 10 mm of 1.75 mm filament
+    per nozzle change, a 150% infill gap and 8 mm ribs. X2D uses 45 mm³, the larger of its
+    PETG/PLA prime volumes, for both filaments just as Bambu's estimate does.
     """
 
     layer_height: float
@@ -130,6 +132,17 @@ class PlateGroup:
     designs: list[Design]
     gap: float
     projected: bool = False
+    build: BuildVolume | None = None
+
+
+def diagonal_fit(design: Design, build: BuildVolume) -> Design | None:
+    """Keep the existing print pose and try a half-quarter-turn only when necessary."""
+    candidate = replace(
+        design,
+        recommended_print_rotation_z=(design.recommended_print_rotation_z or 0) + 45,
+        apply_orientation_to_bambu=True,
+    )
+    return candidate if build.placement(candidate.bambu_size) is not None else None
 
 
 @dataclass
@@ -209,17 +222,11 @@ class _TowerLayout:
         }
 
 
-class _H2DTowerLayout(_TowerLayout):
-    """Front-right H2D tower at the position Bambu Studio keeps when it opens the project."""
+class _DualNozzleTowerLayout(_TowerLayout):
+    """Front-right tower inside the printer's shared nozzle reach."""
 
-    reason = (
-        "PLA interface plates need a prime tower both nozzles reach; Bambu's default tower goes "
-        "in the front-right corner where Bambu Studio keeps it (its estimated square 15 mm inside "
-        "X 25..325 and Y >= 15), and models keep clear of the estimated tower and brim"
-    )
-
-    def __init__(self, estimate: BambuTowerEstimate) -> None:
-        common = h2d_common_build()
+    def __init__(self, printer: DualNozzlePrinter, estimate: BambuTowerEstimate) -> None:
+        common = printer.common_build()
         super().__init__(
             BuildVolume(
                 common.x,
@@ -229,23 +236,40 @@ class _H2DTowerLayout(_TowerLayout):
                 exclusions=common.exclusions,
             )
         )
+        self.printer = printer
         self.estimate = estimate
+        left, right = printer.common_x_mm
+        self.reason = (
+            "PLA interface plates need a prime tower both nozzles reach; Bambu's default tower goes "
+            "in the front-right corner where Bambu Studio keeps it (its estimated square 15 mm inside "
+            f"X {left:g}..{right:g} and Y >= 15), and models keep clear of the estimated tower and brim"
+        )
 
     def reserve(self, height: float) -> TowerReservation:
         side = self.estimate.side_mm(height)
         brim = self.estimate.brim_mm(height)
-        limit = H2D_SHARED_REACH_X_MM[1]
+        limit = self.printer.common_x_mm[1]
         # Round down so Bambu's in-range test (x + margin + side <= limit) keeps the position.
         x = floor((limit - BAMBU_TOWER_MARGIN_MM - side) * 100) / 100
         y = BAMBU_TOWER_MARGIN_MM
         reach = PrimeTower(brim, brim, limit - x, side + brim + TOWER_BACK_ALLOWANCE_MM)
         clearance = TowerClearance(
-            H2D_TOWER_LEFT_CLEARANCE_MM,
+            TOWER_LEFT_CLEARANCE_MM,
             AUTO_SUPPORT_TOWER_CLEARANCE_MM,
             AUTO_SUPPORT_TOWER_CLEARANCE_MM,
             AUTO_SUPPORT_TOWER_CLEARANCE_MM,
         )
         return self._with_keep_out((x, y), reach, clearance)
+
+
+def dual_nozzle_tower_reservation(
+    printer: DualNozzlePrinter, layer_height_mm: float, height_mm: float
+) -> TowerReservation:
+    """The same tower estimate and keep-out for catalogue, extras and adjustable-stop jobs."""
+    return _DualNozzleTowerLayout(
+        printer,
+        BambuTowerEstimate(layer_height_mm, prime_volume_mm3=printer.tower_prime_volume_mm3),
+    ).reserve(height_mm)
 
 
 class _FrontLeftTowerLayout(_TowerLayout):
@@ -290,10 +314,16 @@ class _FrontLeftTowerLayout(_TowerLayout):
 
 
 def _tower_layout(build: BuildVolume, layer_height_mm: float | None) -> _TowerLayout:
-    if build == h2d_common_build():
+    printer = printer_for_common_build(build)
+    if printer is not None:
         if layer_height_mm is None:
-            raise ValueError("H2D auto roof support needs the layer height for the tower position")
-        return _H2DTowerLayout(BambuTowerEstimate(layer_height_mm))
+            raise ValueError(
+                f"{printer.name} auto roof support needs the layer height for the tower position"
+            )
+        return _DualNozzleTowerLayout(
+            printer,
+            BambuTowerEstimate(layer_height_mm, prime_volume_mm3=printer.tower_prime_volume_mm3),
+        )
     return _FrontLeftTowerLayout(build)
 
 
@@ -323,14 +353,15 @@ def plan_plates(
     size,
     auto_roof_support: bool = False,
     layer_height_mm: float | None = None,
+    diagonal_fallback: bool = False,
 ) -> PlatePlan:
     """Pack ordered groups onto consecutive plates, reserving prime towers for auto support.
 
-    ``build`` is the base placement area (the H2D common reach or a generic usable area) and
+    ``build`` is the base placement area (a printer's common reach or a generic usable area) and
     ``size`` returns each design's placed bounds. With ``auto_roof_support``, every nonempty
     group inherits global support and may print PLA, so its plates use the tower layout for that
     base area and add the support-foot allowance to the group gap. Designs that do not fit
-    their group's area are returned in ``unfit`` for the caller to omit or reject. On the H2D
+    their group's area are returned in ``unfit`` for the caller to omit or reject. On named printers
     the tower position follows Bambu's estimate for ``layer_height_mm`` and the group's
     tallest design, so Bambu Studio keeps it when it opens the project.
     """
@@ -346,11 +377,26 @@ def plan_plates(
             tower.reserve(max(size(design)[2] for design in group.designs)) if towered else None
         )
         group_build = reservation.build if reservation else build
+        if group.build is not None:
+            group_build = group.build
+            if reservation:
+                group_build = replace(
+                    group_build,
+                    exclusions=(
+                        *group_build.exclusions,
+                        _keep_out(reservation.bounds, reservation.clearance, group_build),
+                    ),
+                )
+                reservation = replace(reservation, build=group_build)
         plan.group_gaps[group.title] = gap
         members = []
         for design in group.designs:
             if group_build.placement(size(design)) is None:
-                plan.unfit.append(design)
+                rotated = diagonal_fit(design, group_build) if diagonal_fallback else None
+                if rotated is None:
+                    plan.unfit.append(design)
+                else:
+                    members.append(rotated)
             else:
                 members.append(design)
         if not members:
@@ -358,16 +404,22 @@ def plan_plates(
         if towered:
             towered_groups.append(group.title)
             towered_gaps.append(gap)
-        rectangular = pack_sizes(
-            [size(design) for design in members], group_build, gap=gap, pack=True
-        )
+
+        def placed_size(design):
+            return (
+                design.bambu_size
+                if design.recommended_print_rotation_z is not None
+                else size(design)
+            )
+
+        rectangular = pack_sizes([placed_size(d) for d in members], group_build, gap=gap, pack=True)
         packed, footprints, nested = rectangular, [None] * len(members), False
         if group.projected and max(p.plate for p in rectangular) > 0:
             candidate_footprints = []
             for design in members:
                 vertices, faces, _ = checked_mesh(design.bambu_shape)
                 candidate_footprints.append(projected_mesh_footprint(vertices, faces))
-            search_gap = max(gap - H2D_FOOTPRINT_SEARCH_ALLOWANCE_MM, gap / 2)
+            search_gap = max(gap - FOOTPRINT_SEARCH_ALLOWANCE_MM, gap / 2)
             bounds, obstacles = _projected_bounds(group_build)
             try:
                 packed = pack_projected_footprints(

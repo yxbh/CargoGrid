@@ -28,6 +28,7 @@ class Design:
     recommended_print_rotation_y: float | None = None
     apply_orientation_to_bambu: bool = False
     bambu_object_settings: dict[str, str] = field(default_factory=dict)
+    recommended_print_rotation_z: float | None = None
 
     def __post_init__(self):
         count("design quantity", self.quantity)
@@ -41,12 +42,17 @@ class Design:
             self.recommended_print_rotation_y
         ):
             raise ValueError("recommended print rotation must be finite degrees")
+        if self.recommended_print_rotation_z is not None and not isfinite(
+            self.recommended_print_rotation_z
+        ):
+            raise ValueError("recommended print rotation must be finite degrees")
         if not isinstance(self.apply_orientation_to_bambu, bool):
             raise ValueError("apply_orientation_to_bambu must be a boolean")
         if (
             self.apply_orientation_to_bambu
             and self.recommended_print_rotation_x is None
             and self.recommended_print_rotation_y is None
+            and self.recommended_print_rotation_z is None
         ):
             raise ValueError("Bambu orientation requires an explicit recommended rotation")
         if self.bambu_object_settings not in (
@@ -68,6 +74,8 @@ class Design:
                 shape = shape.rotate(Axis.X, self.recommended_print_rotation_x)
             if self.recommended_print_rotation_y is not None:
                 shape = shape.rotate(Axis.Y, self.recommended_print_rotation_y)
+            if self.recommended_print_rotation_z is not None:
+                shape = shape.rotate(Axis.Z, self.recommended_print_rotation_z)
             return shape
         return self.shape
 

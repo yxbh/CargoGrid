@@ -9,6 +9,7 @@ from build123d import Face, GeomType, Location, Part, Solid, Vector
 from cargo_grid.accessories import FAMILIES, Accessory, accessory_datums
 from cargo_grid.jobs import Design, Job
 from cargo_grid.parameters import DEFAULT_HOLE_DIAMETER_MM, Interface, Tile, count, positive
+from cargo_grid.printers import PRINTERS
 from cargo_grid.stacking import Volume
 from cargo_grid.tiles import hole_placements, tile_joins
 
@@ -17,7 +18,7 @@ RoofSupportMode = Literal["painted", "auto"]
 GLOBAL_AUTO_SUPPORT_SETTINGS = {"enable_support": "1", "support_type": "normal(auto)"}
 # Compatibility name for callers checking an accessory's support recommendation.
 OBJECT_AUTO_SUPPORT = GLOBAL_AUTO_SUPPORT_SETTINGS
-# Bambu Studio 02.08.02.61: fdm_process_common and the two cli.H2D_PROFILES processes.
+# Bambu Studio 02.08.02.61: fdm_process_common and the supported H2D/X2D processes.
 # Other BBL processes can override these values, particularly the top gap.
 BAMBU_SUPPORT_DEFAULTS = {
     "support_on_build_plate_only": "0",
@@ -28,10 +29,7 @@ BAMBU_SUPPORT_DEFAULTS = {
     "support_expansion": "0",
 }
 BAMBU_SUPPORT_DEFAULT_PROCESSES = frozenset(
-    (
-        "0.32mm Balanced Strength @BBL H2D 0.8 nozzle",
-        "0.24mm Standard @BBL H2D",
-    )
+    profile.process for printer in PRINTERS.values() for profile in printer.profiles.values()
 )
 CRITICAL_PAD_WIDTH_MM = 3.0
 MIN_ENFORCER_HALF_SPAN_MM = 1.0
@@ -90,7 +88,7 @@ class RoofSupportSettings:
         }
 
     def native_settings(self, *, process_profile: str | None = None) -> dict[str, str | list[str]]:
-        """Inherit audited defaults only for the common base or supported H2D processes."""
+        """Inherit audited defaults only for the common base or supported printer processes."""
         inherit_defaults = (
             process_profile is None or process_profile in BAMBU_SUPPORT_DEFAULT_PROCESSES
         )

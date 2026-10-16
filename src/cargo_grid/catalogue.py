@@ -21,19 +21,20 @@ from cargo_grid.accessories import (
     tile_matched_perimeter,
 )
 from cargo_grid.jobs import Design, Job, tile_design
-from cargo_grid.packing import h2d_common_build
 from cargo_grid.parameters import (
     DEFAULT_HOLE_DIAMETER_MM,
     BuildVolume,
+    Exclusion,
     Interface,
     Tile,
     interface_parameters,
     positive,
 )
-from cargo_grid.plates import PlateGroup, plan_plates
+from cargo_grid.plates import PlateGroup, diagonal_fit, plan_plates
+from cargo_grid.printers import DEFAULT_PART_CLEARANCE_MM, H2D, X2D, DualNozzlePrinter
 from cargo_grid.rods import BRACE_SPACINGS_MM, ROD_HEIGHTS_MM, Rod, RodBrace
 
-H2D_DEFAULT_PART_CLEARANCE_MM = 4.0
+H2D_DEFAULT_PART_CLEARANCE_MM = DEFAULT_PART_CLEARANCE_MM
 
 BRACKET_DISPLAY_NAMES = {
     (1, 2, 2): "Deep tall tile bracket — floor 1x2, wall 1x2",
@@ -353,16 +354,35 @@ def h2d_dual_safe_catalogue_job(
     auto_roof_support: bool = False,
     layer_height_mm: float = 0.32,
 ) -> Job:
-    """Family-grouped H2D plan; ``auto_roof_support`` reserves prime towers for PLA plates.
+    """Compatibility entry point for the family-grouped H2D catalogue."""
+    return dual_safe_catalogue_job(
+        H2D,
+        hole_diameter=hole_diameter,
+        hole_scope=hole_scope,
+        packing_gap=packing_gap,
+        solid_bottom_mm=solid_bottom_mm,
+        auto_roof_support=auto_roof_support,
+        layer_height_mm=layer_height_mm,
+    )
 
-    ``layer_height_mm`` is the project's layer height, which sets Bambu's tower estimate and so
-    where the tower goes.
-    """
-    positive("H2D packing gap", packing_gap)
+
+def dual_safe_catalogue_job(
+    printer: DualNozzlePrinter,
+    *,
+    hole_diameter: float | None = DEFAULT_HOLE_DIAMETER_MM,
+    hole_scope: Literal["interior", "full"] = "full",
+    packing_gap: float = DEFAULT_PART_CLEARANCE_MM,
+    solid_bottom_mm: float = 0.0,
+    auto_roof_support: bool = False,
+    layer_height_mm: float = 0.32,
+) -> Job:
+    """Pack the same bounded inventory for either printer, recording designs that cannot fit."""
+    positive(f"{printer.name} packing gap", packing_gap)
     interface = Interface(solid_bottom_mm=solid_bottom_mm)
-    physical_build = BuildVolume(350, 320, 325)
+    # The H2D defines the existing finite inventory, including its omitted 5x5 tile. A smaller
+    # printer must account for those designs, not silently shrink the candidate inventory.
     source, sizes = _catalogue_job_with_sizes(
-        physical_build,
+        H2D.build,
         interface=interface,
         hole_diameter=hole_diameter,
         hole_scope=hole_scope,
@@ -370,11 +390,16 @@ def h2d_dual_safe_catalogue_job(
     )
     if source.omitted:
         raise ValueError("H2D dual-safe catalogue unexpectedly omitted standard designs")
-    common_build = h2d_common_build()
+    common_build = printer.common_build()
+
+    def fits_common(design: Design) -> bool:
+        return common_build.placement(sizes[id(design)]) is not None or (
+            printer is X2D and diagonal_fit(design, common_build) is not None
+        )
+
     # Tiles that only fit one nozzle's area (the 306 mm 5x5) are left out of the shared plan.
-    common_designs = [
-        design for design in source.designs if common_build.placement(sizes[id(design)])
-    ]
+    common_designs = [design for design in source.designs if fits_common(design)]
+    common_ids = {id(design) for design in common_designs}
     omitted = [
         {
             "name": design.name,
@@ -383,12 +408,19 @@ def h2d_dual_safe_catalogue_job(
             "reason": (
                 "actual bounds exceed the 300 mm H2D common reach (X 25..325) with its 5 mm "
                 "inset; make it with part and choose the nozzle yourself"
+            )
+            if printer is H2D
+            else (
+                f"actual bounds exceed {printer.name} common reach "
+                f"(X {printer.common_x_mm[0]:g}..{printer.common_x_mm[1]:g}, "
+                f"Y 0..{printer.build.y:g}, Z <= {printer.common_height_mm:g}) "
+                "with its 5 mm model inset; no scaling applied"
             ),
         }
         for design in source.designs
-        if not common_build.placement(sizes[id(design)])
+        if id(design) not in common_ids
     ]
-    if any("family" in entry["parameters"] for entry in omitted):
+    if printer is H2D and any("family" in entry["parameters"] for entry in omitted):
         raise ValueError("H2D dual-safe catalogue unexpectedly omitted an accessory")
 
     def family_members(families: set[str], ramp_join: str | None = None) -> list[Design]:
@@ -443,33 +475,75 @@ def h2d_dual_safe_catalogue_job(
     groups.append(
         PlateGroup("Rods and upper braces", family_members({"rod", "rod-brace"}), packing_gap)
     )
+    if (
+        printer is X2D
+        and auto_roof_support
+        and solid_bottom_mm in (0.0, 1.92)
+        and layer_height_mm in {p.layer_height_mm for p in printer.profiles.values()}
+        and hole_diameter == DEFAULT_HOLE_DIAMETER_MM
+        and hole_scope == "full"
+    ):
+        # Native 0.32/0.24 slices retain 5 mm at each Y end on these long, flat parts.
+        # The extra half millimetre at the left keeps their support inside X >= 20.5.
+        long_build = replace(
+            common_build,
+            exclusions=(
+                Exclusion(0, 0, 26, common_build.y),
+                *common_build.exclusions[1:],
+            ),
+        )
+        for family, title in (("tile", "Four-cell tiles"), ("support", "Four-cell rail")):
+            long_members = [
+                d
+                for d in family_members({family})
+                if (
+                    (d.parameters["nx"] == 4 and d.parameters["ny"] < 4)
+                    or (d.parameters["ny"] == 4 and d.parameters["nx"] < 4)
+                )
+            ]
+            long_ids = {id(d) for d in long_members}
+            for group in groups:
+                group.designs[:] = [d for d in group.designs if id(d) not in long_ids]
+            groups.append(PlateGroup(title, long_members, packing_gap, build=long_build))
     plan = plan_plates(
         groups,
         common_build,
         size=lambda design: sizes[id(design)],
         auto_roof_support=auto_roof_support,
         layer_height_mm=layer_height_mm,
+        diagonal_fallback=printer is X2D,
     )
-    if plan.unfit:
+    if plan.unfit and printer is H2D:
         raise ValueError(f"{plan.unfit[0].name} does not fit its H2D plate area")
+    omitted.extend(
+        {
+            "name": design.name,
+            "parameters": design.parameters,
+            "size_mm": sizes[id(design)],
+            "reason": (
+                f"actual bounds do not fit the {printer.name} plate area with the reserved "
+                "prime tower, brim clearance and model/support-foot allowances, including "
+                "the diagonal fallback; no scaling applied"
+            ),
+        }
+        for design in plan.unfit
+    )
     designs = plan.designs
     plate_names = plan.plate_names
-    if len(designs) != len(common_designs) or len({design.name for design in designs}) != len(
-        common_designs
-    ):
-        raise ValueError("H2D dual-safe family grouping is incomplete or duplicated")
+    if len(designs) + len(plan.unfit) != len(common_designs) or len(
+        {design.name for design in [*designs, *plan.unfit]}
+    ) != len(common_designs):
+        raise ValueError(f"{printer.name} dual-safe family grouping is incomplete or duplicated")
     job = Job(
         designs,
-        physical_build,
+        printer.build,
         "catalogue",
         omitted=omitted,
         print_placements=plan.placements,
         plate_names=plate_names,
         plate_builds=plan.plate_builds,
         placement_policy={
-            "name": "H2D dual-nozzle safe",
-            "common_reach_mm": {"min_x": 25, "max_x": 325, "min_y": 0, "max_y": 320, "max_z": 320},
-            "common_model_inset_mm": 5,
+            **printer.placement_policy(),
             "minimum_model_gap_mm": packing_gap,
             "minimum_actual_part_xy_clearance_mm": packing_gap,
             "clearance_measurement": (
@@ -483,7 +557,9 @@ def h2d_dual_safe_catalogue_job(
             "projected_footprint_packing": plan.projected_packing,
             "grouped_by_family": True,
             "perimeter_grouping": "outward width and boundary-hole mode",
-            "omitted_tiles": [entry["name"] for entry in omitted],
+            "omitted_tiles": [
+                entry["name"] for entry in omitted if "family" not in entry["parameters"]
+            ],
             **(
                 {"auto_roof_support": plan.auto_roof_support}
                 if plan.auto_roof_support is not None
@@ -499,5 +575,5 @@ def h2d_dual_safe_catalogue_job(
     )
     job.part_gap = packing_gap
     if plan.plate_count > 36:
-        raise ValueError("H2D dual-safe grouped catalogue exceeds the 36-plate limit")
+        raise ValueError(f"{printer.name} dual-safe grouped catalogue exceeds the 36-plate limit")
     return job

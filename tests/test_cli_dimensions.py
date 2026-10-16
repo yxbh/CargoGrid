@@ -104,12 +104,15 @@ def test_brace_bore_help_describes_standard_not_trial_variants(capsys):
     assert "10.2" not in description and "10.4" not in description
 
 
-def test_packing_gap_help_uses_the_h2d_default_constant(capsys):
+def test_packing_gap_help_uses_the_shared_printer_default_constant(capsys):
     with pytest.raises(SystemExit) as error:
         parser().parse_args(["catalogue", "--help"])
     assert error.value.code == 0
     help_text = " ".join(capsys.readouterr().out.split())
-    assert f"default 2, or {H2D_DEFAULT_PART_CLEARANCE_MM:g} with --h2d-dual-safe" in help_text
+    assert (
+        f"default 2, or {H2D_DEFAULT_PART_CLEARANCE_MM:g} with --printer or --h2d-dual-safe"
+        in help_text
+    )
 
 
 def test_h2d_option_help_uses_the_h2d_default_constant(capsys):
