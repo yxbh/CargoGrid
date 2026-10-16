@@ -1,14 +1,18 @@
 """Audited printer envelopes and profile pairs, without inferring printed fit."""
 
+import json
+from zipfile import ZipFile
+
 import pytest
 from build123d import Box
 
-from cargo_grid.export import BambuSettings, Material, write_3mf
+from cargo_grid.export import BambuSettings, Material, _bambu_project_settings, write_3mf
 from cargo_grid.jobs import Design, Job
 from cargo_grid.packing import PrintPlacement, h2d_common_build
 from cargo_grid.parameters import BuildVolume
 from cargo_grid.plates import dual_nozzle_tower_reservation
 from cargo_grid.printers import H2D, PRINTERS, X2D, printer_for_common_build
+from cargo_grid.roof_support import RoofSupportSettings
 
 
 def test_h2d_shared_build_keeps_the_existing_envelope():
@@ -53,6 +57,8 @@ def test_profile_names_keep_printer_specific_bambu_spelling():
     assert X2D.profiles[0.4].process == "0.24mm Standard @BBL X2D"
     assert H2D.tower_prime_volume_mm3 == 30
     assert X2D.tower_prime_volume_mm3 == 45
+    assert H2D.extruder_types == ("Direct Drive", "Direct Drive")
+    assert X2D.extruder_types == ("Direct Drive", "Bowden")
 
 
 @pytest.mark.parametrize("printer", PRINTERS.values(), ids=PRINTERS)
@@ -77,5 +83,37 @@ def test_tower_manifest_names_the_selected_printer(printer, tmp_path):
         machine_nozzle_count=2,
         printer_model=printer.model,
     )
-    result = write_3mf(job, tmp_path / "printer.3mf", bambu=settings)
+    path = tmp_path / "printer.3mf"
+    result = write_3mf(job, path, bambu=settings)
     assert f"On the {printer.name} " in result["prime_tower"]["note"]
+    with ZipFile(path) as archive:
+        project = json.loads(archive.read("Metadata/project_settings.config"))
+    assert project["extruder_type"] == list(printer.extruder_types)
+
+
+def test_x2d_catalogue_rectangle_is_a_process_override_without_changing_support_or_prime_volume():
+    job = Job(
+        [Design("test", Box(20, 20, 10), {})], X2D.build, "catalogue", prime_tower_width_mm=18
+    )
+    settings = BambuSettings(
+        (Material("PETG", "PETG", "#688197"), Material("PLA", "PLA", "#0A2989")),
+        0.4,
+        0.24,
+        roof_support=RoofSupportSettings(mode="auto"),
+        printer_model=X2D.model,
+        machine_nozzle_count=2,
+    )
+    project = _bambu_project_settings(job, settings)
+    assert project["prime_tower_width"] == "18" and project["prime_tower_rib_wall"] == "0"
+    changed = project["different_settings_to_system"][0].split(";")
+    assert {"prime_tower_width", "prime_tower_rib_wall"} <= set(changed)
+    assert (
+        not {
+            "support_threshold_angle",
+            "raft_first_layer_expansion",
+            "filament_prime_volume",
+            "prime_tower_brim_width",
+            "wipe_tower_rotation_angle",
+        }
+        & project.keys()
+    )

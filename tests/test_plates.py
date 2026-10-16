@@ -225,6 +225,88 @@ def test_x2d_tower_uses_its_larger_petg_prime_volume(layer, side, origin):
     assert obstacles == ((x0, y0, 256, y1),)
 
 
+@pytest.mark.parametrize("layer,height", [(0.24, 13), (0.32, 14.92), (0.24, 120)])
+def test_rectangular_x2d_estimate_keeps_volume_height_and_body_brim_reservation(layer, height):
+    estimate = BambuTowerEstimate(layer, prime_volume_mm3=45, width_mm=18)
+    width, depth = estimate.size_mm(height)
+    assert width == 18
+    assert depth == pytest.approx(
+        (90 + estimate.nozzle_change_mm3) / layer / width * 1.5, abs=1e-12
+    )
+    layout = _DualNozzleTowerLayout(X2D, estimate)
+    assert layout.reserve(height).origin == (223, 15)
+    reservation = layout.reserve(height, front_left=True)
+    assert reservation.origin == (35.5, 15)
+    x0, y0, x1, y1 = reservation.bounds
+    assert x0 == pytest.approx(25.75)
+    assert x1 == pytest.approx(63.25)
+    assert y0 <= 12.086 and y1 >= 15 + depth + estimate.brim_mm(height)
+    assert reservation.clearance == TowerClearance.uniform(6.5)
+    assert x0 >= 20.5 and y0 >= 0 and y1 <= 256
+
+
+@pytest.mark.parametrize("layer", [0.24, 0.32])
+def test_rectangular_tower_rescues_both_wide_tiles_at_the_ordinary_right_inset(layer):
+    from dataclasses import replace
+
+    common = X2D.common_build()
+    long_build = replace(
+        common, exclusions=(Exclusion(0, 0, 64.9, common.y), *common.exclusions[1:])
+    )
+    wide = [_design("3x4", (186, 246, 13)), _design("4x3", (246, 186, 13))]
+    plan = plan_plates(
+        [
+            PlateGroup(
+                "Wide tiles",
+                wide,
+                4,
+                build=long_build,
+                tower_clearance=TowerClearance(6.5, 6.5, 1.5, 6.5),
+                front_left_tower=True,
+            )
+        ],
+        common,
+        size=_size,
+        auto_roof_support=True,
+        layer_height_mm=layer,
+        tower_width_mm=18,
+    )
+    assert not plan.unfit and plan.plate_count == 2
+    assert [(p.x, p.y, p.rotation) for p in plan.placements] == [(64.9, 5, 0), (64.9, 5, 90)]
+    assert all(common.contains_box(p.x, p.y, 186, 246, 13) for p in plan.placements)
+
+
+@pytest.mark.parametrize("width", [0, 1.99, float("nan"), float("inf")])
+def test_rectangular_estimate_rejects_invalid_widths(width):
+    with pytest.raises(ValueError, match="width"):
+        BambuTowerEstimate(0.24, width_mm=width)
+
+
+def test_real_diagonal_rod_fits_above_the_deeper_rectangular_tower():
+    from cargo_grid.catalogue import accessory_design
+    from cargo_grid.rods import Rod
+
+    rod = accessory_design(Rod(240))
+    for layer in (0.24, 0.32):
+        plan = plan_plates(
+            [PlateGroup("Rods", [rod], 4)],
+            X2D.common_build(),
+            size=lambda d: d.bambu_size,
+            auto_roof_support=True,
+            layer_height_mm=layer,
+            diagonal_fallback=True,
+            tower_width_mm=18,
+        )
+        assert not plan.unfit
+        placed = plan.designs[0]
+        assert placed.shape is rod.shape
+        assert placed.recommended_print_rotation_y == 90
+        assert placed.recommended_print_rotation_z == 45
+        assert max(placed.bambu_size[:2]) < 184
+        position = plan.placements[0]
+        assert plan.plate_builds[0].contains_box(position.x, position.y, *placed.bambu_size)
+
+
 @pytest.mark.parametrize("layer", [0.32, 0.24])
 def test_x2d_support_foot_inset_can_omit_a_four_cell_tile_that_fits_without_support(layer):
     small = _design("3x3", (186, 186, 13))

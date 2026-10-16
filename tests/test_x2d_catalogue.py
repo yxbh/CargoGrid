@@ -3,7 +3,7 @@
 from types import SimpleNamespace
 
 import pytest
-from build123d import Box
+from build123d import Box, Pos
 
 from cargo_grid import catalogue, cli
 from cargo_grid.catalogue import dual_safe_catalogue_job
@@ -26,13 +26,14 @@ def inventory_stand_ins(monkeypatch):
         )
 
     monkeypatch.setattr(catalogue, "tile_design", tile)
-    monkeypatch.setattr(
-        catalogue,
-        "make_accessory",
-        lambda spec: (
-            Box(18, 18, spec.above_mat_height_mm + 12) if isinstance(spec, Rod) else Box(20, 30, 10)
-        ),
-    )
+
+    def accessory(spec):
+        if isinstance(spec, Rod):
+            length = spec.above_mat_height_mm + 12
+            return Box(10, 10, length) + Pos(0, 0, -length / 2 + 13.6) * Box(18, 18, 3.2)
+        return Box(20, 30, 10)
+
+    monkeypatch.setattr(catalogue, "make_accessory", accessory)
 
 
 @pytest.mark.parametrize("layer", [0.32, 0.24])
@@ -46,11 +47,7 @@ def test_smaller_printer_accounts_for_the_whole_bounded_inventory(
         for d in job.designs
         if "family" not in d.parameters
     }
-    expected = (
-        {(x, y) for x in range(1, 4) for y in range(1, 4)} | {(1, 4), (2, 4), (4, 1), (4, 2)}
-        if supported
-        else {(x, y) for x in range(1, 5) for y in range(1, 5)} - {(4, 4)}
-    )
+    expected = {(x, y) for x in range(1, 5) for y in range(1, 5)} - {(4, 4)}
     assert tiles == expected
     missing_tiles = {
         (entry["parameters"]["nx"], entry["parameters"]["ny"])
@@ -73,6 +70,23 @@ def test_smaller_printer_accounts_for_the_whole_bounded_inventory(
     }
     assert job.build == X2D.build
     assert job.plate_settings == {}
+    assert job.prime_tower_width_mm == (18 if supported else None)
+    if supported:
+        assert set(job.prime_tower_positions.values()) == {(35.5, 15), (223, 15)}
+        for design, placement in zip(job.designs, job.print_placements, strict=True):
+            if "family" not in design.parameters and 4 not in (
+                design.parameters["nx"],
+                design.parameters["ny"],
+            ):
+                assert placement.x >= 26.5
+                assert job.plate_builds[placement.plate].margin == 6
+        turned = next(
+            d
+            for d in job.designs
+            if "family" not in d.parameters and (d.parameters["nx"], d.parameters["ny"]) == (3, 4)
+        )
+        assert turned.recommended_print_rotation_z == 180 and turned.apply_orientation_to_bambu
+    assert all("raft_first_layer_expansion" not in d.bambu_object_settings for d in job.designs)
 
 
 def _arguments(nozzle=0.8):
@@ -122,6 +136,7 @@ def test_unmeasured_settings_keep_the_original_support_foot_inset(inventory_stan
         "family" not in d.parameters and 4 in (d.parameters["nx"], d.parameters["ny"])
         for d in job.designs
     )
+    assert job.prime_tower_width_mm is None
 
 
 @pytest.mark.parametrize("nozzle", [0.8, 0.4])
@@ -210,7 +225,7 @@ def test_real_x2d_catalogue_solids_and_prepared_placements_stay_in_reach(x2d_pla
         tuple(d.parameters[k] for k in ("nx", "ny"))
         for d in job.designs
         if "family" not in d.parameters
-    } == {(x, y) for x in range(1, 4) for y in range(1, 4)} | {(1, 4), (2, 4), (4, 1), (4, 2)}
+    } == {(x, y) for x in range(1, 5) for y in range(1, 5)} - {(4, 4)}
     for design, placement in zip(job.designs, job.print_placements, strict=True):
         assert design.shape.is_valid and len(design.shape.solids()) == 1
         assert design.shape.volume > 0

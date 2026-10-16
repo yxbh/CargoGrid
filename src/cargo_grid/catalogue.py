@@ -21,6 +21,7 @@ from cargo_grid.accessories import (
     tile_matched_perimeter,
 )
 from cargo_grid.jobs import Design, Job, tile_design
+from cargo_grid.packing import TowerClearance
 from cargo_grid.parameters import (
     DEFAULT_HOLE_DIAMETER_MM,
     BuildVolume,
@@ -30,7 +31,14 @@ from cargo_grid.parameters import (
     interface_parameters,
     positive,
 )
-from cargo_grid.plates import PlateGroup, diagonal_fit, plan_plates
+from cargo_grid.plates import (
+    AUTO_SUPPORT_PLATE_MARGIN_MM,
+    AUTO_SUPPORT_TOWER_CLEARANCE_MM,
+    TOWER_LEFT_CLEARANCE_MM,
+    PlateGroup,
+    diagonal_fit,
+    plan_plates,
+)
 from cargo_grid.printers import DEFAULT_PART_CLEARANCE_MM, H2D, X2D, DualNozzlePrinter
 from cargo_grid.rods import BRACE_SPACINGS_MM, ROD_HEIGHTS_MM, Rod, RodBrace
 
@@ -437,8 +445,32 @@ def dual_safe_catalogue_job(
         complete = parameters.get("complete_edge_holes", False)
         return outward, complete
 
+    measured_x2d = (
+        printer is X2D
+        and auto_roof_support
+        and solid_bottom_mm in (0.0, 1.92)
+        and layer_height_mm in {p.layer_height_mm for p in printer.profiles.values()}
+        and hole_diameter == DEFAULT_HOLE_DIAMETER_MM
+        and hole_scope == "full"
+    )
+    tile_build = None
+    if measured_x2d:
+        # A native 0.32 mm support foot on an ordinary tile reaches 5.14 mm west.
+        tile_build = replace(
+            common_build,
+            margin=AUTO_SUPPORT_PLATE_MARGIN_MM,
+            exclusions=(
+                Exclusion(
+                    0,
+                    0,
+                    printer.common_x_mm[0] + AUTO_SUPPORT_PLATE_MARGIN_MM,
+                    common_build.y,
+                ),
+                *common_build.exclusions[1:],
+            ),
+        )
     groups = [
-        PlateGroup("Tiles", family_members({"tile"}), packing_gap),
+        PlateGroup("Tiles", family_members({"tile"}), packing_gap, build=tile_build),
         PlateGroup("Female ramps", family_members({"ramp"}, "female"), packing_gap),
         PlateGroup("Male ramps", family_members({"ramp"}, "male"), packing_gap),
         PlateGroup("Normal stops", family_members({"vertical-stop"}), packing_gap),
@@ -475,20 +507,14 @@ def dual_safe_catalogue_job(
     groups.append(
         PlateGroup("Rods and upper braces", family_members({"rod", "rod-brace"}), packing_gap)
     )
-    if (
-        printer is X2D
-        and auto_roof_support
-        and solid_bottom_mm in (0.0, 1.92)
-        and layer_height_mm in {p.layer_height_mm for p in printer.profiles.values()}
-        and hole_diameter == DEFAULT_HOLE_DIAMETER_MM
-        and hole_scope == "full"
-    ):
+    tower_width_mm = 18.0 if measured_x2d else None
+    if measured_x2d:
         # Native 0.32/0.24 slices retain 5 mm at each Y end on these long, flat parts.
-        # The extra half millimetre at the left keeps their support inside X >= 20.5.
+        # X=64.9 leaves 5.1 mm at the right and clearance from the rectangular tower.
         long_build = replace(
             common_build,
             exclusions=(
-                Exclusion(0, 0, 26, common_build.y),
+                Exclusion(0, 0, 64.9, common_build.y),
                 *common_build.exclusions[1:],
             ),
         )
@@ -504,7 +530,29 @@ def dual_safe_catalogue_job(
             long_ids = {id(d) for d in long_members}
             for group in groups:
                 group.designs[:] = [d for d in group.designs if id(d) not in long_ids]
-            groups.append(PlateGroup(title, long_members, packing_gap, build=long_build))
+            if family == "tile":
+                for index, design in enumerate(long_members):
+                    if (design.parameters["nx"], design.parameters["ny"]) == (3, 4):
+                        turned = replace(
+                            design,
+                            recommended_print_rotation_z=180,
+                            apply_orientation_to_bambu=True,
+                        )
+                        sizes[id(turned)] = turned.bambu_size
+                        long_members[index] = turned
+            groups.append(
+                PlateGroup(
+                    title,
+                    long_members,
+                    packing_gap,
+                    build=long_build,
+                    tower_clearance=replace(
+                        TowerClearance.uniform(AUTO_SUPPORT_TOWER_CLEARANCE_MM),
+                        right=TOWER_LEFT_CLEARANCE_MM,
+                    ),
+                    front_left_tower=True,
+                )
+            )
     plan = plan_plates(
         groups,
         common_build,
@@ -512,6 +560,7 @@ def dual_safe_catalogue_job(
         auto_roof_support=auto_roof_support,
         layer_height_mm=layer_height_mm,
         diagonal_fallback=printer is X2D,
+        tower_width_mm=tower_width_mm,
     )
     if plan.unfit and printer is H2D:
         raise ValueError(f"{plan.unfit[0].name} does not fit its H2D plate area")
@@ -572,6 +621,7 @@ def dual_safe_catalogue_job(
         prime_tower_positions=plan.prime_tower_positions,
         prime_tower_reaches=plan.prime_tower_reaches,
         prime_tower_clearances=plan.prime_tower_clearances,
+        prime_tower_width_mm=tower_width_mm,
     )
     job.part_gap = packing_gap
     if plan.plate_count > 36:

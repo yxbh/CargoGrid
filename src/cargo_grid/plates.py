@@ -22,11 +22,9 @@ from cargo_grid.packing import (
     pack_sizes,
 )
 from cargo_grid.parameters import BuildVolume, Exclusion, positive
-from cargo_grid.printers import H2D, DualNozzlePrinter, printer_for_common_build
+from cargo_grid.printers import H2D, X2D, DualNozzlePrinter, printer_for_common_build
 
-# Auto roof support prints a PLA interface, so every plate with supported parts needs a prime
-# tower. Bambu's default tower is used as it is; each plate only gets a tower position and a
-# model-free area around the reserved tower bounds.
+# Auto roof support prints a PLA interface, so every supported plate reserves a prime tower.
 DEFAULT_PRIME_TOWER = PrimeTower()
 # Models keep this far from the reserved tower bounds: Bambu's automatic support foot grows up
 # to about 5 mm past a supported part.
@@ -50,17 +48,20 @@ TOWER_BACK_ALLOWANCE_MM = 1.0
 # with a rotated tile and an edge strip whose supported sides faced it.
 TOWER_LEFT_CLEARANCE_MM = 1.5
 H2D_TOWER_LEFT_CLEARANCE_MM = TOWER_LEFT_CLEARANCE_MM
+RECTANGULAR_TOWER_FRONT_ALLOWANCE_MM = 2.0
+RECTANGULAR_TOWER_WIPE_REACH_MM = 9.75
 SIDES = ("left", "front", "right", "back")
 
 
 @dataclass(frozen=True)
 class BambuTowerEstimate:
-    """Bambu Studio 02.08.02.61's pre-slice rib-wall tower estimate for one PETG and one PLA.
+    """Bambu Studio 02.08.02.61's pre-slice tower estimate for one PETG and one PLA.
 
-    It is the square Bambu uses to decide whether a stored tower position is in range. The
+    It matches the shape Bambu uses to decide whether a stored tower position is in range.
     Defaults reproduce the H2D positions: 30 mm³ purge per filament, 10 mm of 1.75 mm filament
     per nozzle change, a 150% infill gap and 8 mm ribs. X2D uses 45 mm³, the larger of its
-    PETG/PLA prime volumes, for both filaments just as Bambu's estimate does.
+    PETG/PLA prime volumes, for both filaments just as Bambu's estimate does. A specified
+    width selects a rib-free rectangle whose depth retains that volume and height minimum.
     """
 
     layer_height: float
@@ -68,9 +69,23 @@ class BambuTowerEstimate:
     nozzle_change_mm3: float = 10 * pi * 1.75**2 / 4
     infill_gap: float = 1.5
     rib_width_mm: float = 8.0
+    width_mm: float | None = None
 
     def __post_init__(self) -> None:
         positive("layer height", self.layer_height)
+        if self.width_mm is not None:
+            positive("tower width", self.width_mm)
+            if self.width_mm < 2:
+                raise ValueError("Bambu tower width must be at least 2 mm")
+
+    def size_mm(self, height: float) -> tuple[float, float]:
+        """GUI load-range estimate; a specified width selects the rib-free rectangle."""
+        if self.width_mm is None:
+            side = self.side_mm(height)
+            return side, side
+        volume = 2 * self.prime_volume_mm3 + self.nozzle_change_mm3
+        depth = volume / (self.layer_height * self.width_mm) * self.infill_gap
+        return self.width_mm, max(_bambu_min_tower_depth(height), depth)
 
     def side_mm(self, height: float) -> float:
         """Estimated square side for a plate whose tallest object is ``height`` mm."""
@@ -133,6 +148,8 @@ class PlateGroup:
     gap: float
     projected: bool = False
     build: BuildVolume | None = None
+    tower_clearance: TowerClearance | None = None
+    front_left_tower: bool = False
 
 
 def diagonal_fit(design: Design, build: BuildVolume) -> Design | None:
@@ -175,7 +192,7 @@ class _TowerLayout:
     def __init__(self, build: BuildVolume) -> None:
         self.build = build
 
-    def reserve(self, height: float) -> TowerReservation:
+    def reserve(self, height: float, *, front_left: bool = False) -> TowerReservation:
         raise NotImplementedError
 
     def _with_keep_out(
@@ -223,7 +240,7 @@ class _TowerLayout:
 
 
 class _DualNozzleTowerLayout(_TowerLayout):
-    """Front-right tower inside the printer's shared nozzle reach."""
+    """Front-right by default, with a front-left rectangle for measured catalogue groups."""
 
     def __init__(self, printer: DualNozzlePrinter, estimate: BambuTowerEstimate) -> None:
         common = printer.common_build()
@@ -244,15 +261,41 @@ class _DualNozzleTowerLayout(_TowerLayout):
             "in the front-right corner where Bambu Studio keeps it (its estimated square 15 mm inside "
             f"X {left:g}..{right:g} and Y >= 15), and models keep clear of the estimated tower and brim"
         )
+        if estimate.width_mm is not None:
+            self.reason = (
+                "X2D catalogue plates use a rectangular tower on the right for ordinary groups "
+                "and the left for measured four-cell groups, preserving prime volumes and "
+                "automatic support feet; reserve its estimated depth, automatic brim and "
+                "nozzle-change wipe reach; measured four-cell groups use 1.5 mm clearance on "
+                "its right, and ordinary groups keep 6.5 mm on every side"
+            )
 
-    def reserve(self, height: float) -> TowerReservation:
-        side = self.estimate.side_mm(height)
+    def reserve(self, height: float, *, front_left: bool = False) -> TowerReservation:
+        width, depth = self.estimate.size_mm(height)
         brim = self.estimate.brim_mm(height)
+        if self.estimate.width_mm is not None:
+            x = (
+                self.printer.common_x_mm[0] + BAMBU_TOWER_MARGIN_MM
+                if front_left
+                else floor((self.printer.common_x_mm[1] - BAMBU_TOWER_MARGIN_MM - width) * 100)
+                / 100
+            )
+            y = BAMBU_TOWER_MARGIN_MM
+            reach = PrimeTower(
+                max(brim + 1.0, RECTANGULAR_TOWER_WIPE_REACH_MM),
+                brim + RECTANGULAR_TOWER_FRONT_ALLOWANCE_MM,
+                width + max(brim + 1.0, RECTANGULAR_TOWER_WIPE_REACH_MM),
+                depth + brim + TOWER_BACK_ALLOWANCE_MM,
+            )
+            clearance = TowerClearance.uniform(AUTO_SUPPORT_TOWER_CLEARANCE_MM)
+            return self._with_keep_out((x, y), reach, clearance)
+        if front_left:
+            raise ValueError("front-left dual-nozzle towers require a rectangular catalogue")
         limit = self.printer.common_x_mm[1]
         # Round down so Bambu's in-range test (x + margin + side <= limit) keeps the position.
-        x = floor((limit - BAMBU_TOWER_MARGIN_MM - side) * 100) / 100
+        x = floor((limit - BAMBU_TOWER_MARGIN_MM - width) * 100) / 100
         y = BAMBU_TOWER_MARGIN_MM
-        reach = PrimeTower(brim, brim, limit - x, side + brim + TOWER_BACK_ALLOWANCE_MM)
+        reach = PrimeTower(brim, brim, limit - x, depth + brim + TOWER_BACK_ALLOWANCE_MM)
         clearance = TowerClearance(
             TOWER_LEFT_CLEARANCE_MM,
             AUTO_SUPPORT_TOWER_CLEARANCE_MM,
@@ -309,11 +352,13 @@ class _FrontLeftTowerLayout(_TowerLayout):
                 "auto roof support needs room for a prime tower at the front left of the build"
             )
 
-    def reserve(self, height: float) -> TowerReservation:
+    def reserve(self, height: float, *, front_left: bool = False) -> TowerReservation:
         return self.reservation
 
 
-def _tower_layout(build: BuildVolume, layer_height_mm: float | None) -> _TowerLayout:
+def _tower_layout(
+    build: BuildVolume, layer_height_mm: float | None, width_mm: float | None = None
+) -> _TowerLayout:
     printer = printer_for_common_build(build)
     if printer is not None:
         if layer_height_mm is None:
@@ -322,7 +367,11 @@ def _tower_layout(build: BuildVolume, layer_height_mm: float | None) -> _TowerLa
             )
         return _DualNozzleTowerLayout(
             printer,
-            BambuTowerEstimate(layer_height_mm, prime_volume_mm3=printer.tower_prime_volume_mm3),
+            BambuTowerEstimate(
+                layer_height_mm,
+                prime_volume_mm3=printer.tower_prime_volume_mm3,
+                width_mm=width_mm,
+            ),
         )
     return _FrontLeftTowerLayout(build)
 
@@ -354,6 +403,7 @@ def plan_plates(
     auto_roof_support: bool = False,
     layer_height_mm: float | None = None,
     diagonal_fallback: bool = False,
+    tower_width_mm: float | None = None,
 ) -> PlatePlan:
     """Pack ordered groups onto consecutive plates, reserving prime towers for auto support.
 
@@ -365,7 +415,11 @@ def plan_plates(
     the tower position follows Bambu's estimate for ``layer_height_mm`` and the group's
     tallest design, so Bambu Studio keeps it when it opens the project.
     """
-    tower = _tower_layout(build, layer_height_mm) if auto_roof_support else None
+    if tower_width_mm is not None and (
+        not auto_roof_support or printer_for_common_build(build) is not X2D
+    ):
+        raise ValueError("rectangular prime towers require X2D Auto-support planning")
+    tower = _tower_layout(build, layer_height_mm, tower_width_mm) if auto_roof_support else None
     plan = PlatePlan([], [], {}, {}, {})
     towered_plates: dict[int, TowerReservation] = {}
     towered_groups, towered_gaps = [], []
@@ -374,8 +428,17 @@ def plan_plates(
         towered = tower is not None and bool(group.designs)
         gap = group.gap + AUTO_SUPPORT_FOOT_ALLOWANCE_MM if towered else group.gap
         reservation = (
-            tower.reserve(max(size(design)[2] for design in group.designs)) if towered else None
+            tower.reserve(
+                max(size(design)[2] for design in group.designs),
+                front_left=group.front_left_tower,
+            )
+            if towered
+            else None
         )
+        if reservation and group.tower_clearance is not None:
+            reservation = tower._with_keep_out(
+                reservation.origin, reservation.reach, group.tower_clearance
+            )
         group_build = reservation.build if reservation else build
         if group.build is not None:
             group_build = group.build

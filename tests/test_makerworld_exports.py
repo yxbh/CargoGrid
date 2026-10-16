@@ -196,6 +196,7 @@ def test_failed_variant_leaves_the_output_folder_untouched(monkeypatch, tmp_path
 
 def _project(path, plates=2):
     settings = {
+        "printer_model": "Bambu Lab H2D",
         "printer_settings_id": "Bambu Lab H2D 0.8 nozzle",
         "print_settings_id": "0.32mm Balanced Strength @BBL H2D 0.8 nozzle",
         "filament_settings_id": ["PETG", "PLA"],
@@ -257,10 +258,57 @@ def test_slice_plate_reports_what_bambu_refuses(monkeypatch, tmp_path, code, log
 
     def fake_run(bambu, arguments, path):
         path.write_text(log)
+        if code == 0:
+            target = tmp_path / "sliced-9.3mf"
+            _project(target)
+            with ZipFile(target, "a") as archive:
+                archive.writestr(
+                    "Metadata/plate_9.gcode",
+                    "M83\nG0 X30 Y10 Z0.2\n; FEATURE: Support\n; LINE_WIDTH: 0.5\nG1 X40 E1\n",
+                )
         return code
 
     monkeypatch.setattr(tool, "_run", fake_run)
     assert tool.slice_plate(tmp_path / "bambu", tmp_path / "job.3mf", 9, tmp_path) == expected
+
+
+@pytest.mark.parametrize(
+    "move,expected",
+    [
+        ("G1 X40 Y10 E1", (29.8, 9.8, 0.2, 40.2, 10.2, 0.2)),
+        ("G2 X40 Y10 I5 J0 E1", (29.8, 9.8, 0.2, 40.2, 15.2, 0.2)),
+        ("G3 X40 Y10 I5 J0 E1", (29.8, 4.8, 0.2, 40.2, 10.2, 0.2)),
+        ("G2 X30 Y10 I5 J0 E1", (29.8, 4.8, 0.2, 40.2, 15.2, 0.2)),
+    ],
+)
+def test_all_layer_extrusion_bounds_include_width_and_arc_extrema(move, expected):
+    gcode = f"M83\nG0 X30 Y10 Z0.2\n; FEATURE: Outer wall\n; LINE_WIDTH: 0.4\n{move}\n"
+    assert _tool().extrusion_bounds(gcode) == pytest.approx(expected)
+
+
+def test_extrusion_bounds_ignore_startup_travel_and_retraction_and_track_absolute_e():
+    gcode = (
+        "M82\nG0 X-50 Y-50 Z0.2\nG1 X-30 E5\nG92 E0\n"
+        "; FEATURE: Custom\nG1 X-20 E10\n"
+        "G0 X30 Y10\n; FEATURE: Prime tower\n; LINE_WIDTH: 0.4\n"
+        "G1 X40 E11\nG1 X100 E10\nG0 X200\n"
+    )
+    assert _tool().extrusion_bounds(gcode) == pytest.approx((29.8, 9.8, 0.2, 40.2, 10.2, 0.2))
+
+
+@pytest.mark.parametrize("x,passes", [(20.75, True), (20.74, False)])
+def test_common_reach_check_uses_printed_width_not_just_the_centerline(tmp_path, x, passes):
+    path = tmp_path / "sliced.3mf"
+    with ZipFile(path, "w") as archive:
+        archive.writestr("Metadata/project_settings.config", '{"printer_model":"Bambu Lab X2D"}')
+        archive.writestr(
+            "Metadata/plate_1.gcode",
+            f"M83\nG0 X{x} Y10 Z0.2\n; FEATURE: Support\n; LINE_WIDTH: 0.5\nG1 Y20 E1\n",
+        )
+    problem = _tool().extrusion_problem(path)
+    assert (problem is None) == passes
+    if not passes:
+        assert "exceed X2D common reach/bed" in problem
 
 
 def test_bambu_problems_name_the_plate_and_petg_nozzle(monkeypatch, tmp_path):

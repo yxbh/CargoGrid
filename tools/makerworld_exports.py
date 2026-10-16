@@ -37,6 +37,7 @@ import sys
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from math import atan2, cos, hypot, pi, sin
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -250,6 +251,97 @@ def check_copy(project: Path, effective: dict, mapping: tuple[str, ...], target:
     return plates
 
 
+def extrusion_bounds(gcode: str) -> tuple[float, ...] | None:
+    """Bound generated extrusion, including line width and XY arc extrema, not startup macros."""
+    x = y = z = e = width = 0.0
+    absolute_e, absolute_xyz = False, True
+    role, bounds = "unknown", None
+    for line in gcode.splitlines():
+        if line.startswith("; FEATURE:"):
+            role = line.split(":", 1)[1].strip()
+        elif line.startswith("; LINE_WIDTH:"):
+            width = float(line.split(":", 1)[1])
+        command = line.split(";", 1)[0].strip()
+        operation = command.split(maxsplit=1)[0] if command else ""
+        if operation in ("M82", "M83"):
+            absolute_e = operation == "M82"
+        elif operation in ("G90", "G91"):
+            absolute_xyz = operation == "G90"
+        fields = {
+            key: float(value)
+            for key, value in re.findall(r"([XYZEIJ])([+-]?(?:\d+(?:\.\d*)?|\.\d+))", command)
+        }
+        if operation == "G92":
+            x, y, z, e = (fields.get(key, value) for key, value in zip("XYZE", (x, y, z, e)))
+        elif operation in ("G0", "G1", "G2", "G3"):
+            nx, ny, nz = (
+                fields.get(key, value) if absolute_xyz else value + fields.get(key, 0)
+                for key, value in zip("XYZ", (x, y, z))
+            )
+            extrusion = fields.get("E", e if absolute_e else 0)
+            delta = extrusion - e if absolute_e else extrusion
+            if (
+                delta > 0
+                and role not in ("unknown", "Custom")
+                and (nx != x or ny != y or "I" in fields or "J" in fields)
+            ):
+                if width <= 0:
+                    raise ValueError("generated extrusion has no positive line width")
+                points = [(x, y), (nx, ny)]
+                if operation in ("G2", "G3"):
+                    cx, cy = x + fields.get("I", 0), y + fields.get("J", 0)
+                    radius = hypot(x - cx, y - cy)
+                    start, end = atan2(y - cy, x - cx), atan2(ny - cy, nx - cx)
+                    direction = -1 if operation == "G2" else 1
+                    sweep = (direction * (end - start)) % (2 * pi)
+                    if (x, y) == (nx, ny):
+                        sweep = 2 * pi
+                    for angle in (0, pi / 2, pi, 3 * pi / 2):
+                        if (direction * (angle - start)) % (2 * pi) <= sweep + 1e-9:
+                            points.append((cx + radius * cos(angle), cy + radius * sin(angle)))
+                box = (
+                    min(p[0] for p in points) - width / 2,
+                    min(p[1] for p in points) - width / 2,
+                    min(z, nz),
+                    max(p[0] for p in points) + width / 2,
+                    max(p[1] for p in points) + width / 2,
+                    max(z, nz),
+                )
+                bounds = (
+                    tuple(min(a, b) for a, b in zip(bounds[:3], box[:3]))
+                    + tuple(max(a, b) for a, b in zip(bounds[3:], box[3:]))
+                    if bounds is not None
+                    else box
+                )
+            x, y, z = nx, ny, nz
+            if absolute_e:
+                e = extrusion
+    return bounds
+
+
+def extrusion_problem(sliced: Path) -> str | None:
+    with ZipFile(sliced) as archive:
+        settings = json.loads(archive.read("Metadata/project_settings.config"))
+        printer = next(p for p in PRINTERS.values() if p.model == settings["printer_model"])
+        names = [name for name in archive.namelist() if name.endswith(".gcode")]
+        if len(names) != 1:
+            return f"expected one sliced plate, found {len(names)} G-code files"
+        bounds = extrusion_bounds(archive.read(names[0]).decode())
+    if bounds is None:
+        return "sliced plate has no generated extrusion"
+    x0, y0, z0, x1, y1, z1 = bounds
+    if (
+        x0 < printer.common_x_mm[0]
+        or y0 < 0
+        or z0 < 0
+        or x1 > printer.common_x_mm[1]
+        or y1 > printer.build.y
+        or z1 > printer.common_height_mm
+    ):
+        return f"all-layer extrusion bounds {bounds} exceed {printer.name} common reach/bed"
+    return None
+
+
 def slice_plate(bambu: Path, project: Path, plate: int, work: Path) -> str | None:
     """Slice one plate; return Bambu's complaint, or None when it slices cleanly."""
     log = work / f"slice-{plate}.log"
@@ -257,9 +349,11 @@ def slice_plate(bambu: Path, project: Path, plate: int, work: Path) -> str | Non
     arguments += ["--orient", "0", "--slice", str(plate)]
     arguments += ["--export-3mf", str(work / f"sliced-{plate}.3mf"), str(project)]
     code = _run(bambu, arguments, log)
-    (work / f"sliced-{plate}.3mf").unlink(missing_ok=True)
     if code == 0:
-        return None
+        problem = extrusion_problem(work / f"sliced-{plate}.3mf")
+        (work / f"sliced-{plate}.3mf").unlink()
+        return problem
+    (work / f"sliced-{plate}.3mf").unlink(missing_ok=True)
     found = PROBLEMS.findall(log.read_text(errors="replace"))
     return found[0].strip() if found else f"Bambu Studio exited with code {code}"
 

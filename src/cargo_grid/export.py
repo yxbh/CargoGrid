@@ -175,12 +175,22 @@ def _bambu_project_settings(job: Job, bambu: BambuSettings, plate_count: int = 1
     if bambu.printer_model is not None:
         settings["printer_model"] = bambu.printer_model
     if nozzle_count > 1:
-        settings["extruder_type"] = ["Direct Drive"] * nozzle_count
+        printer = next((p for p in PRINTERS.values() if p.model == bambu.printer_model), None)
+        settings["extruder_type"] = (
+            list(printer.extruder_types) if printer else ["Direct Drive"] * nozzle_count
+        )
         settings["default_nozzle_volume_type"] = ["Standard"] * nozzle_count
         settings["nozzle_volume_type"] = ["Standard"] * nozzle_count
     if bambu.bed_type is not None:
         settings["curr_bed_type"] = bambu.bed_type
     overrides = set(BAMBU_PROCESS_DEFAULTS)
+    if job.prime_tower_width_mm is not None:
+        tower_shape = {
+            "prime_tower_width": f"{job.prime_tower_width_mm:g}",
+            "prime_tower_rib_wall": "0",
+        }
+        settings.update(tower_shape)
+        overrides.update(tower_shape)
     if bambu.roof_support:
         settings.update(bambu.roof_support.native_settings(process_profile=bambu.print_settings_id))
         overrides.update(
@@ -188,7 +198,7 @@ def _bambu_project_settings(job: Job, bambu: BambuSettings, plate_count: int = 1
         )
     default = next(iter(job.prime_tower_positions.values()), None)
     if job.prime_tower is not None and default is not None:
-        # Bambu's default tower is used; only its per-plate position is written.
+        # Positions remain per plate; a catalogue's rectangular shape is project-wide.
         positions = [job.prime_tower_positions.get(plate, default) for plate in range(plate_count)]
         tower = {
             "wipe_tower_x": [f"{x:g}" for x, _ in positions],
@@ -291,6 +301,16 @@ def _validate_request(job: Job, bambu: BambuSettings | None, stack: StackSetting
     if not job.designs:
         raise ValueError("a job needs at least one design")
     positive("part gap", job.part_gap, zero=True)
+    if (
+        job.prime_tower_width_mm is not None
+        and bambu
+        and (
+            bambu.printer_model != PRINTERS["x2d"].model
+            or not bambu.roof_support
+            or bambu.roof_support.mode != "auto"
+        )
+    ):
+        raise ValueError("rectangular prime towers are limited to X2D Auto-support catalogues")
     names = set()
     reserved = {
         "CON",
@@ -970,7 +990,23 @@ def _write_3mf(
             if job.prime_tower is None
             else {
                 "prime_tower": {
-                    "tower": "Bambu default (no tower settings written)",
+                    "tower": (
+                        "Bambu default (no tower settings written)"
+                        if job.prime_tower_width_mm is None
+                        else "X2D catalogue rectangular tower"
+                    ),
+                    **(
+                        {
+                            "process_settings": {
+                                "prime_tower_width": f"{job.prime_tower_width_mm:g}",
+                                "prime_tower_rib_wall": "0",
+                            },
+                            "settings_scope": "project",
+                            "physical_stability_verified": False,
+                        }
+                        if job.prime_tower_width_mm is not None
+                        else {}
+                    ),
                     "reserved_reach_from_origin_mm": {
                         "left": job.prime_tower.left,
                         "front": job.prime_tower.front,
@@ -987,7 +1023,11 @@ def _write_3mf(
                         }
                         for plate, (x, y) in sorted(job.prime_tower_positions.items())
                     ],
-                    "note": f"Each plate sets only the tower origin. On the {tower_printer} it is where Bambu Studio 02.08.02.61 places the tower when it opens the project, and the reserved bounds cover its estimated tower, automatic brim and the extra depth seen in local slices. They are not a guarantee for other profiles or materials.",
+                    "note": (
+                        f"Each plate sets only the tower origin. On the {tower_printer} it is where Bambu Studio 02.08.02.61 places the tower when it opens the project, and the reserved bounds cover its estimated tower, automatic brim and the extra depth seen in local slices. They are not a guarantee for other profiles or materials."
+                        if job.prime_tower_width_mm is None
+                        else "X2D catalogue width and rib-wall settings are project-wide; measured four-cell groups use a front-left origin and ordinary groups use front-right. Prime volumes, automatic brim, support feet and process support thresholds are unchanged. Bounds reserve the tower body, brim and nozzle-change wipe lines. Tall-plate tower stability is physically untested."
+                    ),
                 }
             }
         ),

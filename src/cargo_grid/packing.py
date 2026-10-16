@@ -8,15 +8,16 @@ from cargo_grid.printers import H2D
 
 @dataclass(frozen=True)
 class PrimeTower:
-    """Space kept free for Bambu's default prime tower; no tower settings are written.
+    """Space kept free for native prime-tower extrusion, including its brim and wipe lines.
 
-    Each plate only chooses the tower origin (``wipe_tower_x``/``wipe_tower_y``). The fields
+    Each plate chooses the tower origin (``wipe_tower_x``/``wipe_tower_y``). The fields
     are how far tower extrusion may reach from that origin. The defaults are used for generic
     builds: Bambu Studio 02.08.02.61 sliced the default H2D rib-wall tower on 0.32 mm PETG/PLA
     plates as a 25.5 to 28.3 mm square whose walls, wipe lines and automatic first-layer brim
     reached up to 7.05 mm left, 6.39 mm in front, 34.05 mm right and 30.83 mm behind the
     origin; the defaults add a little to each. H2D plans size each plate's reach from Bambu's
-    own tower estimate instead (``plates.BambuTowerEstimate``).
+    own tower estimate instead (``plates.BambuTowerEstimate``). X2D catalogue rectangles
+    also reserve the nozzle-change wipe lines beyond both X ends.
     """
 
     left: float = 7.5

@@ -106,11 +106,16 @@ class Job:
     prime_tower_reaches: dict[int, PrimeTower] = field(default_factory=dict)
     # Per-plate tower-to-model clearance, one value or per side; unlisted plates use the part gap.
     prime_tower_clearances: dict[int, float | TowerClearance] = field(default_factory=dict)
+    prime_tower_width_mm: float | None = None
 
     def __post_init__(self):
         if not self.designs:
             raise ValueError("a job needs at least one design")
         positive("part gap", self.part_gap, zero=True)
+        if self.prime_tower_width_mm is not None:
+            positive("prime tower width", self.prime_tower_width_mm)
+            if self.prime_tower_width_mm < 2 or self.kind != "catalogue":
+                raise ValueError("a rectangular prime tower requires a catalogue and width >= 2 mm")
         if self.print_placements is not None and len(self.print_placements) != len(self.designs):
             raise ValueError("explicit print placements must match the design count")
         self.validate_plate_builds()

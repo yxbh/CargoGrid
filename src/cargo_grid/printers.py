@@ -25,6 +25,7 @@ class DualNozzlePrinter:
     common_height_mm: float
     profiles: dict[float, NozzleProfiles]
     tower_prime_volume_mm3: float = 30.0
+    extruder_types: tuple[str, str] = ("Direct Drive", "Direct Drive")
 
     @property
     def model(self) -> str:
@@ -94,7 +95,15 @@ X2D_PROFILES = {
     ),
 }
 H2D = DualNozzlePrinter("H2D", BuildVolume(350, 320, 325), (25, 325), 320, H2D_PROFILES)
-X2D = DualNozzlePrinter("X2D", BuildVolume(256, 256, 261), (20.5, 256), 256, X2D_PROFILES, 45)
+X2D = DualNozzlePrinter(
+    "X2D",
+    BuildVolume(256, 256, 261),
+    (20.5, 256),
+    256,
+    X2D_PROFILES,
+    45,
+    ("Direct Drive", "Bowden"),
+)
 PRINTERS = {"h2d": H2D, "x2d": X2D}
 
 
