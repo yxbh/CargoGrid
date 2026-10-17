@@ -3480,7 +3480,7 @@ def export_rear_review(
             print_settings_id="0.32mm Balanced Strength @BBL H2D 0.8 nozzle",
             bed_type="Textured PEI Plate",
             machine_nozzle_count=2,
-            printer_model="Bambu Lab H2D",
+            printer=H2D,
         ),
     )
     (output / "assembly-preview.svg").write_text(assembly_preview_svg(parameters))

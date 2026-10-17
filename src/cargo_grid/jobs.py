@@ -84,6 +84,15 @@ class Design:
         return tuple(self.bambu_shape.bounding_box().size)
 
 
+def omitted_design(design: Design, size: tuple[float, float, float], reason: str) -> dict:
+    return {
+        "name": design.name,
+        "parameters": design.parameters,
+        "size_mm": size,
+        "reason": reason,
+    }
+
+
 @dataclass
 class Job:
     designs: list[Design]

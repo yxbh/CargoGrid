@@ -24,6 +24,7 @@ from cargo_grid.export import (
 from cargo_grid.jobs import Design, Job, tile_design
 from cargo_grid.packing import PrintPlacement
 from cargo_grid.parameters import BuildVolume, Exclusion, Tile
+from cargo_grid.printers import H2D
 from cargo_grid.stacking import StackSettings
 
 CORE = "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"
@@ -273,7 +274,7 @@ def test_multi_nozzle_project_has_gui_restore_config(box_job, tmp_path):
         print_settings_id="0.32mm Balanced Strength @BBL H2D 0.8 nozzle",
         bed_type="Textured PEI Plate",
         machine_nozzle_count=2,
-        printer_model="Bambu Lab H2D",
+        printer=H2D,
     )
     path = tmp_path / "h2d.3mf"
     write_3mf(box_job, path, bambu=settings)
@@ -345,7 +346,7 @@ def test_native_bambu_restore_keeps_precision_in_complete_effective_profile(tmp_
         print_settings_id="0.32mm Balanced Strength @BBL H2D 0.8 nozzle",
         bed_type="Textured PEI Plate",
         machine_nozzle_count=2,
-        printer_model="Bambu Lab H2D",
+        printer=H2D,
     )
     write_3mf(
         Job([Design("diagnostic_block", Box(8, 8, 1), {})], BuildVolume(350, 320, 325), "part"),

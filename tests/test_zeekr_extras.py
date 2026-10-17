@@ -51,7 +51,7 @@ H2D_BAMBU = BambuSettings(
     print_settings_id="0.32mm Balanced Strength @BBL H2D 0.8 nozzle",
     bed_type="Textured PEI Plate",
     machine_nozzle_count=2,
-    printer_model="Bambu Lab H2D",
+    printer=PRINTERS["h2d"],
 )
 # Actual generated bounds of the measured contour pieces, rounded to 1 um. The slow real-set
 # test checks that stand-ins with these bounds produce the same plates as the real pieces.

@@ -1,5 +1,6 @@
 """Smaller-bed planning records omissions without changing source geometry or H2D routes."""
 
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -133,6 +134,28 @@ def test_unmeasured_settings_keep_the_original_support_foot_inset(inventory_stan
     assert job.prime_tower_width_mm is None
 
 
+def test_catalogue_policy_works_with_a_distinct_printer_value(inventory_stand_ins):
+    printer = replace(X2D, name="Test")
+    job = dual_safe_catalogue_job(printer, auto_roof_support=True)
+    assert job.prime_tower_width_mm == 18
+    assert any(d.recommended_print_rotation_z == 45 for d in job.designs)
+    wide = [
+        (design, placement)
+        for design, placement in zip(job.designs, job.print_placements)
+        if "family" not in design.parameters
+        and sorted((design.parameters["nx"], design.parameters["ny"])) == [3, 4]
+    ]
+    assert len(wide) == 2
+    assert all(p.x == 64.9 and p.y == 5 for _, p in wide)
+    assert all(printer.common_x_mm[1] - (p.x + 186) == pytest.approx(5.1) for _, p in wide)
+    assert all("Test" in entry["reason"] for entry in job.omitted)
+    strict = replace(printer, omit_unfit=False, diagonal_fallback=False)
+    with pytest.raises(
+        ValueError, match="Test dual-safe catalogue unexpectedly omitted an accessory"
+    ):
+        dual_safe_catalogue_job(strict)
+
+
 @pytest.mark.parametrize("nozzle", [0.8, 0.4])
 def test_cli_selects_x2d_profiles_and_preserves_requested_contact_settings(
     monkeypatch, tmp_path, nozzle
@@ -171,7 +194,7 @@ def test_cli_selects_x2d_profiles_and_preserves_requested_contact_settings(
     profiles = X2D.profiles[nozzle]
     assert bambu.printer_settings_id == profiles.printer
     assert bambu.print_settings_id == profiles.process
-    assert bambu.printer_model == X2D.model and bambu.machine_nozzle_count == 2
+    assert bambu.printer is X2D and bambu.machine_nozzle_count == 2
     settings = bambu.roof_support.native_settings(process_profile=profiles.process)
     assert settings["support_interface_top_layers"] == "3"
     assert settings["support_object_xy_distance"] == "0.4"
@@ -242,7 +265,7 @@ def test_real_x2d_catalogue_solids_and_prepared_placements_stay_in_reach(x2d_pla
         printer_settings_id=profile.printer,
         print_settings_id=profile.process,
         machine_nozzle_count=2,
-        printer_model=X2D.model,
+        printer=X2D,
     )
     prepared = _PreparedProject(job, bambu, None, True)
     assert 0 < prepared.plate_count <= 36

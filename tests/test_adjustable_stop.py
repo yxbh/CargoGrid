@@ -179,7 +179,7 @@ def test_adjustable_stop_x2d_uses_the_shared_profiles_and_tower_reservation(nozz
     profile = X2D.profiles[nozzle]
     assert settings.printer_settings_id == profile.printer
     assert settings.print_settings_id == profile.process
-    assert settings.printer_model == X2D.model
+    assert settings.printer is X2D
     assert tuple(m.name for m in settings.materials) == (profile.petg, profile.pla)
     build = X2D.common_build()
     job = prepare_adjustable_stop_print_job(

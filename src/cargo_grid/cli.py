@@ -30,7 +30,12 @@ from cargo_grid.parameters import (
     count,
     positive,
 )
-from cargo_grid.printers import DEFAULT_PART_CLEARANCE_MM, H2D, PRINTERS, DualNozzlePrinter
+from cargo_grid.printers import (
+    CATALOGUE_INVENTORY_BUILD,
+    DEFAULT_PART_CLEARANCE_MM,
+    PRINTERS,
+    DualNozzlePrinter,
+)
 from cargo_grid.pull_handle_set import extras_job as pull_handle_extras_job
 from cargo_grid.rods import ROD_FAMILIES, Rod, RodBrace
 from cargo_grid.roof_support import RoofSupportSettings, check_roof_job_kind
@@ -38,6 +43,17 @@ from cargo_grid.stacking import StackSettings
 from cargo_grid.vehicles import zeekr_7x
 
 EXTRAS_RECIPES = ("zeekr-7x", "pull-handle", "adjustable-stop")
+PRINTER_FIXED_DEFAULTS = {
+    "build_margin_mm": 0,
+    "build_reserve_width_mm": 0,
+    "build_reserve_depth_mm": 0,
+    "build_reserve_height_mm": 0,
+    "exclude_rectangle_mm": (),
+    "unit_size_mm": 60,
+    "tile_thickness_mm": 13,
+    "joint_style": "original",
+    "fit_offset_mm": 0,
+}
 
 
 def _positive_mm(value: str) -> float:
@@ -123,35 +139,26 @@ def _part_option(args, name: str, supported: set[str], default):
     return default if value is None else value
 
 
-def _build_volume(args) -> BuildVolume:
+def _resolve_build_options(args, argument_parser: argparse.ArgumentParser) -> argparse.Namespace:
     printer = _printer(args)
     dimensions = ("build_width_mm", "build_depth_mm", "build_height_mm")
-    defaults = {
-        "build_margin_mm": 0,
-        "build_reserve_width_mm": 0,
-        "build_reserve_depth_mm": 0,
-        "build_reserve_height_mm": 0,
-        "exclude_rectangle_mm": [],
-        "unit_size_mm": 60,
-        "tile_thickness_mm": 13,
-        "joint_style": "original",
-        "fit_offset_mm": 0,
-    }
+    resolved = {**PRINTER_FIXED_DEFAULTS, **vars(args)}
     if printer:
-        supplied = [name for name in (*dimensions, *defaults) if hasattr(args, name)]
+        supplied = [name for name in (*dimensions, *PRINTER_FIXED_DEFAULTS) if hasattr(args, name)]
         if supplied:
             options = ", ".join("--" + name.replace("_", "-") for name in supplied)
-            raise ValueError(f"--printer {args.printer} cannot be combined with {options}")
+            argument_parser.error(f"--printer {args.printer} cannot be combined with {options}")
         for name, value in zip(dimensions, (printer.build.x, printer.build.y, printer.build.z)):
-            setattr(args, name, float(value))
+            resolved[name] = float(value)
     else:
         missing = [name for name in dimensions if not hasattr(args, name)]
         if missing:
             options = ", ".join("--" + name.replace("_", "-") for name in missing)
-            raise ValueError(f"the following arguments are required: {options}")
-    for name, value in defaults.items():
-        if not hasattr(args, name):
-            setattr(args, name, value)
+            argument_parser.error(f"the following arguments are required: {options}")
+    return argparse.Namespace(**resolved)
+
+
+def _build_volume(args) -> BuildVolume:
     return BuildVolume(
         args.build_width_mm,
         args.build_depth_mm,
@@ -294,7 +301,7 @@ def _bambu_settings(args, roof_support: RoofSupportSettings | None) -> BambuSett
                 print_settings_id=profiles.process,
                 bed_type="Textured PEI Plate",
                 machine_nozzle_count=2,
-                printer_model=printer.model,
+                printer=printer,
             )
         return BambuSettings(
             materials,
@@ -343,6 +350,7 @@ def _stack_settings(args, bambu, build: BuildVolume, interface: Interface):
 
 
 def parser() -> argparse.ArgumentParser:
+    defaults = PRINTER_FIXED_DEFAULTS
     root = argparse.ArgumentParser(
         description="Make parametric cargo-mat parts and unsliced print projects.",
         epilog="Original roofed joints and full 10 mm round-hole tiles are the defaults; roof support remains off. No slicing or printer control.",
@@ -392,7 +400,7 @@ def parser() -> argparse.ArgumentParser:
             type=float,
             default=argparse.SUPPRESS,
             metavar="MM",
-            help="inset on each X/Y side of the build plate, in mm; default 0; unavailable with --printer",
+            help=f"inset on each X/Y side of the build plate, in mm; default {defaults['build_margin_mm']:g}; unavailable with --printer",
         )
         p.add_argument(
             "--packing-gap-mm",
@@ -415,7 +423,7 @@ def parser() -> argparse.ArgumentParser:
                 type=float,
                 default=argparse.SUPPRESS,
                 metavar="MM",
-                help=f"additional build space withheld at the {meaning}, in mm; default 0; unavailable with --printer",
+                help=f"additional build space withheld at the {meaning}, in mm; default {defaults[f'build_reserve_{axis}_mm']:g}; unavailable with --printer",
             )
         p.add_argument(
             "--exclude-rectangle-mm",
@@ -431,27 +439,27 @@ def parser() -> argparse.ArgumentParser:
             type=float,
             default=argparse.SUPPRESS,
             metavar="MM",
-            help="cell size and matching local-plane interface scale in mm; default 60; fixed by --printer",
+            help=f"cell size and matching local-plane interface scale in mm; default {defaults['unit_size_mm']:g}; fixed by --printer",
         )
         p.add_argument(
             "--tile-thickness-mm",
             type=float,
             default=argparse.SUPPRESS,
             metavar="MM",
-            help="tile thickness and matching connector insertion depth in mm; default 13; fixed by --printer",
+            help=f"tile thickness and matching connector insertion depth in mm; default {defaults['tile_thickness_mm']:g}; fixed by --printer",
         )
         p.add_argument(
             "--joint-style",
             choices=("original", "full-height"),
             default=argparse.SUPPRESS,
-            help="original roofed joints (default), or experimental open-through full-height edge joints; fixed by --printer",
+            help=f"original roofed joints or experimental open-through full-height edge joints; default {defaults['joint_style']}; fixed by --printer",
         )
         p.add_argument(
             "--fit-offset-mm",
             type=float,
             default=argparse.SUPPRESS,
             metavar="MM",
-            help="socket offset in mm; default 0; nonzero changes the compatibility preset; fixed by --printer",
+            help=f"socket offset in mm; default {defaults['fit_offset_mm']:g}; nonzero changes the compatibility preset; fixed by --printer",
         )
         p.add_argument(
             "--solid-bottom-thickness-mm",
@@ -719,7 +727,8 @@ def parser() -> argparse.ArgumentParser:
                 "--printer",
                 choices=PRINTERS,
                 help=(
-                    "set the build size, standard 60/13 original-joint geometry, shared "
+                    f"set the build size, standard {defaults['unit_size_mm']:g}/"
+                    f"{defaults['tile_thickness_mm']:g} {defaults['joint_style']}-joint geometry, shared "
                     "dual-nozzle reach, system profiles and family-grouped plates; requires "
                     "--bambu; cannot be combined with build dimensions, margins, reserves, "
                     "exclusions, unit size, tile thickness, joint style or fit offset; "
@@ -787,6 +796,7 @@ def main(argv: list[str] | None = None) -> int:
                 f"reference comparison (joint-style original): {'PASS' if result['checked_pass'] else 'FAIL'}; {args.output}"
             )
             return 0 if result["checked_pass"] else 1
+        args = _resolve_build_options(args, p)
         hole_diameter = _resolved_hole_diameter(args)
         build = _build_volume(args)
         interface = _interface(args)
@@ -941,7 +951,10 @@ def main(argv: list[str] | None = None) -> int:
                         auto_roof_support=bool(roof_support and roof_support.mode == "auto"),
                         **({"layer_height_mm": bambu.layer_height} if bambu else {}),
                         **(
-                            {"inventory_build": H2D.build, "omit_unfit": printer is not H2D}
+                            {
+                                "inventory_build": CATALOGUE_INVENTORY_BUILD,
+                                "omit_unfit": printer.omit_unfit,
+                            }
                             if printer
                             else {}
                         ),

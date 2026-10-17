@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 
-from cargo_grid.parameters import BuildVolume, Exclusion
+from cargo_grid.parameters import DEFAULT_HOLE_DIAMETER_MM, BuildVolume, Exclusion
 
 DEFAULT_PART_CLEARANCE_MM = 4.0
 COMMON_MODEL_INSET_MM = 5.0
@@ -18,6 +18,17 @@ class NozzleProfiles:
 
 
 @dataclass(frozen=True)
+class CatalogueSupportTuning:
+    """Measured full-hole Auto-support catalogue settings for Bambu Studio 02.08.02.61."""
+
+    tower_width_mm: float
+    solid_bottoms_mm: tuple[float, ...]
+    long_axis_cells: int
+    long_right_inset_mm: float
+    tile_rotations_z: tuple[tuple[tuple[int, int], float], ...]
+
+
+@dataclass(frozen=True)
 class DualNozzlePrinter:
     name: str
     build: BuildVolume
@@ -26,6 +37,10 @@ class DualNozzlePrinter:
     profiles: dict[float, NozzleProfiles]
     tower_prime_volume_mm3: float = 30.0
     extruder_types: tuple[str, str] = ("Direct Drive", "Direct Drive")
+    diagonal_fallback: bool = False
+    omit_unfit: bool = False
+    common_omission_reason: str | None = None
+    catalogue_support: CatalogueSupportTuning | None = None
 
     @property
     def model(self) -> str:
@@ -59,6 +74,35 @@ class DualNozzlePrinter:
             "common_model_inset_mm": COMMON_MODEL_INSET_MM,
         }
 
+    def common_fit_reason(self) -> str:
+        return self.common_omission_reason or (
+            f"actual bounds exceed {self.name} common reach "
+            f"(X {self.common_x_mm[0]:g}..{self.common_x_mm[1]:g}, "
+            f"Y 0..{self.build.y:g}, Z <= {self.common_height_mm:g}) "
+            "with its 5 mm model inset; no scaling applied"
+        )
+
+    def catalogue_support_tuning(
+        self,
+        *,
+        auto_roof_support: bool,
+        solid_bottom_mm: float,
+        layer_height_mm: float,
+        hole_diameter: float | None,
+        hole_scope: str,
+    ) -> CatalogueSupportTuning | None:
+        tuning = self.catalogue_support
+        if (
+            tuning is not None
+            and auto_roof_support
+            and solid_bottom_mm in tuning.solid_bottoms_mm
+            and layer_height_mm in {p.layer_height_mm for p in self.profiles.values()}
+            and hole_diameter == DEFAULT_HOLE_DIAMETER_MM
+            and hole_scope == "full"
+        ):
+            return tuning
+        return None
+
 
 H2D = DualNozzlePrinter(
     "H2D",
@@ -82,6 +126,10 @@ H2D = DualNozzlePrinter(
             "Bambu PLA Basic @BBL H2D",
         ),
     },
+    common_omission_reason=(
+        "actual bounds exceed the 300 mm H2D common reach (X 25..325) with its 5 mm "
+        "inset; make it with part and choose the nozzle yourself"
+    ),
 )
 X2D = DualNozzlePrinter(
     "X2D",
@@ -104,10 +152,21 @@ X2D = DualNozzlePrinter(
             "Bambu PLA Basic @BBL X2D 0.4 nozzle",
         ),
     },
-    45,
-    ("Direct Drive", "Bowden"),
+    tower_prime_volume_mm3=45,
+    extruder_types=("Direct Drive", "Bowden"),
+    diagonal_fallback=True,
+    omit_unfit=True,
+    catalogue_support=CatalogueSupportTuning(
+        tower_width_mm=18.0,
+        solid_bottoms_mm=(0.0, 1.92),
+        long_axis_cells=4,
+        # The measured 5.1 mm right inset leaves 1.65 mm to the complete wipe reservation.
+        long_right_inset_mm=5.1,
+        tile_rotations_z=(((3, 4), 180),),
+    ),
 )
 PRINTERS = {"h2d": H2D, "x2d": X2D}
+CATALOGUE_INVENTORY_BUILD = H2D.build
 
 
 def printer_for_common_build(build: BuildVolume) -> DualNozzlePrinter | None:

@@ -1,15 +1,22 @@
 """Audited printer envelopes and profile pairs, without inferring printed fit."""
 
 import json
+from dataclasses import replace
 from zipfile import ZipFile
 
 import pytest
 from build123d import Box
 
-from cargo_grid.export import BambuSettings, Material, _bambu_project_settings, write_3mf
-from cargo_grid.jobs import Design, Job
+from cargo_grid.export import (
+    BambuSettings,
+    Material,
+    _bambu_project_settings,
+    _validate_request,
+    write_3mf,
+)
+from cargo_grid.jobs import Design, Job, tile_design
 from cargo_grid.packing import PrintPlacement
-from cargo_grid.parameters import BuildVolume, Exclusion
+from cargo_grid.parameters import BuildVolume, Exclusion, Tile
 from cargo_grid.plates import dual_nozzle_tower_reservation
 from cargo_grid.printers import H2D, PRINTERS, X2D, printer_for_common_build
 from cargo_grid.roof_support import RoofSupportSettings
@@ -67,7 +74,9 @@ def test_profile_names_keep_printer_specific_bambu_spelling():
     assert X2D.extruder_types == ("Direct Drive", "Bowden")
 
 
-@pytest.mark.parametrize("printer", PRINTERS.values(), ids=PRINTERS)
+@pytest.mark.parametrize(
+    "printer", [*PRINTERS.values(), replace(X2D, name="Test")], ids=(*PRINTERS, "unregistered")
+)
 def test_tower_manifest_names_the_selected_printer(printer, tmp_path):
     profile = printer.profiles[0.8]
     tower = dual_nozzle_tower_reservation(printer, 0.32, 10)
@@ -87,7 +96,7 @@ def test_tower_manifest_names_the_selected_printer(printer, tmp_path):
         printer_settings_id=profile.printer,
         print_settings_id=profile.process,
         machine_nozzle_count=2,
-        printer_model=printer.model,
+        printer=printer,
     )
     path = tmp_path / "printer.3mf"
     result = write_3mf(job, path, bambu=settings)
@@ -106,7 +115,7 @@ def test_x2d_catalogue_rectangle_is_a_process_override_without_changing_support_
         0.4,
         0.24,
         roof_support=RoofSupportSettings(mode="auto"),
-        printer_model=X2D.model,
+        printer=X2D,
         machine_nozzle_count=2,
     )
     project = _bambu_project_settings(job, settings)
@@ -123,3 +132,41 @@ def test_x2d_catalogue_rectangle_is_a_process_override_without_changing_support_
         }
         & project.keys()
     )
+
+
+def test_printer_catalogue_policies_are_data_not_singleton_identity():
+    options = {
+        "auto_roof_support": True,
+        "solid_bottom_mm": 0.0,
+        "layer_height_mm": 0.32,
+        "hole_diameter": 10.0,
+        "hole_scope": "full",
+    }
+    assert H2D.catalogue_support_tuning(**options) is None
+    printer = replace(X2D, name="Test")
+    assert printer.diagonal_fallback and printer.omit_unfit
+    assert printer.catalogue_support_tuning(**options) == X2D.catalogue_support
+    assert "Test common reach" in printer.common_fit_reason()
+    assert not H2D.diagonal_fallback and not H2D.omit_unfit
+    assert "make it with part" in H2D.common_fit_reason()
+
+
+def test_rectangular_export_validation_follows_printer_capability():
+    job = Job([tile_design(Tile(1, 1))], X2D.build, "catalogue", prime_tower_width_mm=18)
+    settings = BambuSettings(
+        (Material("PETG", "PETG", "#688197"), Material("PLA", "PLA", "#0A2989")),
+        0.8,
+        0.32,
+        roof_support=RoofSupportSettings(mode="auto"),
+        printer=replace(X2D, name="Test"),
+        machine_nozzle_count=2,
+    )
+    _validate_request(job, settings, None)
+    for printer in (H2D, replace(X2D, catalogue_support=None), None):
+        with pytest.raises(ValueError, match="rectangular prime towers"):
+            _validate_request(job, replace(settings, printer=printer), None)
+
+
+def test_bambu_settings_rejects_a_printer_model_string():
+    with pytest.raises(ValueError, match="printer must be DualNozzlePrinter"):
+        BambuSettings((Material("PETG", "PETG", "#688197"),), 0.8, 0.32, printer=X2D.model)

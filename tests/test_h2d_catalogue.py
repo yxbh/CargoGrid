@@ -765,4 +765,4 @@ def test_h2d_dual_safe_cli_writes_the_h2d_profiles_for_each_nozzle(nozzle, monke
         profiles.process,
     )
     assert [material.name for material in bambu.materials] == [profiles.petg, profiles.pla]
-    assert bambu.machine_nozzle_count == 2 and bambu.printer_model == "Bambu Lab H2D"
+    assert bambu.machine_nozzle_count == 2 and bambu.printer is H2D

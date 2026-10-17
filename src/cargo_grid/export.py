@@ -36,7 +36,7 @@ from cargo_grid.meshes import write_stl
 from cargo_grid.packing import PrintPlacement, TowerClearance, pack_sizes
 from cargo_grid.parameters import DEFAULT_HOLE_DIAMETER_MM, BuildVolume, Interface, count, positive
 from cargo_grid.prepared import Bounds, PreparedShape, rotated_points, rotation_matrix_3mf
-from cargo_grid.printers import PRINTERS
+from cargo_grid.printers import DualNozzlePrinter
 from cargo_grid.rods import ROD_FAMILIES, Rod, RodBrace, fit_evidence
 from cargo_grid.roof_support import (
     RoofSupportSettings,
@@ -92,7 +92,7 @@ class BambuSettings:
     print_settings_id: str | None = None
     bed_type: str | None = None
     machine_nozzle_count: int = 1
-    printer_model: str | None = None
+    printer: DualNozzlePrinter | None = None
 
     def __post_init__(self) -> None:
         from cargo_grid.parameters import positive
@@ -108,8 +108,8 @@ class BambuSettings:
             not self.printer_settings_id.strip() or not self.print_settings_id.strip()
         ):
             raise ValueError("printer and process profile IDs must not be empty")
-        if self.printer_model is not None and not self.printer_model.strip():
-            raise ValueError("printer model must not be empty")
+        if self.printer is not None and not isinstance(self.printer, DualNozzlePrinter):
+            raise ValueError("printer must be DualNozzlePrinter")
         if self.roof_support is not None:
             if not isinstance(self.roof_support, RoofSupportSettings):
                 raise ValueError("roof_support must be RoofSupportSettings")
@@ -172,12 +172,11 @@ def _bambu_project_settings(job: Job, bambu: BambuSettings, plate_count: int = 1
         "filament_map_mode": _filament_mode(bambu),
     }
     settings.update(BAMBU_PROCESS_DEFAULTS)
-    if bambu.printer_model is not None:
-        settings["printer_model"] = bambu.printer_model
+    if bambu.printer is not None:
+        settings["printer_model"] = bambu.printer.model
     if nozzle_count > 1:
-        printer = next((p for p in PRINTERS.values() if p.model == bambu.printer_model), None)
         settings["extruder_type"] = (
-            list(printer.extruder_types) if printer else ["Direct Drive"] * nozzle_count
+            list(bambu.printer.extruder_types) if bambu.printer else ["Direct Drive"] * nozzle_count
         )
         settings["default_nozzle_volume_type"] = ["Standard"] * nozzle_count
         settings["nozzle_volume_type"] = ["Standard"] * nozzle_count
@@ -305,7 +304,8 @@ def _validate_request(job: Job, bambu: BambuSettings | None, stack: StackSetting
         job.prime_tower_width_mm is not None
         and bambu
         and (
-            bambu.printer_model != PRINTERS["x2d"].model
+            bambu.printer is None
+            or bambu.printer.catalogue_support is None
             or not bambu.roof_support
             or bambu.roof_support.mode != "auto"
         )
@@ -950,14 +950,7 @@ def _write_3mf(
                 "Metadata/project_settings.config",
                 json.dumps(_bambu_project_settings(job, bambu, plate_count), indent=2),
             )
-    tower_printer = next(
-        (
-            printer.name
-            for printer in PRINTERS.values()
-            if bambu and printer.model == bambu.printer_model
-        ),
-        "H2D",
-    )
+    tower_printer = bambu.printer.name if bambu and bambu.printer else "H2D"
     return {
         "format": "bambu-project" if bambu else "core-geometry",
         "plates": plates,

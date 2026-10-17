@@ -22,7 +22,7 @@ from cargo_grid.packing import (
     pack_sizes,
 )
 from cargo_grid.parameters import BuildVolume, Exclusion, positive
-from cargo_grid.printers import X2D, DualNozzlePrinter, printer_for_common_build
+from cargo_grid.printers import DualNozzlePrinter, printer_for_common_build
 
 # Auto roof support prints a PLA interface, so every supported plate reserves a prime tower.
 DEFAULT_PRIME_TOWER = PrimeTower()
@@ -417,8 +417,9 @@ def plan_plates(
     the tower position follows Bambu's estimate for ``layer_height_mm`` and the group's
     tallest design, so Bambu Studio keeps it when it opens the project.
     """
+    printer = printer_for_common_build(build)
     if tower_width_mm is not None and (
-        not auto_roof_support or printer_for_common_build(build) is not X2D
+        not auto_roof_support or printer is None or printer.catalogue_support is None
     ):
         raise ValueError("rectangular prime towers require X2D Auto-support planning")
     tower = _tower_layout(build, layer_height_mm, tower_width_mm) if auto_roof_support else None

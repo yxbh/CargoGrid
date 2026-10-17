@@ -7,7 +7,14 @@ from pathlib import Path
 import pytest
 from build123d import import_step
 
-from cargo_grid.cli import _build_volume, _interface, main, parser
+from cargo_grid.cli import (
+    PRINTER_FIXED_DEFAULTS,
+    _build_volume,
+    _interface,
+    _resolve_build_options,
+    main,
+    parser,
+)
 from cargo_grid.parameters import Interface
 from cargo_grid.printers import DEFAULT_PART_CLEARANCE_MM, PRINTERS
 
@@ -29,6 +36,7 @@ def test_missing_build_axes_are_named_in_errors(command, supplied, tmp_path, cap
         main(args)
     assert error.value.code == 2
     message = capsys.readouterr().err
+    assert message.startswith("usage:") and ": error: " in message
     assert "required" in message
     for index, option in enumerate(OPTIONS):
         assert (option in message) == (index not in supplied)
@@ -220,9 +228,38 @@ def test_retired_options_are_ordinary_unknown_arguments(retired, tmp_path, capsy
     ],
 )
 def test_printer_supplies_build_and_standard_interface(printer, command):
-    args = parser().parse_args([*command, "--printer", printer, "--output", "unused"])
+    argument_parser = parser()
+    parsed = argument_parser.parse_args([*command, "--printer", printer, "--output", "unused"])
+    original = vars(parsed).copy()
+    args = _resolve_build_options(parsed, argument_parser)
     assert _build_volume(args) == PRINTERS[printer].build
     assert _interface(args) == Interface()
+    assert vars(parsed) == original and args is not parsed
+    assert all(not hasattr(parsed, key) for key in PRINTER_FIXED_DEFAULTS)
+
+
+def test_custom_build_defaults_and_help_share_one_source(capsys):
+    argument_parser = parser()
+    parsed = argument_parser.parse_args(["part", *COMPLETE, "--output", "unused"])
+    original = vars(parsed).copy()
+    resolved = _resolve_build_options(parsed, argument_parser)
+    assert {key: getattr(resolved, key) for key in PRINTER_FIXED_DEFAULTS} == PRINTER_FIXED_DEFAULTS
+    _build_volume(resolved)
+    assert vars(parsed) == original
+    with pytest.raises(SystemExit):
+        argument_parser.parse_args(["part", "--help"])
+    help_text = " ".join(capsys.readouterr().out.split())
+    for option in (
+        "build-margin-mm",
+        "build-reserve-width-mm",
+        "build-reserve-depth-mm",
+        "build-reserve-height-mm",
+        "unit-size-mm",
+        "tile-thickness-mm",
+        "fit-offset-mm",
+    ):
+        section = help_text.split(f"--{option} MM ", 1)[1].split(" --", 1)[0]
+        assert f"default {PRINTER_FIXED_DEFAULTS[option.replace('-', '_')]:g}" in section
 
 
 @pytest.mark.parametrize("printer", PRINTERS)

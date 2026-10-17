@@ -135,7 +135,7 @@ def adjustable_stop_settings(
         print_settings_id=profile.process,
         bed_type="Textured PEI Plate",
         machine_nozzle_count=2,
-        printer_model=printer.model,
+        printer=printer,
     )
 
 

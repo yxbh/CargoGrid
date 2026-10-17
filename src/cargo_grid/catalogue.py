@@ -20,7 +20,7 @@ from cargo_grid.accessories import (
     required_bambu_object_settings,
     tile_matched_perimeter,
 )
-from cargo_grid.jobs import Design, Job, tile_design
+from cargo_grid.jobs import Design, Job, omitted_design, tile_design
 from cargo_grid.packing import TowerClearance
 from cargo_grid.parameters import (
     DEFAULT_HOLE_DIAMETER_MM,
@@ -39,7 +39,11 @@ from cargo_grid.plates import (
     diagonal_fit,
     plan_plates,
 )
-from cargo_grid.printers import DEFAULT_PART_CLEARANCE_MM, H2D, X2D, DualNozzlePrinter
+from cargo_grid.printers import (
+    CATALOGUE_INVENTORY_BUILD,
+    DEFAULT_PART_CLEARANCE_MM,
+    DualNozzlePrinter,
+)
 from cargo_grid.rods import BRACE_SPACINGS_MM, ROD_HEIGHTS_MM, Rod, RodBrace
 
 BRACKET_DISPLAY_NAMES = {
@@ -281,12 +285,11 @@ def catalogue_job(
     omitted = [
         *job.omitted,
         *(
-            {
-                "name": design.name,
-                "parameters": design.parameters,
-                "size_mm": sizes[id(design)],
-                "reason": "actual bounds do not fit beside the reserved prime tower",
-            }
+            omitted_design(
+                design,
+                sizes[id(design)],
+                "actual bounds do not fit beside the reserved prime tower",
+            )
             for design in plan.unfit
         ),
     ]
@@ -332,14 +335,7 @@ def _catalogue_job_with_sizes(
         design = accessory_design(spec)
         size = design.bambu_size if orient_for_bambu else design.size
         if build.placement(size) is None:
-            omitted.append(
-                {
-                    "name": design.name,
-                    "parameters": design.parameters,
-                    "size_mm": size,
-                    "reason": "actual bounds exceed usable envelope",
-                }
-            )
+            omitted.append(omitted_design(design, size, "actual bounds exceed usable envelope"))
         else:
             designs.append(design)
             sizes[id(design)] = size
@@ -367,7 +363,7 @@ def dual_safe_catalogue_job(
     # The H2D defines the existing finite inventory, including its omitted 5x5 tile. A smaller
     # printer must account for those designs, not silently shrink the candidate inventory.
     source, sizes = _catalogue_job_with_sizes(
-        H2D.build,
+        CATALOGUE_INVENTORY_BUILD,
         interface=interface,
         hole_diameter=hole_diameter,
         hole_scope=hole_scope,
@@ -379,34 +375,19 @@ def dual_safe_catalogue_job(
 
     def fits_common(design: Design) -> bool:
         return common_build.placement(sizes[id(design)]) is not None or (
-            printer is X2D and diagonal_fit(design, common_build) is not None
+            printer.diagonal_fallback and diagonal_fit(design, common_build) is not None
         )
 
     # Tiles that only fit one nozzle's area (the 306 mm 5x5) are left out of the shared plan.
     common_designs = [design for design in source.designs if fits_common(design)]
     common_ids = {id(design) for design in common_designs}
     omitted = [
-        {
-            "name": design.name,
-            "parameters": design.parameters,
-            "size_mm": sizes[id(design)],
-            "reason": (
-                "actual bounds exceed the 300 mm H2D common reach (X 25..325) with its 5 mm "
-                "inset; make it with part and choose the nozzle yourself"
-            )
-            if printer is H2D
-            else (
-                f"actual bounds exceed {printer.name} common reach "
-                f"(X {printer.common_x_mm[0]:g}..{printer.common_x_mm[1]:g}, "
-                f"Y 0..{printer.build.y:g}, Z <= {printer.common_height_mm:g}) "
-                "with its 5 mm model inset; no scaling applied"
-            ),
-        }
+        omitted_design(design, sizes[id(design)], printer.common_fit_reason())
         for design in source.designs
         if id(design) not in common_ids
     ]
-    if printer is H2D and any("family" in entry["parameters"] for entry in omitted):
-        raise ValueError("H2D dual-safe catalogue unexpectedly omitted an accessory")
+    if not printer.omit_unfit and any("family" in entry["parameters"] for entry in omitted):
+        raise ValueError(f"{printer.name} dual-safe catalogue unexpectedly omitted an accessory")
 
     def family_members(families: set[str], ramp_join: str | None = None) -> list[Design]:
         return [
@@ -422,16 +403,15 @@ def dual_safe_catalogue_job(
         complete = parameters.get("complete_edge_holes", False)
         return outward, complete
 
-    measured_x2d = (
-        printer is X2D
-        and auto_roof_support
-        and solid_bottom_mm in (0.0, 1.92)
-        and layer_height_mm in {p.layer_height_mm for p in printer.profiles.values()}
-        and hole_diameter == DEFAULT_HOLE_DIAMETER_MM
-        and hole_scope == "full"
+    tuning = printer.catalogue_support_tuning(
+        auto_roof_support=auto_roof_support,
+        solid_bottom_mm=solid_bottom_mm,
+        layer_height_mm=layer_height_mm,
+        hole_diameter=hole_diameter,
+        hole_scope=hole_scope,
     )
     tile_build = None
-    if measured_x2d:
+    if tuning is not None:
         # A native 0.32 mm support foot on an ordinary tile reaches 5.14 mm west.
         tile_build = replace(
             common_build,
@@ -484,35 +464,48 @@ def dual_safe_catalogue_job(
     groups.append(
         PlateGroup("Rods and upper braces", family_members({"rod", "rod-brace"}), packing_gap)
     )
-    tower_width_mm = 18.0 if measured_x2d else None
-    if measured_x2d:
-        # Native 0.32/0.24 slices retain 5 mm at each Y end on these long, flat parts.
-        # X=64.9 leaves 5.1 mm at the right and clearance from the rectangular tower.
+    tower_width_mm = tuning.tower_width_mm if tuning is not None else None
+    if tuning is not None:
+        long_groups = [
+            (
+                family,
+                title,
+                [
+                    d
+                    for d in family_members({family})
+                    if max(d.parameters["nx"], d.parameters["ny"]) == tuning.long_axis_cells
+                    and min(d.parameters["nx"], d.parameters["ny"]) < tuning.long_axis_cells
+                ],
+            )
+            for family, title in (("tile", "Four-cell tiles"), ("support", "Four-cell rail"))
+        ]
+        widest_cells = max(
+            min(d.parameters["nx"], d.parameters["ny"])
+            for _, _, members in long_groups
+            for d in members
+        )
+        # Derive the nominal boundary; packing still checks each part's actual posed bounds.
+        widest_member_mm = widest_cells * interface.pitch + interface.male_join_depth
+        left = printer.common_x_mm[1] - tuning.long_right_inset_mm - widest_member_mm
         long_build = replace(
             common_build,
             exclusions=(
-                Exclusion(0, 0, 64.9, common_build.y),
+                Exclusion(0, 0, left, common_build.y),
                 *common_build.exclusions[1:],
             ),
         )
-        for family, title in (("tile", "Four-cell tiles"), ("support", "Four-cell rail")):
-            long_members = [
-                d
-                for d in family_members({family})
-                if (
-                    (d.parameters["nx"] == 4 and d.parameters["ny"] < 4)
-                    or (d.parameters["ny"] == 4 and d.parameters["nx"] < 4)
-                )
-            ]
+        rotations = dict(tuning.tile_rotations_z)
+        for family, title, long_members in long_groups:
             long_ids = {id(d) for d in long_members}
             for group in groups:
                 group.designs[:] = [d for d in group.designs if id(d) not in long_ids]
             if family == "tile":
                 for index, design in enumerate(long_members):
-                    if (design.parameters["nx"], design.parameters["ny"]) == (3, 4):
+                    rotation = rotations.get((design.parameters["nx"], design.parameters["ny"]))
+                    if rotation is not None:
                         turned = replace(
                             design,
-                            recommended_print_rotation_z=180,
+                            recommended_print_rotation_z=rotation,
                             apply_orientation_to_bambu=True,
                         )
                         sizes[id(turned)] = turned.bambu_size
@@ -536,22 +529,19 @@ def dual_safe_catalogue_job(
         size=lambda design: sizes[id(design)],
         auto_roof_support=auto_roof_support,
         layer_height_mm=layer_height_mm,
-        diagonal_fallback=printer is X2D,
+        diagonal_fallback=printer.diagonal_fallback,
         tower_width_mm=tower_width_mm,
     )
-    if plan.unfit and printer is H2D:
-        raise ValueError(f"{plan.unfit[0].name} does not fit its H2D plate area")
+    if plan.unfit and not printer.omit_unfit:
+        raise ValueError(f"{plan.unfit[0].name} does not fit its {printer.name} plate area")
     omitted.extend(
-        {
-            "name": design.name,
-            "parameters": design.parameters,
-            "size_mm": sizes[id(design)],
-            "reason": (
-                f"actual bounds do not fit the {printer.name} plate area with the reserved "
-                "prime tower, brim clearance and model/support-foot allowances, including "
-                "the diagonal fallback; no scaling applied"
-            ),
-        }
+        omitted_design(
+            design,
+            sizes[id(design)],
+            f"actual bounds do not fit the {printer.name} plate area with the reserved "
+            "prime tower, brim clearance and model/support-foot allowances, including "
+            "the diagonal fallback; no scaling applied",
+        )
         for design in plan.unfit
     )
     designs = plan.designs

@@ -7,7 +7,7 @@ from typing import Literal
 
 from cargo_grid.accessories import Accessory, tile_matched_perimeter
 from cargo_grid.catalogue import accessory_design
-from cargo_grid.jobs import Job
+from cargo_grid.jobs import Job, omitted_design
 from cargo_grid.parameters import (
     DEFAULT_HOLE_DIAMETER_MM,
     BuildVolume,
@@ -116,14 +116,7 @@ def extras_job(
         design = accessory_design(spec)
         size = design.size
         if envelope.placement(size) is None or build.placement(size) is None:
-            omitted.append(
-                {
-                    "name": design.name,
-                    "parameters": design.parameters,
-                    "size_mm": size,
-                    "reason": "actual bounds exceed usable envelope",
-                }
-            )
+            omitted.append(omitted_design(design, size, "actual bounds exceed usable envelope"))
         else:
             edges.append(design)
             sizes[id(design)] = size
@@ -137,12 +130,9 @@ def extras_job(
         if envelope.placement(size) is None or build.placement(size) is None:
             if omit_unfit:
                 omitted.append(
-                    {
-                        "name": design.name,
-                        "parameters": design.parameters,
-                        "size_mm": size,
-                        "reason": "actual bounds exceed usable envelope; no scaling applied",
-                    }
+                    omitted_design(
+                        design, size, "actual bounds exceed usable envelope; no scaling applied"
+                    )
                 )
                 continue
             raise ValueError(
@@ -181,15 +171,12 @@ def extras_job(
     ]
     plates = plan(groups)
     omitted.extend(
-        {
-            "name": design.name,
-            "parameters": design.parameters,
-            "size_mm": sizes[id(design)],
-            "reason": (
-                "actual bounds do not fit the plate area with the reserved prime tower, "
-                "brim clearance and 6 mm support-foot inset; no scaling applied"
-            ),
-        }
+        omitted_design(
+            design,
+            sizes[id(design)],
+            "actual bounds do not fit the plate area with the reserved prime tower, "
+            "brim clearance and 6 mm support-foot inset; no scaling applied",
+        )
         for design in plates.unfit
     )
     retained = {id(design) for design in plates.designs}
