@@ -168,7 +168,7 @@ The 4x4 and five-cell designs remain omitted. The existing 240 mm above-mat rod 
 
 ## Make the Zeekr 7X expansion set
 
-`extras zeekr-7x` makes every Zeekr-specific piece in one project: the ten 40 mm straight edges and the nine measured rear lift-out-panel contour pieces, 19 parts in all. The tiles and 30 mm north edges used with the rear panel are ordinary catalogue parts, so they are not in the set; print them with the commands further down.
+`extras zeekr-7x` makes every Zeekr-specific piece in one project: twelve 40 mm straight edges and nine measured rear lift-out-panel contour pieces, 21 parts in all, on either printer. Every piece is required; the set is refused if any piece does not fit. The tiles and 30 mm north edges used with the rear panel are ordinary catalogue parts, so they are not in the set; print them with the commands further down.
 
 ```bash
 uv run cargo-grid extras zeekr-7x --printer h2d --bambu --material "Bambu PETG Basic @BBL H2D 0.8 nozzle" PETG "#637b70" --nozzle-diameter-mm 0.8 --layer-height-mm 0.32 --no-stl --output outputs/zeekr-7x-expansion-set
@@ -176,7 +176,7 @@ uv run cargo-grid extras zeekr-7x --printer h2d --bambu --material "Bambu PETG B
 
 The H2D project keeps each family on its own named plates inside the common reach: `Zeekr 7X - Male 40mm edges`, `Zeekr 7X - Female 40mm edges`, `Zeekr 7X - Rear panel contour side caps`, and `Zeekr 7X - Rear panel south contour ramps 1` and `2` (the five ramps need two plates). Edge plates space parts 4 mm apart and contour plates 10 mm; `--packing-gap-mm` sets one spacing for every plate. Every plate uses automatic `Auto For Match` filament matching, and the manifest records the plates and placements.
 
-The set needs the standard 60 mm unit, 13 mm thickness, original joints, zero fit offset and full 10 mm hole pattern, because the contour pieces are measured for that tile field. For plain or other-diameter 40 mm strips, make them one at a time with `part --family edge-x --length-cells 4 --edge-outward-mm 40` (or `edge-y` for female) plus `--plain-edge` or `--hole-diameter-mm`. For a custom build, leave out `--printer` and give all three build dimensions: the set keeps every straight-edge length that fits, and stops with an error if a contour piece doesn't fit.
+The set needs the standard 60 mm unit, 13 mm thickness, original joints, zero fit offset and full 10 mm hole pattern, because the contour pieces are measured for that tile field. For plain or other-diameter 40 mm strips, make them one at a time with `part --family edge-x --length-cells 4 --edge-outward-mm 40` (or `edge-y` for female) plus `--plain-edge` or `--hole-diameter-mm`. For a custom build, leave out `--printer` and give all three build dimensions; it receives the same 21-piece set and stops with an error if any strip or contour piece does not fit.
 
 Add `--solid-bottom-thickness-mm` to give every piece in the set a [solid bottom](#close-the-underside), and print the matching tiles and north edges with the same value. The outline doesn't change, but every piece is thicker and sits that much higher than in the test fit, so recheck clearance under the lift-out panel. The manifest records the thickness, and the contour piece names end in `_solid-bottom-<T>mm`.
 
@@ -186,7 +186,9 @@ The 3MF is an unsliced project. Open it as a project, then slice and inspect eve
 
 ### 40 mm straight edges
 
-There is one male and one female edge of each 1, 2, 3, 4 and 5-cell length (60 through 300 mm). Male strips (`edge-x`) join a tile's female south or west edge; female strips (`edge-y`) join its male north or east edge. The body extends 40 mm outward from the tile edge; male tabs add another 6 mm toward the tile, making the male part's overall cross-edge size 46 mm. Female parts measure 40 mm across. These generic strips are not a measured vehicle outline, and there are no matching 40 mm corners.
+For each gender the set has one strip of each 1, 2, 3 and 4-cell length, plus an extra 2-cell and 3-cell pair labeled `5-cell run pair`. Two butted strips cover the 300 mm run; each strip is held by the tile joint along its length, and the seam matches a tile-to-tile seam. The two end quarters plus the tile complete the 10 mm hole at that seam. The butted pair has not been test-fitted. A one-piece strip remains available with `part --family edge-x --length-cells 5 --edge-outward-mm 40` (or `edge-y`), on a build large enough for it.
+
+Male strips (`edge-x`) join a tile's female south or west edge; female strips (`edge-y`) join its male north or east edge. The body extends 40 mm outward from the tile edge; male tabs add another 6 mm toward the tile, making the male part's overall cross-edge size 46 mm. Female parts measure 40 mm across. These generic strips are not a measured vehicle outline, and there are no matching 40 mm corners.
 
 The strips carry the other half of the tiles' 10 mm edge holes. At an open strip end the last quarter of the corner hole stays open, because there are no 40 mm corners to finish it. The strips need original roofed joints. Without auto roof support (below), the set has no support, so check the female joint roofs in your slicer, and test fit and flatness before making a full set. The normal `catalogue` command doesn't include 40 mm edges.
 

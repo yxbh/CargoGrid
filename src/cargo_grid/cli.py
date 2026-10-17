@@ -31,7 +31,6 @@ from cargo_grid.parameters import (
     positive,
 )
 from cargo_grid.printers import (
-    CATALOGUE_INVENTORY_BUILD,
     DEFAULT_PART_CLEARANCE_MM,
     PRINTERS,
     DualNozzlePrinter,
@@ -950,14 +949,6 @@ def main(argv: list[str] | None = None) -> int:
                         ),
                         auto_roof_support=bool(roof_support and roof_support.mode == "auto"),
                         **({"layer_height_mm": bambu.layer_height} if bambu else {}),
-                        **(
-                            {
-                                "inventory_build": CATALOGUE_INVENTORY_BUILD,
-                                "omit_unfit": printer.omit_unfit,
-                            }
-                            if printer
-                            else {}
-                        ),
                     )
                 if printer:
                     job.placement_policy.update(

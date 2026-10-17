@@ -359,8 +359,7 @@ def test_cli_part_exports_and_records_the_solid_bottom(tmp_path):
 
 
 def test_plated_zeekr_straight_edge_keeps_its_plan_and_closes_its_floor():
-    build = BuildVolume(350, 320, 325)
-    (spec,) = [v for v in zeekr_7x.variants(build, PLATED) if v.family == "edge-x" and v.nx == 1]
+    (spec,) = [v for v in zeekr_7x.variants(PLATED) if v.family == "edge-x" and v.nx == 1]
     standard = make_accessory(replace(spec, interface=Interface())).bounding_box()
     edge = make_accessory(spec)
     bounds = edge.bounding_box()

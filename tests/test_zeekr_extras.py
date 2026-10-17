@@ -1,7 +1,7 @@
 """The Zeekr 7X expansion set: 40 mm straight edges plus the rear-panel contour pieces."""
 
 import json
-from collections import defaultdict
+from collections import Counter, defaultdict
 from hashlib import sha256
 from math import hypot
 from types import SimpleNamespace
@@ -16,6 +16,7 @@ from cargo_grid import cli
 from cargo_grid.accessories import EDGE_OUTWARD_OPTIONS_MM, Accessory, tile_matched_perimeter
 from cargo_grid.catalogue import (
     accessory_design,
+    accessory_identity,
     accessory_variants,
 )
 from cargo_grid.cli import main
@@ -69,8 +70,8 @@ SOUTH_RAMP_SIZES = (
     (240, 91.397, 13),
 )
 PLATES = {
-    0: ("Zeekr 7X - Male 40mm edges", {"edge-x"}, 5),
-    1: ("Zeekr 7X - Female 40mm edges", {"edge-y"}, 5),
+    0: ("Zeekr 7X - Male 40mm edges", {"edge-x"}, 6),
+    1: ("Zeekr 7X - Female 40mm edges", {"edge-y"}, 6),
     2: ("Zeekr 7X - Rear panel contour side caps", {"zeekr-rear-contour-side"}, 4),
     3: ("Zeekr 7X - Rear panel south contour ramps 1", {"zeekr-rear-contour-ramp"}, 2),
     4: ("Zeekr 7X - Rear panel south contour ramps 2", {"zeekr-rear-contour-ramp"}, 3),
@@ -195,24 +196,18 @@ def test_standard_catalogue_inventory_and_all_accessory_ids_stay_unchanged(
     )
 
 
-def test_x2d_expansion_set_records_large_strips_and_keeps_contour_inventory(contour_stand_ins):
+def test_x2d_expansion_set_keeps_all_required_pairs_and_contours(contour_stand_ins):
     job = extras_job(
         X2D.build,
         placement_build=X2D.common_build(),
-        inventory_build=H2D,
-        omit_unfit=True,
         edge_gap=4,
         auto_roof_support=True,
         layer_height_mm=0.24,
     )
-    assert len(job.designs) == 17
-    assert {
-        (entry["parameters"]["family"], entry["parameters"]["nx"]) for entry in job.omitted
-    } == {("edge-x", 5), ("edge-y", 5)}
-    assert all("actual bounds" in entry["reason"] for entry in job.omitted)
+    assert len(job.designs) == 21 and job.omitted == []
     assert job.manifest_metadata["inventory"] == {
-        "straight_40mm_male_edges": 4,
-        "straight_40mm_female_edges": 4,
+        "straight_40mm_male_edges": 6,
+        "straight_40mm_female_edges": 6,
         "rear_panel_side_caps": 4,
         "rear_panel_south_contour_ramps": 5,
         "standard_tiles_and_north_edges_included": False,
@@ -226,7 +221,7 @@ def test_x2d_expansion_set_records_large_strips_and_keeps_contour_inventory(cont
         assert job.plate_builds[placement.plate].contains_box(placement.x, placement.y, w, d, h)
 
 
-def test_contour_omissions_cover_common_reach_and_support_reservation(
+def test_required_contours_refuse_common_reach_and_support_reservation_failures(
     monkeypatch, accessory_metadata_shape
 ):
     sizes = {
@@ -237,20 +232,15 @@ def test_contour_omissions_cover_common_reach_and_support_reservation(
     monkeypatch.setattr(zeekr_7x_rear_review, "rear_panel_designs", _stand_in_contours(sizes))
     options = {
         "placement_build": X2D.common_build(),
-        "inventory_build": H2D,
         "auto_roof_support": True,
         "layer_height_mm": 0.24,
     }
     with pytest.raises(ValueError, match="west_north_cap.*exceed"):
         extras_job(X2D.build, **options)
-    job = extras_job(X2D.build, omit_unfit=True, **options)
-    omitted = {entry["name"]: entry for entry in job.omitted}
-    assert set(omitted) == {"zeekr_rear_west_north_cap", "zeekr_rear_west_south_cap"}
-    assert "exceed usable envelope" in omitted["zeekr_rear_west_north_cap"]["reason"]
-    assert "reserved prime tower" in omitted["zeekr_rear_west_south_cap"]["reason"]
-    assert all("no scaling applied" in entry["reason"] for entry in omitted.values())
-    assert job.manifest_metadata["inventory"]["rear_panel_side_caps"] == 2
-    assert not set(omitted) & {design.name for design in job.designs}
+    sizes["west", "north"] = SIDE_CAP_SIZES["west", "north"]
+    monkeypatch.setattr(zeekr_7x_rear_review, "rear_panel_designs", _stand_in_contours(sizes))
+    with pytest.raises(ValueError, match="west_south_cap.*does not fit its plate area"):
+        extras_job(X2D.build, **options)
 
 
 @pytest.mark.parametrize(
@@ -263,19 +253,21 @@ def test_contour_omissions_cover_common_reach_and_support_reservation(
         (25, "full", False),
     ],
 )
-def test_extras_select_one_matching_hole_mode_and_only_ten_straight_parts(
+def test_extras_select_one_matching_hole_mode_and_twelve_required_straight_parts(
     diameter,
     scope,
     complete,
 ):
     specs = variants(
-        H2D,
         hole_diameter=diameter,
         hole_scope=scope,
     )
-    assert len(specs) == 10
+    assert len(specs) == 12
     assert {(spec.family, spec.nx) for spec in specs} == {
-        (family, n) for family in ("edge-x", "edge-y") for n in range(1, 6)
+        (family, n) for family in ("edge-x", "edge-y") for n in range(1, 5)
+    }
+    assert Counter((spec.family, spec.nx) for spec in specs) == {
+        (family, n): 2 if n in (2, 3) else 1 for family in ("edge-x", "edge-y") for n in range(1, 5)
     }
     assert all(spec.edge_outward == 40 for spec in specs)
     assert all(spec.complete_edge_holes is complete for spec in specs)
@@ -338,30 +330,33 @@ def test_expansion_set_rejects_nonstandard_settings_before_building(
         extras_job(H2D, **settings)
 
 
-def test_expansion_set_omits_only_straight_edges_that_do_not_fit(contour_stand_ins):
+def test_custom_build_keeps_the_same_complete_inventory(contour_stand_ins):
     build = BuildVolume(305, 290, 13, exclusions=(Exclusion(0, 0, 10, 290),))
     job = extras_job(build)
-    assert [(d["parameters"]["family"], d["parameters"]["nx"]) for d in job.omitted] == [
-        ("edge-x", 5),
-        ("edge-y", 5),
-    ]
+    assert job.omitted == []
     edges = [d for d in job.designs if d.parameters["family"] in {"edge-x", "edge-y"}]
     assert sorted((d.parameters["family"], d.parameters["nx"]) for d in edges) == [
-        (family, n) for family in ("edge-x", "edge-y") for n in range(1, 5)
+        (family, n) for family in ("edge-x", "edge-y") for n in (1, 2, 2, 3, 3, 4)
     ]
-    assert len(job.designs) == 8 + 9
-    assert job.manifest_metadata["inventory"]["straight_40mm_male_edges"] == 4
+    assert len(job.designs) == 21
+    assert job.manifest_metadata["inventory"]["straight_40mm_male_edges"] == 6
     assert job.manifest_metadata["straight_edges"]["lengths_cells"] == [1, 2, 3, 4]
 
 
 def test_expansion_set_refuses_an_envelope_too_small_for_a_contour_piece(contour_stand_ins):
-    with pytest.raises(ValueError, match="zeekr_rear_south_ramp_1_4cell: actual bounds"):
-        extras_job(BuildVolume(230, 120, 13))
-    with pytest.raises(ValueError, match="no supported designs fit"):
+    with pytest.raises(ValueError, match="edge-x_3x1.*actual bounds"):
+        extras_job(BuildVolume(179, 120, 13))
+    with pytest.raises(ValueError, match="edge-x_1x1.*actual bounds"):
         extras_job(BuildVolume(59, 39, 13))
+    with pytest.raises(ValueError, match="edge-x_4x1.*actual bounds"):
+        extras_job(BuildVolume(230, 120, 13))
+    with pytest.raises(ValueError, match="zeekr_rear_west_north_cap: actual bounds"):
+        extras_job(BuildVolume(60, 250, 13))
 
 
-def test_grouping_never_adds_a_plate_when_the_combined_edges_fit_one(monkeypatch):
+def test_grouping_never_adds_a_plate_when_the_combined_edges_fit_one(
+    monkeypatch, accessory_metadata_shape
+):
     small = {key: (50, 50, 13) for key in SIDE_CAP_SIZES}
     monkeypatch.setattr(
         zeekr_7x_rear_review,
@@ -371,15 +366,15 @@ def test_grouping_never_adds_a_plate_when_the_combined_edges_fit_one(monkeypatch
     job = extras_job(BuildVolume(110, 110, 13))
     assert job.placement_policy["grouped_by_connector_sex"] is False
     assert job.plate_names[0] == "Zeekr 7X - 40mm edges"
-    assert {d.parameters["family"] for d in job.designs[:2]} == {"edge-x", "edge-y"}
-    assert {p.plate for p in job.print_placements[:2]} == {0}
-    assert all(p.plate > 0 for p in job.print_placements[2:])
+    assert {d.parameters["family"] for d in job.designs[:12]} == {"edge-x", "edge-y"}
+    assert {p.plate for p in job.print_placements[:12]} == {0}
+    assert all(p.plate > 0 for p in job.print_placements[12:])
 
 
 def test_h2d_expansion_set_plans_five_family_plates_in_common_reach(expansion_plan):
     job = expansion_plan
     assert job.kind == "extras" and job.omitted == []
-    assert len(job.designs) == 19
+    assert len(job.designs) == 21
     assert {plate: name for plate, (name, _, _) in PLATES.items()} == job.plate_names
     members = _plate_members(job)
     for plate, (_, families, count) in PLATES.items():
@@ -390,7 +385,7 @@ def test_h2d_expansion_set_plans_five_family_plates_in_common_reach(expansion_pl
             if placement.plate == plate
         } == families
     assert members[3] == ["zeekr_rear_south_ramp_2_4cell", "zeekr_rear_south_ramp_4_4cell"]
-    assert [d.parameters["nx"] for d in job.designs[:10]] == [1, 2, 3, 4, 5] * 2
+    assert [d.parameters["nx"] for d in job.designs[:12]] == [1, 2, 3, 4, 2, 3] * 2
     assert all(d.quantity == 1 and not d.apply_orientation_to_bambu for d in job.designs)
     assert all(d.bambu_object_settings == {} for d in job.designs)
     assert job.plate_settings == {}
@@ -413,8 +408,8 @@ def test_h2d_expansion_set_plans_five_family_plates_in_common_reach(expansion_pl
     }
     metadata = job.manifest_metadata
     assert metadata["inventory"] == {
-        "straight_40mm_male_edges": 5,
-        "straight_40mm_female_edges": 5,
+        "straight_40mm_male_edges": 6,
+        "straight_40mm_female_edges": 6,
         "rear_panel_side_caps": 4,
         "rear_panel_south_contour_ramps": 5,
         "standard_tiles_and_north_edges_included": False,
@@ -427,11 +422,35 @@ def test_h2d_expansion_set_plans_five_family_plates_in_common_reach(expansion_pl
         assert private not in serialized.lower()
 
 
+def test_five_cell_run_copies_keep_existing_strip_geometry_and_identity_parameters(expansion_plan):
+    job = expansion_plan
+    designs = {design.name: design for design in job.designs}
+    metadata = job.manifest_metadata["straight_edges"]
+    assert "has not been test-fitted" in metadata["five_cell_run_note"]
+    for gender, family in (("male", "edge-x"), ("female", "edge-y")):
+        pair = metadata["five_cell_run_pairs"][gender]
+        assert [item["length_cells"] for item in pair] == [2, 3]
+        assert sum(item["length_cells"] for item in pair) * 60 == 300
+        for item in pair:
+            design = designs[item["design"]]
+            source = designs[item["source_design"]]
+            spec = tile_matched_perimeter(family, nx=item["length_cells"], outward=40)
+            name, parameters = accessory_identity(spec)
+            assert source.name == name and design.name == f"{name}_5cell-run"
+            assert design.parameters == parameters == source.parameters
+            assert design.shape is source.shape
+            assert design.holes == source.holes
+            assert design.mating_datums == source.mating_datums
+            assert design.display_name == (
+                f"5-cell run pair - {item['length_cells']}-cell {gender} 40mm edge"
+            )
+
+
 def test_h2d_expansion_set_exports_one_project_with_named_plates(expansion_plan, tmp_path):
     manifest_path = export_job(expansion_plan, tmp_path / "set", stl=False, bambu=H2D_BAMBU)
     manifest = json.loads(manifest_path.read_text())
     assert manifest["kind"] == "extras"
-    assert len(manifest["designs"]) == 19
+    assert len(manifest["designs"]) == 21
     assert manifest["placement_policy"] == json.loads(json.dumps(expansion_plan.placement_policy))
     assert manifest["job_metadata"]["inventory"]["rear_panel_side_caps"] == 4
     assert manifest["export"]["sliced"] is False
@@ -447,7 +466,14 @@ def test_h2d_expansion_set_exports_one_project_with_named_plates(expansion_plan,
         assert archive.testzip() is None
         assert not any("slice" in name.lower() for name in archive.namelist())
         config = ET.fromstring(archive.read("Metadata/model_settings.config"))
-        assert len(config.findall("object")) == 19
+        assert len(config.findall("object")) == 21
+        names = [
+            item.get("value")
+            for obj in config.findall("object")
+            for item in obj.findall("metadata")
+            if item.get("key") == "name"
+        ]
+        assert sum("5-cell run pair" in name for name in names) == 4
         plates = config.findall("plate")
         assert len(plates) == 5
         for plate in plates:
@@ -488,7 +514,7 @@ def test_cli_h2d_extras_routes_shared_printer_settings(
     command = ["extras", COLLECTION, *H2D_OPTIONS, "--output", str(tmp_path / "set"), *options]
     assert main(command) == 0
     job, settings = captured[0]
-    assert len(job.designs) == 19
+    assert len(job.designs) == 21
     assert job.build == H2D
     assert job.part_gap == min(edge_gap, contour_gap)
     policy = job.placement_policy
@@ -535,7 +561,7 @@ def test_cli_extras_accept_a_solid_bottom_for_every_piece(
     ]
     assert main(command) == 0
     (job,) = captured
-    assert len(job.designs) == 19
+    assert len(job.designs) == 21
     assert {design.parameters["interface"]["solid_bottom_mm"] for design in job.designs} == {1.92}
     solid_bottom = job.manifest_metadata["solid_bottom"]
     assert solid_bottom["body_thickness_mm"] == pytest.approx(14.92)
@@ -570,7 +596,7 @@ def test_cli_extras_outside_h2d_keeps_the_ordinary_and_contour_default_gaps(
     assert set(job.placement_policy["plate_group_minimum_model_gap_mm"].values()) == {2, 10}
     assert "common_reach_mm" not in job.placement_policy
     assert sorted(d.parameters["nx"] for d in job.designs if "nx" in d.parameters) == sorted(
-        [*range(1, 7)] * 2
+        [1, 2, 3, 4, 2, 3] * 2
     )
 
 
@@ -599,13 +625,15 @@ def test_cli_extras_rejects_patterns_the_contour_pieces_cannot_match(
     assert not (tmp_path / "set").exists()
 
 
-def test_cli_standalone_forty_mm_straight_and_corner_rejection(tmp_path, capsys):
+@pytest.mark.parametrize("family", ["edge-x", "edge-y"])
+@pytest.mark.parametrize("cells", [4, 5])
+def test_cli_standalone_forty_mm_straight_and_corner_rejection(tmp_path, capsys, family, cells):
     args = [
         "part",
         "--edge-outward-mm",
         "40",
         "--build-width-mm",
-        "250",
+        "310",
         "--build-depth-mm",
         "50",
         "--build-height-mm",
@@ -617,9 +645,9 @@ def test_cli_standalone_forty_mm_straight_and_corner_rejection(tmp_path, capsys)
             [
                 *args,
                 "--family",
-                "edge-x",
+                family,
                 "--length-cells",
-                "4",
+                str(cells),
                 "--output",
                 str(tmp_path / "straight"),
             ]
@@ -627,7 +655,7 @@ def test_cli_standalone_forty_mm_straight_and_corner_rejection(tmp_path, capsys)
         == 0
     )
     design = json.loads((tmp_path / "straight" / "manifest.json").read_text())["designs"][0]
-    assert design["size_mm"] == pytest.approx((240, 46, 13))
+    assert design["size_mm"] == pytest.approx((cells * 60, 46 if family == "edge-x" else 40, 13))
     with pytest.raises(SystemExit) as caught:
         main([*args, "--family", "corner-out", "--output", str(tmp_path / "corner")])
     assert caught.value.code == 2
@@ -716,7 +744,7 @@ def test_real_expansion_set_matches_the_planned_plates(expansion_set_job, expans
     assert job.placement_policy == expansion_plan.placement_policy
     assert job.manifest_metadata == expansion_plan.manifest_metadata
     _assert_group_clearances(job)
-    contour = job.designs[10:]
+    contour = job.designs[12:]
     assert [d.parameters["family"] for d in contour] == [
         *(["zeekr-rear-contour-side"] * 4),
         *(["zeekr-rear-contour-ramp"] * 5),
@@ -730,8 +758,8 @@ def test_real_expansion_set_matches_the_planned_plates(expansion_set_job, expans
 def test_real_expansion_set_exports_every_piece_in_one_project(expansion_set_job, tmp_path):
     manifest_path = export_job(expansion_set_job.job, tmp_path / "set", stl=False, bambu=H2D_BAMBU)
     manifest = json.loads(manifest_path.read_text())
-    assert len(manifest["designs"]) == 19
-    assert len(list((tmp_path / "set").glob("*.step"))) == 19
+    assert len(manifest["designs"]) == 21
+    assert len(list((tmp_path / "set").glob("*.step"))) == 21
     for design in manifest["designs"]:
         assert design["step_roundtrip"] == "passed"
         assert design["step_volume_delta_mm3"] <= design["step_volume_budget_mm3"]
@@ -858,7 +886,7 @@ def test_real_contour_caps_inherit_global_support(side):
 
 @pytest.mark.parametrize("family", ["edge-y", "edge-x"])
 def test_real_forty_mm_edges_inherit_global_support(family):
-    (spec,) = [v for v in variants(H2D) if v.family == family and v.nx == 1]
+    (spec,) = [v for v in variants() if v.family == family and v.nx == 1]
     design = accessory_design(spec)
     assert needs_auto_support(design)
 

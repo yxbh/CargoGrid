@@ -927,6 +927,29 @@ def test_forty_mm_straights_keep_tile_interfaces_and_complete_middle_holes(famil
 
 
 @pytest.mark.parametrize("family", ["edge-x", "edge-y"])
+def test_two_plus_three_forty_mm_strips_complete_the_five_cell_run_seam_hole(family):
+    first = _accessory_shape(Accessory(family, nx=2, edge_outward=40))
+    second = _accessory_shape(Accessory(family, nx=3, edge_outward=40)).moved(Location((120, 0, 0)))
+    whole = _accessory_shape(Accessory(family, nx=5, edge_outward=40))
+    tile = _tile_shape(Tile(5, 1))
+    if family == "edge-y":
+        tile = tile.moved(Location((0, -60, 0)))
+    assert first.bounding_box().max.X == pytest.approx(second.bounding_box().min.X, abs=1e-6)
+    assert second.bounding_box().max.X == pytest.approx(300, abs=1e-6)
+    for shape in (first, second, whole, tile):
+        assert shape.is_valid and len(shape.solids()) == 1 and shape.volume > 0
+    paired = _local_assembly_contains((first, second, tile), (120, 0), 13)
+    single = _local_assembly_contains((whole, tile), (120, 0), 13)
+    for contains in (paired, single):
+        _assert_completed_circle((), (120, 0), 13, minimum_ring_samples=59, contains=contains)
+    for radius in (0, 4.99, 5.01, 6):
+        for index in range(64):
+            angle = 2 * pi * index / 64
+            point = Vector(120 + radius * cos(angle), radius * sin(angle), 6.5)
+            assert paired(point) == single(point)
+
+
+@pytest.mark.parametrize("family", ["edge-x", "edge-y"])
 @pytest.mark.parametrize("unit,thickness,diameter", [(45, 8, 8), (60, 18, 10), (90, 13, 12)])
 def test_forty_mm_custom_interface_keeps_physical_width_and_hole_diameter(
     family,

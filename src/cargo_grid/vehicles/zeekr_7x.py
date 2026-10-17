@@ -2,12 +2,11 @@
 
 from collections import Counter
 from dataclasses import replace
-from math import floor
 from typing import Literal
 
 from cargo_grid.accessories import Accessory, tile_matched_perimeter
 from cargo_grid.catalogue import accessory_design
-from cargo_grid.jobs import Job, omitted_design
+from cargo_grid.jobs import Job
 from cargo_grid.parameters import (
     DEFAULT_HOLE_DIAMETER_MM,
     BuildVolume,
@@ -21,19 +20,23 @@ OUTWARD_MM = 40.0
 CONTOUR_GAP_MM = rear_panel.H2D_REVIEW_GAP_MM
 NORTH_EDGE_OUTWARD_MM = 30.0
 PLATE_PREFIX = "Zeekr 7X - "
+STRAIGHT_LENGTHS_CELLS = (1, 2, 3, 4, 2, 3)
+RUN_PAIR_NOTE = (
+    "Two butted strips cover the 300 mm five-cell run. Each strip is held by the tile joint "
+    "along its length; the seam matches a tile-to-tile seam. The two end quarters and the "
+    "tile complete the 10 mm hole at the seam. The butted pair has not been test-fitted."
+)
 
 
 def variants(
-    build: BuildVolume,
     interface: Interface = Interface(),
     *,
     hole_diameter: float | None = DEFAULT_HOLE_DIAMETER_MM,
     hole_scope: Literal["interior", "full"] = "full",
 ) -> list[Accessory]:
-    """Candidate whole-cell straight edges; the job checks their actual bounds."""
+    """Required straight edges, with the five-cell run replaced by a second 2+3 pair."""
     if interface.joint_style != "original":
         raise ValueError("Zeekr 7X extras require original roofed tile-edge joints")
-    maximum = max(1, floor(max(build.usable[:2]) / interface.pitch))
     return [
         tile_matched_perimeter(
             family,
@@ -44,7 +47,7 @@ def variants(
             hole_scope=hole_scope,
         )
         for family in ("edge-x", "edge-y")
-        for cells in range(1, maximum + 1)
+        for cells in STRAIGHT_LENGTHS_CELLS
     ]
 
 
@@ -84,14 +87,11 @@ def extras_job(
     contour_gap: float = CONTOUR_GAP_MM,
     auto_roof_support: bool = False,
     layer_height_mm: float = 0.32,
-    inventory_build: BuildVolume | None = None,
-    omit_unfit: bool = False,
 ) -> Job:
     """Build the whole expansion set: 40 mm straight edges plus rear-panel contour pieces.
 
-    ``auto_roof_support`` reserves a prime tower on every plate. ``inventory_build`` keeps
-    the candidate inventory stable on smaller printers; ``omit_unfit`` records missing pieces
-    rather than refusing the whole expansion set.
+    Every piece is required on every build; a fit failure refuses the set.
+    ``auto_roof_support`` reserves a prime tower on every plate.
     """
     if interface.joint_style != "original":
         raise ValueError("Zeekr 7X extras require original roofed tile-edge joints")
@@ -109,39 +109,41 @@ def extras_job(
     positive("Zeekr 7X contour packing gap", contour_gap)
     envelope = placement_build or build
 
-    edges, sizes, omitted = [], {}, []
-    for spec in variants(
-        inventory_build or envelope, interface, hole_diameter=hole_diameter, hole_scope=hole_scope
-    ):
-        design = accessory_design(spec)
+    edges, sizes, sources = [], {}, {}
+    run_pairs = {"male": [], "female": []}
+    for spec in variants(interface, hole_diameter=hole_diameter, hole_scope=hole_scope):
+        key = (spec.family, spec.nx)
+        if key in sources:
+            source = sources[key]
+            gender = "male" if spec.family == "edge-x" else "female"
+            design = replace(
+                source,
+                name=f"{source.name}_5cell-run",
+                display_name=f"5-cell run pair - {spec.nx}-cell {gender} 40mm edge",
+            )
+            run_pairs[gender].append(
+                {"design": design.name, "source_design": source.name, "length_cells": spec.nx}
+            )
+        else:
+            design = accessory_design(spec)
+            sources[key] = design
         size = design.size
         if envelope.placement(size) is None or build.placement(size) is None:
-            omitted.append(omitted_design(design, size, "actual bounds exceed usable envelope"))
-        else:
-            edges.append(design)
-            sizes[id(design)] = size
-    if not edges:
-        raise ValueError("no supported designs fit the configured build envelope")
+            raise ValueError(
+                f"{design.name}: actual bounds {size} exceed the configured build envelope"
+            )
+        edges.append(design)
+        sizes[id(design)] = size
 
     parameters = rear_panel.RearReviewParameters(interface=interface)
     side_caps, south_ramps = rear_panel.rear_panel_designs(parameters)
     for design in side_caps + south_ramps:
         size = design.size
         if envelope.placement(size) is None or build.placement(size) is None:
-            if omit_unfit:
-                omitted.append(
-                    omitted_design(
-                        design, size, "actual bounds exceed usable envelope; no scaling applied"
-                    )
-                )
-                continue
             raise ValueError(
                 f"{design.name}: actual bounds {size} exceed the configured build envelope"
             )
         sizes[id(design)] = size
-    side_caps = [design for design in side_caps if id(design) in sizes]
-    south_ramps = [design for design in south_ramps if id(design) in sizes]
-
     male = [design for design in edges if design.parameters["family"] == "edge-x"]
     female = [design for design in edges if design.parameters["family"] == "edge-y"]
 
@@ -153,7 +155,7 @@ def extras_job(
             auto_roof_support=auto_roof_support,
             layer_height_mm=layer_height_mm,
         )
-        if result.unfit and not omit_unfit:
+        if result.unfit:
             raise ValueError(f"{result.unfit[0].name} does not fit its plate area")
         return result
 
@@ -170,27 +172,11 @@ def extras_job(
         PlateGroup(f"{PLATE_PREFIX}Rear panel south contour ramps", south_ramps, contour_gap),
     ]
     plates = plan(groups)
-    omitted.extend(
-        omitted_design(
-            design,
-            sizes[id(design)],
-            "actual bounds do not fit the plate area with the reserved prime tower, "
-            "brim clearance and 6 mm support-foot inset; no scaling applied",
-        )
-        for design in plates.unfit
-    )
-    retained = {id(design) for design in plates.designs}
-    edges = [design for design in edges if id(design) in retained]
-    male = [design for design in male if id(design) in retained]
-    female = [design for design in female if id(design) in retained]
-    side_caps = [design for design in side_caps if id(design) in retained]
-    south_ramps = [design for design in south_ramps if id(design) in retained]
     job_gap = min(edge_gap, contour_gap)
     return Job(
         plates.designs,
         build,
         "extras",
-        omitted=omitted,
         part_gap=job_gap,
         print_placements=plates.placements,
         plate_names=plates.plate_names,
@@ -236,6 +222,8 @@ def extras_job(
                 "lengths_cells": sorted({design.parameters["nx"] for design in edges}),
                 "male": "edge-x; joins a tile's female south or west edge",
                 "female": "edge-y; joins a tile's male north or east edge",
+                "five_cell_run_pairs": run_pairs,
+                "five_cell_run_note": RUN_PAIR_NOTE,
                 "note": (
                     "Generic straight strips, not a measured vehicle outline. There are no "
                     "40 mm corners, and an open strip end still needs its neighbouring "
