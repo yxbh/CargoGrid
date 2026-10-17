@@ -60,47 +60,50 @@ class DualNozzlePrinter:
         }
 
 
-# Keep these public dictionaries available through cli.H2D_PROFILES / cli.X2D_PROFILES too.
-H2D_PROFILES = {
-    0.8: NozzleProfiles(
-        0.32,
-        "Bambu Lab H2D 0.8 nozzle",
-        "0.32mm Balanced Strength @BBL H2D 0.8 nozzle",
-        "Bambu PETG Basic @BBL H2D 0.8 nozzle",
-        "Bambu PLA Basic @BBL H2D 0.8 nozzle",
-    ),
-    # At 0.2 mm the larger tower conflicts with two H2D catalogue plates.
-    0.4: NozzleProfiles(
-        0.24,
-        "Bambu Lab H2D 0.4 nozzle",
-        "0.24mm Standard @BBL H2D",
-        "Bambu PETG Basic @BBL H2D 0.4 nozzle",
-        "Bambu PLA Basic @BBL H2D",
-    ),
-}
-X2D_PROFILES = {
-    0.8: NozzleProfiles(
-        0.32,
-        "Bambu Lab X2D 0.8 nozzle",
-        "0.32mm Balanced Quality @BBL X2D 0.8 nozzle",
-        "Bambu PETG Basic @BBL X2D 0.8 nozzle",
-        "Bambu PLA Basic @BBL X2D 0.8 nozzle",
-    ),
-    0.4: NozzleProfiles(
-        0.24,
-        "Bambu Lab X2D 0.4 nozzle",
-        "0.24mm Standard @BBL X2D",
-        "Bambu PETG Basic @BBL X2D 0.4 nozzle",
-        "Bambu PLA Basic @BBL X2D 0.4 nozzle",
-    ),
-}
-H2D = DualNozzlePrinter("H2D", BuildVolume(350, 320, 325), (25, 325), 320, H2D_PROFILES)
+H2D = DualNozzlePrinter(
+    "H2D",
+    BuildVolume(350, 320, 325),
+    (25, 325),
+    320,
+    {
+        0.8: NozzleProfiles(
+            0.32,
+            "Bambu Lab H2D 0.8 nozzle",
+            "0.32mm Balanced Strength @BBL H2D 0.8 nozzle",
+            "Bambu PETG Basic @BBL H2D 0.8 nozzle",
+            "Bambu PLA Basic @BBL H2D 0.8 nozzle",
+        ),
+        # At 0.2 mm the larger tower conflicts with two H2D catalogue plates.
+        0.4: NozzleProfiles(
+            0.24,
+            "Bambu Lab H2D 0.4 nozzle",
+            "0.24mm Standard @BBL H2D",
+            "Bambu PETG Basic @BBL H2D 0.4 nozzle",
+            "Bambu PLA Basic @BBL H2D",
+        ),
+    },
+)
 X2D = DualNozzlePrinter(
     "X2D",
     BuildVolume(256, 256, 261),
     (20.5, 256),
     256,
-    X2D_PROFILES,
+    {
+        0.8: NozzleProfiles(
+            0.32,
+            "Bambu Lab X2D 0.8 nozzle",
+            "0.32mm Balanced Quality @BBL X2D 0.8 nozzle",
+            "Bambu PETG Basic @BBL X2D 0.8 nozzle",
+            "Bambu PLA Basic @BBL X2D 0.8 nozzle",
+        ),
+        0.4: NozzleProfiles(
+            0.24,
+            "Bambu Lab X2D 0.4 nozzle",
+            "0.24mm Standard @BBL X2D",
+            "Bambu PETG Basic @BBL X2D 0.4 nozzle",
+            "Bambu PLA Basic @BBL X2D 0.4 nozzle",
+        ),
+    },
     45,
     ("Direct Drive", "Bowden"),
 )

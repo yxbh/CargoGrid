@@ -42,8 +42,9 @@ from cargo_grid.accessories import (
 )
 from cargo_grid.interfaces import socket_entry_tool, tile_join_tool, x_profile
 from cargo_grid.jobs import Design, Job, tile_design
-from cargo_grid.packing import h2d_common_build, pack_sizes
+from cargo_grid.packing import pack_sizes
 from cargo_grid.parameters import Interface, Tile, interface_parameters, positive
+from cargo_grid.printers import H2D
 from cargo_grid.tiles import hole_placements
 
 ORIGINAL_RIGHT_WALL_STATIONS_MM = (
@@ -2345,7 +2346,7 @@ def rear_review_job(
         for side in ("west", "east")
     }
 
-    build = h2d_common_build()
+    build = H2D.common_build()
     placements = pack_sizes(
         [design.size for design in designs],
         build,

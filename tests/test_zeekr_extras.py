@@ -15,17 +15,15 @@ from tower_checks import assert_towers_stay_where_bambu_keeps_them
 from cargo_grid import cli
 from cargo_grid.accessories import EDGE_OUTWARD_OPTIONS_MM, Accessory, tile_matched_perimeter
 from cargo_grid.catalogue import (
-    H2D_DEFAULT_PART_CLEARANCE_MM,
     accessory_design,
     accessory_variants,
 )
 from cargo_grid.cli import main
 from cargo_grid.export import BambuSettings, Material, export_job
 from cargo_grid.jobs import Design
-from cargo_grid.packing import h2d_common_build
 from cargo_grid.parameters import BuildVolume, Exclusion, Interface, interface_parameters
 from cargo_grid.plates import needs_auto_support
-from cargo_grid.printers import X2D
+from cargo_grid.printers import DEFAULT_PART_CLEARANCE_MM, PRINTERS, X2D
 from cargo_grid.rods import Rod, RodBrace
 from cargo_grid.vehicles import zeekr_7x, zeekr_7x_rear_review
 from cargo_grid.vehicles.zeekr_7x import CONTOUR_GAP_MM, extras_job, variants
@@ -33,13 +31,8 @@ from cargo_grid.vehicles.zeekr_7x import CONTOUR_GAP_MM, extras_job, variants
 COLLECTION = "zeekr-7x"
 H2D = BuildVolume(350, 320, 325)
 H2D_OPTIONS = [
-    "--h2d-dual-safe",
-    "--build-width-mm",
-    "350",
-    "--build-depth-mm",
-    "320",
-    "--build-height-mm",
-    "325",
+    "--printer",
+    "h2d",
     "--bambu",
     "--material",
     "Bambu PETG Basic @BBL H2D 0.8 nozzle",
@@ -83,8 +76,8 @@ PLATES = {
     4: ("Zeekr 7X - Rear panel south contour ramps 2", {"zeekr-rear-contour-ramp"}, 3),
 }
 GROUP_GAPS = {
-    "Zeekr 7X - Male 40mm edges": H2D_DEFAULT_PART_CLEARANCE_MM,
-    "Zeekr 7X - Female 40mm edges": H2D_DEFAULT_PART_CLEARANCE_MM,
+    "Zeekr 7X - Male 40mm edges": DEFAULT_PART_CLEARANCE_MM,
+    "Zeekr 7X - Female 40mm edges": DEFAULT_PART_CLEARANCE_MM,
     "Zeekr 7X - Rear panel contour side caps": CONTOUR_GAP_MM,
     "Zeekr 7X - Rear panel south contour ramps": CONTOUR_GAP_MM,
 }
@@ -145,8 +138,8 @@ def expansion_plan():
         patch.setattr(zeekr_7x_rear_review, "rear_panel_designs", _stand_in_contours())
         job = extras_job(
             H2D,
-            placement_build=h2d_common_build(),
-            edge_gap=H2D_DEFAULT_PART_CLEARANCE_MM,
+            placement_build=PRINTERS["h2d"].common_build(),
+            edge_gap=DEFAULT_PART_CLEARANCE_MM,
         )
     return job
 
@@ -403,7 +396,7 @@ def test_h2d_expansion_set_plans_five_family_plates_in_common_reach(expansion_pl
     assert job.plate_settings == {}
     assert job.projected_footprints is None
     assert job.projected_footprint_clearances == {}
-    assert job.part_gap == H2D_DEFAULT_PART_CLEARANCE_MM == 4
+    assert job.part_gap == DEFAULT_PART_CLEARANCE_MM == 4
     assert CONTOUR_GAP_MM == 10
     _assert_group_clearances(job)
     policy = job.placement_policy
@@ -704,8 +697,8 @@ def expansion_set_job():
     return SimpleNamespace(
         job=extras_job(
             H2D,
-            placement_build=h2d_common_build(),
-            edge_gap=H2D_DEFAULT_PART_CLEARANCE_MM,
+            placement_build=PRINTERS["h2d"].common_build(),
+            edge_gap=DEFAULT_PART_CLEARANCE_MM,
         )
     )
 
@@ -773,8 +766,10 @@ def _placed_by_plate(job):
 
 
 def test_auto_support_reserves_a_tower_on_plates_with_supported_pieces(auto_stand_ins):
-    default = extras_job(H2D, placement_build=h2d_common_build(), edge_gap=4)
-    job = extras_job(H2D, placement_build=h2d_common_build(), edge_gap=4, auto_roof_support=True)
+    default = extras_job(H2D, placement_build=PRINTERS["h2d"].common_build(), edge_gap=4)
+    job = extras_job(
+        H2D, placement_build=PRINTERS["h2d"].common_build(), edge_gap=4, auto_roof_support=True
+    )
     assert list(job.plate_names.values()) == [
         "Zeekr 7X - 40mm edges",
         "Zeekr 7X - Rear panel contour side caps",

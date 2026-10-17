@@ -10,10 +10,10 @@ from zipfile import ZipFile
 import pytest
 
 from cargo_grid import BuildVolume, Tile
-from cargo_grid.cli import H2D_PROFILES, main
+from cargo_grid.cli import main
 from cargo_grid.export import BambuSettings, Material, write_3mf
 from cargo_grid.jobs import Job, tile_design
-from cargo_grid.printers import PRINTERS, X2D_PROFILES
+from cargo_grid.printers import PRINTERS
 from cargo_grid.roof_support import (
     BAMBU_SUPPORT_DEFAULT_PROCESSES,
     BAMBU_SUPPORT_DEFAULTS,
@@ -145,7 +145,11 @@ def profile_test_tile():
     "process_profile",
     [
         None,
-        *(profile.process for profile in (*H2D_PROFILES.values(), *X2D_PROFILES.values())),
+        *(
+            profile.process
+            for printer in PRINTERS.values()
+            for profile in printer.profiles.values()
+        ),
         "0.16mm Optimal @BBL X1C",
     ],
 )

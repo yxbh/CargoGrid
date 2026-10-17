@@ -9,17 +9,17 @@ import pytest
 
 from cargo_grid.accessories import Accessory, accessory_datums
 from cargo_grid.catalogue import (
-    H2D_DEFAULT_PART_CLEARANCE_MM,
     accessory_variants,
-    h2d_dual_safe_catalogue_job,
+    dual_safe_catalogue_job,
     tile_sizes,
 )
-from cargo_grid.cli import H2D_PROFILES, main
+from cargo_grid.cli import main
 from cargo_grid.export import BambuSettings, Material, _PreparedProject
 from cargo_grid.footprints import minimum_projected_clearance
 from cargo_grid.jobs import Design, tile_identity
 from cargo_grid.packing import PrintPlacement
 from cargo_grid.parameters import BuildVolume, Exclusion, Tile, interface_parameters
+from cargo_grid.printers import DEFAULT_PART_CLEARANCE_MM, H2D
 from cargo_grid.rods import Rod, RodBrace
 from cargo_grid.tiles import hole_placements
 
@@ -253,7 +253,7 @@ def h2d_plan():
 
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(Design, "bambu_size", property(counted_size))
-        job = h2d_dual_safe_catalogue_job(hole_diameter=10, hole_scope="full")
+        job = dual_safe_catalogue_job(H2D, hole_diameter=10, hole_scope="full")
     return SimpleNamespace(job=job, measured=measured, layout=_plan_layout(job))
 
 
@@ -360,7 +360,7 @@ def test_h2d_dual_safe_plan_keeps_every_plate_in_common_reach_without_manual_map
     assert (
         set(job.plate_names) == {p.plate for p in job.print_placements} == set(range(plate_count))
     )
-    assert job.part_gap == H2D_DEFAULT_PART_CLEARANCE_MM
+    assert job.part_gap == DEFAULT_PART_CLEARANCE_MM
     assert job.placement_policy["common_reach_mm"] == {
         "min_x": 25,
         "max_x": 325,
@@ -568,7 +568,7 @@ def test_h2d_dual_safe_plan_requests_support_only_for_supported_families(h2d_pla
                 "--build-width-mm",
                 "349",
             ],
-            "unmodified H2D build envelope",
+            "--printer h2d cannot be combined with --build-width-mm",
         ),
         (
             [
@@ -617,13 +617,8 @@ def test_h2d_dual_safe_plan_requests_support_only_for_supported_families(h2d_pla
 def test_h2d_dual_safe_cli_rejects_incomplete_hardware_requests(extra, message, tmp_path, capsys):
     command = [
         "catalogue",
-        "--h2d-dual-safe",
-        "--build-width-mm",
-        "350",
-        "--build-depth-mm",
-        "320",
-        "--build-height-mm",
-        "325",
+        "--printer",
+        "h2d",
         "--output",
         str(tmp_path / "catalogue"),
     ]
@@ -638,7 +633,8 @@ def test_h2d_dual_safe_cli_rejects_incomplete_hardware_requests(extra, message, 
 def test_h2d_dual_safe_cli_forwards_an_explicit_packing_gap(monkeypatch, tmp_path):
     supplied = {}
 
-    def fake_job(**kwargs):
+    def fake_job(printer, **kwargs):
+        assert printer is H2D
         supplied.update(kwargs)
         return SimpleNamespace(
             designs=[],
@@ -646,7 +642,7 @@ def test_h2d_dual_safe_cli_forwards_an_explicit_packing_gap(monkeypatch, tmp_pat
             print_placements=[PrintPlacement(0, 0, 0, 0)],
         )
 
-    monkeypatch.setattr("cargo_grid.cli.h2d_dual_safe_catalogue_job", fake_job)
+    monkeypatch.setattr("cargo_grid.cli.dual_safe_catalogue_job", fake_job)
     monkeypatch.setattr(
         "cargo_grid.cli.export_job",
         lambda *args, **kwargs: tmp_path / "catalogue" / "manifest.json",
@@ -655,7 +651,8 @@ def test_h2d_dual_safe_cli_forwards_an_explicit_packing_gap(monkeypatch, tmp_pat
         main(
             [
                 "catalogue",
-                "--h2d-dual-safe",
+                "--printer",
+                "h2d",
                 "--bambu",
                 "--material",
                 "Bambu PETG Basic @BBL H2D 0.8 nozzle",
@@ -665,12 +662,6 @@ def test_h2d_dual_safe_cli_forwards_an_explicit_packing_gap(monkeypatch, tmp_pat
                 ".8",
                 "--layer-height-mm",
                 ".32",
-                "--build-width-mm",
-                "350",
-                "--build-depth-mm",
-                "320",
-                "--build-height-mm",
-                "325",
                 "--packing-gap-mm",
                 "5",
                 "--output",
@@ -685,7 +676,8 @@ def test_h2d_dual_safe_cli_forwards_an_explicit_packing_gap(monkeypatch, tmp_pat
 def test_h2d_dual_safe_cli_uses_shared_implicit_packing_gap(monkeypatch, tmp_path):
     supplied = {}
 
-    def fake_job(**kwargs):
+    def fake_job(printer, **kwargs):
+        assert printer is H2D
         supplied.update(kwargs)
         return SimpleNamespace(
             designs=[],
@@ -693,7 +685,7 @@ def test_h2d_dual_safe_cli_uses_shared_implicit_packing_gap(monkeypatch, tmp_pat
             print_placements=[PrintPlacement(0, 0, 0, 0)],
         )
 
-    monkeypatch.setattr("cargo_grid.cli.h2d_dual_safe_catalogue_job", fake_job)
+    monkeypatch.setattr("cargo_grid.cli.dual_safe_catalogue_job", fake_job)
     monkeypatch.setattr(
         "cargo_grid.cli.export_job",
         lambda *args, **kwargs: tmp_path / "catalogue" / "manifest.json",
@@ -702,7 +694,8 @@ def test_h2d_dual_safe_cli_uses_shared_implicit_packing_gap(monkeypatch, tmp_pat
         main(
             [
                 "catalogue",
-                "--h2d-dual-safe",
+                "--printer",
+                "h2d",
                 "--bambu",
                 "--material",
                 "Bambu PETG Basic @BBL H2D 0.8 nozzle",
@@ -712,24 +705,18 @@ def test_h2d_dual_safe_cli_uses_shared_implicit_packing_gap(monkeypatch, tmp_pat
                 ".8",
                 "--layer-height-mm",
                 ".32",
-                "--build-width-mm",
-                "350",
-                "--build-depth-mm",
-                "320",
-                "--build-height-mm",
-                "325",
                 "--output",
                 str(tmp_path / "catalogue"),
             ]
         )
         == 0
     )
-    assert supplied["packing_gap"] == H2D_DEFAULT_PART_CLEARANCE_MM
+    assert supplied["packing_gap"] == DEFAULT_PART_CLEARANCE_MM
 
 
-@pytest.mark.parametrize("nozzle", sorted(H2D_PROFILES))
+@pytest.mark.parametrize("nozzle", sorted(H2D.profiles))
 def test_h2d_dual_safe_cli_writes_the_h2d_profiles_for_each_nozzle(nozzle, monkeypatch, tmp_path):
-    profiles = H2D_PROFILES[nozzle]
+    profiles = H2D.profiles[nozzle]
     exported = {}
 
     def fake_export(job, output, **kwargs):
@@ -737,8 +724,8 @@ def test_h2d_dual_safe_cli_writes_the_h2d_profiles_for_each_nozzle(nozzle, monke
         return output / "manifest.json"
 
     monkeypatch.setattr(
-        "cargo_grid.cli.h2d_dual_safe_catalogue_job",
-        lambda **kwargs: SimpleNamespace(
+        "cargo_grid.cli.dual_safe_catalogue_job",
+        lambda printer, **kwargs: SimpleNamespace(
             designs=[], omitted=[], print_placements=[PrintPlacement(0, 0, 0, 0)]
         ),
     )
@@ -747,7 +734,8 @@ def test_h2d_dual_safe_cli_writes_the_h2d_profiles_for_each_nozzle(nozzle, monke
         main(
             [
                 "catalogue",
-                "--h2d-dual-safe",
+                "--printer",
+                "h2d",
                 "--bambu",
                 "--material",
                 profiles.petg,
@@ -764,12 +752,6 @@ def test_h2d_dual_safe_cli_writes_the_h2d_profiles_for_each_nozzle(nozzle, monke
                 "--roof-support",
                 "--roof-support-mode",
                 "auto",
-                "--build-width-mm",
-                "350",
-                "--build-depth-mm",
-                "320",
-                "--build-height-mm",
-                "325",
                 "--output",
                 str(tmp_path / "catalogue"),
             ]

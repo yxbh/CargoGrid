@@ -284,17 +284,17 @@ def test_h2d_catalogue_accepts_the_solid_bottom_on_the_standard_interface(
 ):
     received = {}
 
-    def stop(**kwargs):
+    def stop(printer, **kwargs):
         received.update(kwargs)
         raise ValueError("stopped before building")
 
-    monkeypatch.setattr("cargo_grid.cli.h2d_dual_safe_catalogue_job", stop)
+    monkeypatch.setattr("cargo_grid.cli.dual_safe_catalogue_job", stop)
     with pytest.raises(SystemExit):
         main(
             [
                 "catalogue",
-                "--h2d-dual-safe",
-                *BUILD,
+                "--printer",
+                "h2d",
                 "--bambu",
                 "--material",
                 "Bambu PETG Basic @BBL H2D 0.8 nozzle",

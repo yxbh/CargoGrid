@@ -174,10 +174,8 @@ def test_cli_exposes_unit_and_thickness_and_rejects_removed_alpha_names(tmp_path
     }
     assert design["size_mm"] == pytest.approx((33, 33, 8), abs=1e-5)
 
-    for old, replacement in (
-        ("--grid-pitch-mm", "--unit-size-mm"),
-        ("--tile-height-mm", "--tile-thickness-mm"),
-    ):
+    capsys.readouterr()
+    for old in ("--grid-pitch-mm", "--tile-height-mm"):
         with pytest.raises(SystemExit) as caught:
             main(
                 [
@@ -195,7 +193,9 @@ def test_cli_exposes_unit_and_thickness_and_rejects_removed_alpha_names(tmp_path
                 ]
             )
         assert caught.value.code == 2
-        assert replacement in capsys.readouterr().err
+        message = capsys.readouterr().err
+        assert f"unrecognized arguments: {old} 30" in message
+        assert "; use" not in message
 
 
 def test_explicit_custom_dimension_limits_are_clear():

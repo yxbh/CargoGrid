@@ -7,17 +7,20 @@ from pathlib import Path
 import pytest
 from build123d import import_step
 
-from cargo_grid.catalogue import H2D_DEFAULT_PART_CLEARANCE_MM
-from cargo_grid.cli import LEGACY_OPTION_REPLACEMENTS, main, parser
+from cargo_grid.cli import _build_volume, _interface, main, parser
+from cargo_grid.parameters import Interface
+from cargo_grid.printers import DEFAULT_PART_CLEARANCE_MM, PRINTERS
 
 OPTIONS = ("--build-width-mm", "--build-depth-mm", "--build-height-mm")
 COMPLETE = [OPTIONS[0], "150", OPTIONS[1], "150", OPTIONS[2], "50"]
 
 
-@pytest.mark.parametrize("command", ["part", "layout", "catalogue"])
+@pytest.mark.parametrize("command", ["part", "layout", "catalogue", "extras"])
 @pytest.mark.parametrize("supplied", [(), (0,), (1,), (2,), (0, 1), (0, 2), (1, 2)])
 def test_missing_build_axes_are_named_in_errors(command, supplied, tmp_path, capsys):
     args = [command, "--output", str(tmp_path / "job")]
+    if command == "extras":
+        args += ["zeekr-7x"]
     if command == "layout":
         args += ["--layout-width-mm", "120", "--layout-depth-mm", "60"]
     for index in supplied:
@@ -25,7 +28,7 @@ def test_missing_build_axes_are_named_in_errors(command, supplied, tmp_path, cap
     with pytest.raises(SystemExit) as error:
         main(args)
     assert error.value.code == 2
-    message = capsys.readouterr().err.split("error:", 1)[1]
+    message = capsys.readouterr().err
     assert "required" in message
     for index, option in enumerate(OPTIONS):
         assert (option in message) == (index not in supplied)
@@ -62,8 +65,8 @@ def test_removed_ambiguous_option_is_not_an_abbreviation(tmp_path, capsys, other
             ]
         )
     message = capsys.readouterr().err
-    assert error.value.code == 2 and "unrecognized option" in message
-    assert all(option in message for option in OPTIONS)
+    assert error.value.code == 2 and f"unrecognized arguments: {legacy}" in message
+    assert "; use" not in message
     assert not (tmp_path / "job").exists()
 
 
@@ -109,25 +112,25 @@ def test_packing_gap_help_uses_the_shared_printer_default_constant(capsys):
         parser().parse_args(["catalogue", "--help"])
     assert error.value.code == 0
     help_text = " ".join(capsys.readouterr().out.split())
-    assert (
-        f"default 2, or {H2D_DEFAULT_PART_CLEARANCE_MM:g} with --printer or --h2d-dual-safe"
-        in help_text
-    )
+    assert f"default 2, or {DEFAULT_PART_CLEARANCE_MM:g} with --printer" in help_text
 
 
-def test_h2d_option_help_uses_the_h2d_default_constant(capsys):
+def test_printer_help_explains_fixed_build_and_geometry(capsys):
     with pytest.raises(SystemExit) as error:
         parser().parse_args(["catalogue", "--help"])
     assert error.value.code == 0
+    text = capsys.readouterr().out
     match = re.search(
-        r"^\s+--h2d-dual-safe\s+(.*?)(?=\n\s+--|\Z)",
-        capsys.readouterr().out,
+        r"^\s+--printer \{h2d,x2d\}\s+(.*?)(?=\n\s+--|\Z)",
+        text,
         re.MULTILINE | re.DOTALL,
     )
     assert match is not None
     description = " ".join(match.group(1).split())
-    assert f"{H2D_DEFAULT_PART_CLEARANCE_MM:g} mm actual-part XY clearance" in description
-    assert "10 mm model gaps" not in description
+    assert "set the build size" in description
+    assert "standard 60/13 original-joint geometry" in description
+    assert "cannot be combined with build dimensions" in description
+    assert "--h2d-dual-safe" not in text
 
 
 def test_named_dimensions_generate_the_same_two_by_one_contract(tmp_path):
@@ -163,46 +166,96 @@ def test_named_dimensions_generate_the_same_two_by_one_contract(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "legacy,replacement",
+    "retired",
     [
-        ("--cells", "--width-cells COUNT --depth-cells COUNT"),
-        ("--margin", "--build-margin-mm MM"),
-        ("--pitch", "--unit-size-mm MM"),
-        ("--height", "--tile-thickness-mm MM"),
-        ("--grid-pitch-mm", "--unit-size-mm MM"),
-        ("--tile-height-mm", "--tile-thickness-mm MM"),
-        ("--quantity", "--copy-count COUNT"),
-        ("--footprint", "--layout-width-mm MM --layout-depth-mm MM"),
+        "--h2d-dual-safe",
+        "--build",
+        "--margin",
+        "--part-gap",
+        "--reserve",
+        "--exclude",
+        "--pitch",
+        "--height",
+        "--grid-pitch-mm",
+        "--tile-height-mm",
+        "--fit-offset",
+        "--hole-diameter",
+        "--nozzle",
+        "--layer-height",
+        "--roof-top-gap",
+        "--roof-interface-layers",
+        "--roof-interface-spacing",
+        "--roof-nozzles",
+        "--roof-foot-expansion",
+        "--stack-gap",
+        "--interface-thickness",
+        "--material-roles",
+        "--cells",
+        "--variant",
+        "--length",
+        "--accessory-height",
+        "--quantity",
+        "--footprint",
+        "--filler",
     ],
 )
-def test_removed_parameter_names_give_actionable_migrations(legacy, replacement, tmp_path, capsys):
-    command = "layout" if legacy == "--footprint" else "part"
-    values = ["120", "60"] if legacy in {"--cells", "--footprint"} else ["1"]
+def test_retired_options_are_ordinary_unknown_arguments(retired, tmp_path, capsys):
     with pytest.raises(SystemExit) as error:
-        main(
-            [
-                command,
-                *COMPLETE,
-                legacy,
-                *values,
-                "--output",
-                str(tmp_path / "job"),
-            ]
-        )
+        main(["catalogue", *COMPLETE, retired, "--output", str(tmp_path / "job")])
     message = " ".join(capsys.readouterr().err.split())
     assert error.value.code == 2
-    assert f"unrecognized option {legacy}" in message
-    assert replacement in message
+    assert f"unrecognized arguments: {retired}" in message
+    assert "; use" not in message
+    assert not (tmp_path / "job").exists()
 
 
-@pytest.mark.parametrize("legacy,replacement", LEGACY_OPTION_REPLACEMENTS.items())
-def test_every_removed_option_has_an_actionable_migration(legacy, replacement, capsys):
+@pytest.mark.parametrize("printer", PRINTERS)
+@pytest.mark.parametrize(
+    "command",
+    [
+        ("catalogue",),
+        ("extras", "zeekr-7x"),
+        ("extras", "pull-handle"),
+        ("extras", "adjustable-stop"),
+    ],
+)
+def test_printer_supplies_build_and_standard_interface(printer, command):
+    args = parser().parse_args([*command, "--printer", printer, "--output", "unused"])
+    assert _build_volume(args) == PRINTERS[printer].build
+    assert _interface(args) == Interface()
+
+
+@pytest.mark.parametrize("printer", PRINTERS)
+@pytest.mark.parametrize("command", [("catalogue",), ("extras", "zeekr-7x")])
+@pytest.mark.parametrize(
+    "option,values",
+    [
+        ("--build-width-mm", None),
+        ("--build-depth-mm", None),
+        ("--build-height-mm", None),
+        ("--build-margin-mm", ["0"]),
+        ("--build-reserve-width-mm", ["0"]),
+        ("--build-reserve-depth-mm", ["0"]),
+        ("--build-reserve-height-mm", ["0"]),
+        ("--exclude-rectangle-mm", ["0", "0", "1", "1"]),
+        ("--unit-size-mm", ["60"]),
+        ("--tile-thickness-mm", ["13"]),
+        ("--joint-style", ["original"]),
+        ("--fit-offset-mm", ["0"]),
+    ],
+)
+def test_printer_rejects_redundant_fixed_options(
+    printer, command, option, values, tmp_path, capsys
+):
+    output = tmp_path / "job"
+    if values is None:
+        axis = {"--build-width-mm": "x", "--build-depth-mm": "y", "--build-height-mm": "z"}[option]
+        values = [str(getattr(PRINTERS[printer].build, axis))]
     with pytest.raises(SystemExit) as error:
-        parser().parse_args(["part", legacy])
-    message = " ".join(capsys.readouterr().err.split())
+        main([*command, "--printer", printer, option, *values, "--output", str(output)])
     assert error.value.code == 2
-    assert f"unrecognized option {legacy}" in message
-    assert replacement in message
+    assert f"--printer {printer} cannot be combined with {option}" in capsys.readouterr().err
+    assert not output.exists()
 
 
 def test_partial_two_axis_dimensions_name_the_missing_count(tmp_path, capsys):

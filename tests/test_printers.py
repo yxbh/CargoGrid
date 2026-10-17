@@ -8,8 +8,8 @@ from build123d import Box
 
 from cargo_grid.export import BambuSettings, Material, _bambu_project_settings, write_3mf
 from cargo_grid.jobs import Design, Job
-from cargo_grid.packing import PrintPlacement, h2d_common_build
-from cargo_grid.parameters import BuildVolume
+from cargo_grid.packing import PrintPlacement
+from cargo_grid.parameters import BuildVolume, Exclusion
 from cargo_grid.plates import dual_nozzle_tower_reservation
 from cargo_grid.printers import H2D, PRINTERS, X2D, printer_for_common_build
 from cargo_grid.roof_support import RoofSupportSettings
@@ -17,7 +17,13 @@ from cargo_grid.roof_support import RoofSupportSettings
 
 def test_h2d_shared_build_keeps_the_existing_envelope():
     assert H2D.build == BuildVolume(350, 320, 325)
-    assert H2D.common_build() == h2d_common_build()
+    assert H2D.common_build() == BuildVolume(
+        350,
+        320,
+        320,
+        margin=5,
+        exclusions=(Exclusion(0, 0, 30, 320), Exclusion(320, 0, 30, 320)),
+    )
     assert H2D.placement_policy() == {
         "name": "H2D dual-nozzle safe",
         "common_reach_mm": {"min_x": 25, "max_x": 325, "min_y": 0, "max_y": 320, "max_z": 320},

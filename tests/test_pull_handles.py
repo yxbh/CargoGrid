@@ -12,8 +12,8 @@ from cargo_grid.accessories import bambu_print_policy
 from cargo_grid.cli import main
 from cargo_grid.interfaces import x_profile
 from cargo_grid.jobs import Design, Job
-from cargo_grid.packing import h2d_common_build
 from cargo_grid.parameters import BuildVolume, Interface
+from cargo_grid.printers import PRINTERS
 from cargo_grid.pull_handle_set import extras_job
 from cargo_grid.pull_handles import (
     BASE_MM,
@@ -37,13 +37,8 @@ from cargo_grid.roof_support import OBJECT_AUTO_SUPPORT, RoofSupportSettings, va
 
 H2D = BuildVolume(350, 320, 325)
 H2D_OPTIONS = [
-    "--h2d-dual-safe",
-    "--build-width-mm",
-    "350",
-    "--build-depth-mm",
-    "320",
-    "--build-height-mm",
-    "325",
+    "--printer",
+    "h2d",
     "--bambu",
     "--material",
     "Bambu PETG Basic @BBL H2D 0.8 nozzle",
@@ -62,7 +57,9 @@ NAMES = {
 
 @pytest.fixture(scope="module")
 def h2d_job():
-    return extras_job(H2D, placement_build=h2d_common_build(), gap=4, orient_for_bambu=True)
+    return extras_job(
+        H2D, placement_build=PRINTERS["h2d"].common_build(), gap=4, orient_for_bambu=True
+    )
 
 
 @pytest.fixture(scope="module")
@@ -186,7 +183,7 @@ def test_h2d_set_puts_each_version_on_its_own_named_plate(h2d_job):
     assert h2d_job.plate_names == {0: "Pull handle - strap bar", 1: "Pull handle - no strap bar"}
     assert [design.name for design in h2d_job.designs] == [NAMES[True], NAMES[False]]
     assert [placement.plate for placement in h2d_job.print_placements] == [0, 1]
-    common = h2d_common_build()
+    common = PRINTERS["h2d"].common_build()
     for design, placement in zip(h2d_job.designs, h2d_job.print_placements):
         width, depth, height = design.bambu_size
         if placement.rotation == 90:
@@ -430,7 +427,7 @@ def test_auto_support_reserves_a_tower_on_both_plates(monkeypatch):
     monkeypatch.setattr(pull_handle_set, "pull_handle_design", _stand_in)
     job = extras_job(
         H2D,
-        placement_build=h2d_common_build(),
+        placement_build=PRINTERS["h2d"].common_build(),
         gap=4,
         orient_for_bambu=True,
         auto_roof_support=True,
@@ -442,7 +439,9 @@ def test_auto_support_reserves_a_tower_on_both_plates(monkeypatch):
         "Pull handle - strap bar": 8.0,
         "Pull handle - no strap bar": 8.0,
     }
-    plain = extras_job(H2D, placement_build=h2d_common_build(), gap=4, orient_for_bambu=True)
+    plain = extras_job(
+        H2D, placement_build=PRINTERS["h2d"].common_build(), gap=4, orient_for_bambu=True
+    )
     assert plain.prime_tower is None and not plain.prime_tower_positions
     assert "auto_roof_support" not in plain.placement_policy
 
@@ -475,4 +474,4 @@ def test_cli_h2d_pull_handle_extras_keep_the_standard_grid(tmp_path, capsys):
             ]
         )
     assert caught.value.code == 2
-    assert "--h2d-dual-safe requires original joints, --unit-size-mm 60" in capsys.readouterr().err
+    assert "--printer h2d cannot be combined with --unit-size-mm" in capsys.readouterr().err

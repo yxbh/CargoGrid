@@ -3,7 +3,6 @@
 from dataclasses import dataclass
 
 from cargo_grid.parameters import BuildVolume, positive
-from cargo_grid.printers import H2D
 
 
 @dataclass(frozen=True)
@@ -60,11 +59,6 @@ class TowerClearance:
     def grow(self, bounds: tuple[float, float, float, float]) -> tuple[float, float, float, float]:
         x0, y0, x1, y1 = bounds
         return (x0 - self.left, y0 - self.front, x1 + self.right, y1 + self.back)
-
-
-def h2d_common_build() -> BuildVolume:
-    """H2D shared nozzle reach with a further 5 mm model inset."""
-    return H2D.common_build()
 
 
 @dataclass(frozen=True)

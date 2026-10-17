@@ -5,13 +5,13 @@ from build123d import Box
 from tower_checks import assert_towers_stay_where_bambu_keeps_them
 
 from cargo_grid.jobs import Design, Job
-from cargo_grid.packing import TowerClearance, h2d_common_build
+from cargo_grid.packing import TowerClearance
 from cargo_grid.parameters import BuildVolume, Exclusion
 from cargo_grid.plates import (
     AUTO_SUPPORT_FOOT_ALLOWANCE_MM,
     AUTO_SUPPORT_TOWER_CLEARANCE_MM,
     DEFAULT_PRIME_TOWER,
-    H2D_TOWER_LEFT_CLEARANCE_MM,
+    TOWER_LEFT_CLEARANCE_MM,
     BambuTowerEstimate,
     PlateGroup,
     _DualNozzleTowerLayout,
@@ -63,13 +63,13 @@ def test_groups_get_consecutive_named_plates_without_towers_by_default():
         PlateGroup("A", [_design(f"a{i}", (200, 200, 10)) for i in range(2)], 4),
         PlateGroup("B", [_design("b", (50, 50, 10))], 10),
     ]
-    plan = plan_plates(groups, h2d_common_build(), size=_size)
+    plan = plan_plates(groups, H2D.common_build(), size=_size)
     assert plan.plate_names == {0: "A 1", 1: "A 2", 2: "B"}
     assert plan.plate_count == 3
     assert plan.group_gaps == {"A": 4, "B": 10}
     assert plan.prime_tower is None and plan.prime_tower_positions == {}
     assert plan.auto_roof_support is None
-    assert set(plan.plate_builds.values()) == {h2d_common_build()}
+    assert set(plan.plate_builds.values()) == {H2D.common_build()}
 
 
 def test_h2d_global_auto_support_reserves_towers_for_every_group():
@@ -82,13 +82,13 @@ def test_h2d_global_auto_support_reserves_towers_for_every_group():
         ),
     ]
     plan = plan_plates(
-        groups, h2d_common_build(), size=_size, auto_roof_support=True, layer_height_mm=0.32
+        groups, H2D.common_build(), size=_size, auto_roof_support=True, layer_height_mm=0.32
     )
     reservation = _DualNozzleTowerLayout(H2D, BambuTowerEstimate(0.32)).reserve(10)
     assert plan.prime_tower_positions == {0: reservation.origin, 1: reservation.origin}
     assert plan.prime_tower_reaches == {0: reservation.reach, 1: reservation.reach}
     clear = TowerClearance(
-        H2D_TOWER_LEFT_CLEARANCE_MM,
+        TOWER_LEFT_CLEARANCE_MM,
         AUTO_SUPPORT_TOWER_CLEARANCE_MM,
         AUTO_SUPPORT_TOWER_CLEARANCE_MM,
         AUTO_SUPPORT_TOWER_CLEARANCE_MM,
@@ -106,20 +106,20 @@ def test_h2d_global_auto_support_reserves_towers_for_every_group():
     assert record["prime_tower_plates"] == [1, 2]
     assert record["prime_tower_groups"] == ["Plain", "Supported"]
     assert record["prime_tower_origins_mm"] == {1: reservation.origin, 2: reservation.origin}
-    assert record["model_clearance_to_tower_bounds_mm"]["left"] == H2D_TOWER_LEFT_CLEARANCE_MM
+    assert record["model_clearance_to_tower_bounds_mm"]["left"] == TOWER_LEFT_CLEARANCE_MM
 
 
 def test_h2d_auto_support_needs_the_layer_height():
     groups = [PlateGroup("S", [_design("s", (50, 50, 10))], 4)]
     with pytest.raises(ValueError, match="layer height"):
-        plan_plates(groups, h2d_common_build(), size=_size, auto_roof_support=True)
+        plan_plates(groups, H2D.common_build(), size=_size, auto_roof_support=True)
 
 
 def test_global_auto_support_reserves_every_inheriting_plate():
     designs = [_design("plain", (50, 50, 10)), _design("other", (50, 50, 10))]
     plan = plan_plates(
         [PlateGroup(design.name, [design], 4) for design in designs],
-        h2d_common_build(),
+        H2D.common_build(),
         size=_size,
         auto_roof_support=True,
         layer_height_mm=0.32,
@@ -158,7 +158,7 @@ def test_h2d_towers_keep_tiles_with_a_five_cell_side_beside_them():
     wide = _design("wide", (246, 306, 14.92))
     plan = plan_plates(
         [PlateGroup("Tiles", [wide], 8)],
-        h2d_common_build(),
+        H2D.common_build(),
         size=_size,
         auto_roof_support=True,
         layer_height_mm=0.24,
@@ -198,7 +198,7 @@ def test_generic_build_uses_a_front_left_corner_and_reports_unfit_designs():
 
 
 def test_projected_bounds_keep_side_exclusions_and_return_corner_obstacles():
-    assert _projected_bounds(h2d_common_build()) == ((30, 5, 320, 315), ())
+    assert _projected_bounds(H2D.common_build()) == ((30, 5, 320, 315), ())
     reservation = _DualNozzleTowerLayout(H2D, BambuTowerEstimate(0.32)).reserve(14.92)
     bounds, (area,) = _projected_bounds(reservation.build)
     assert bounds == (30, 6, 320, 314)

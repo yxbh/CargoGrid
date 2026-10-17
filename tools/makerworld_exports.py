@@ -43,7 +43,7 @@ from math import atan2, cos, hypot, pi, sin
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
-from cargo_grid.printers import H2D, PRINTERS, DualNozzlePrinter, NozzleProfiles
+from cargo_grid.printers import PRINTERS, DualNozzlePrinter, NozzleProfiles
 
 PETG_COLOUR = "#688197"
 PLA_COLOUR = "#0A2989"
@@ -64,13 +64,8 @@ class Variant:
 
 def _printer_arguments(printer: DualNozzlePrinter, profiles: NozzleProfiles) -> list[str]:
     return [
-        *(["--h2d-dual-safe"] if printer is H2D else ["--printer", printer.name.lower()]),
-        "--build-width-mm",
-        f"{printer.build.x:g}",
-        "--build-depth-mm",
-        f"{printer.build.y:g}",
-        "--build-height-mm",
-        f"{printer.build.z:g}",
+        "--printer",
+        printer.name.lower(),
         "--bambu",
         "--material",
         profiles.petg,

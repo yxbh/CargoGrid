@@ -22,6 +22,8 @@ At the standard 60/13 settings, this makes a 126x66x13 mm tile (including its jo
 
 The three build dimensions describe available printer space in millimeters: width is X/left-right, depth is Y/front-back and height is Z. Change them to suit your printer. Cargo-Grid refuses to overwrite an existing output directory, so use a new name for each run.
 
+For `catalogue` and `extras`, `--printer h2d` or `--printer x2d` supplies the build size and standard 60 mm unit, 13 mm thickness, original joints and zero fit offset. Don't combine it with build dimensions, margins, reserves, exclusions or those geometry options, even when their values match. Without `--printer`, all three build dimensions are required. `--packing-gap-mm`, hole options and supported solid-bottom settings remain available.
+
 ## Choose the tile size and pattern
 
 `--width-cells` and `--depth-cells` set the tile grid. Add `--copy-count 2` when you want two copies of the same part rather than one larger tile.
@@ -62,7 +64,7 @@ That tile is 14.92 mm thick. Sockets, holes, plugs and rod pegs keep their depth
 
 Where it works:
 
-- `part` for tiles, edges, corners and ramps, plus `layout`, `catalogue` (including `--h2d-dual-safe`) and `extras zeekr-7x`. Catalogues still make their X attachments, rods, braces and support rails without a floor.
+- `part` for tiles, edges, corners and ramps, plus `layout`, `catalogue` and `extras zeekr-7x`. Catalogues still make their X attachments, rods, braces and support rails without a floor.
 - It can't be combined with stacking or `--joint-style full-height`.
 - In the Zeekr set every piece gets the floor and sits that much higher, so recheck clearance under the lift-out panel.
 - A vertical tile bracket's top-outward wall placement pushes its posts into the tile from underneath, so use a wall tile without a solid bottom there. The usual underside-outward placement works with either.
@@ -110,7 +112,7 @@ The adjustable stop is a native-CAD extra, not a member of the standard accessor
 The outer-finger centres are at X=+/-15.8 mm, each carries three 8 mm-pitch teeth on a local 14 mm-high carrier and ends in a 24 mm-high full-width squeeze pad. A matching centred 9x11x24 mm thumb pad is rooted in the middle finger; the outer pads retain their original placement and inward release motion. The fixed and moving teeth have 2 mm flat tips and share a 53.1301-degree ramp angle; they leave 0.2 mm axial backlash before backload contact and provide 3 mm nominal radial engagement. The larger teeth give seven lock positions and 48 mm travel; the default 24 mm pose remains a lock station. The two front posts reuse the same bidirectional native connector as the vertical tile brackets at 60 mm pitch, so an ordinary wall tile can face either way. No external reference asset is needed. Generate the supported H2D print project through the named extra:
 
 ```sh
-uv run cargo-grid extras adjustable-stop --h2d-dual-safe --build-width-mm 350 --build-depth-mm 320 --build-height-mm 325 --bambu --material "Bambu PETG Basic @BBL H2D 0.8 nozzle" PETG "#688197" --material "Bambu PLA Basic @BBL H2D 0.8 nozzle" PLA "#0A2989" --nozzle-diameter-mm 0.8 --layer-height-mm 0.32 --roof-support --roof-support-mode auto --no-stl --output outputs/adjustable-stop
+uv run cargo-grid extras adjustable-stop --printer h2d --bambu --material "Bambu PETG Basic @BBL H2D 0.8 nozzle" PETG "#688197" --material "Bambu PLA Basic @BBL H2D 0.8 nozzle" PLA "#0A2989" --nozzle-diameter-mm 0.8 --layer-height-mm 0.32 --roof-support --roof-support-mode auto --no-stl --output outputs/adjustable-stop
 ```
 
 The published one-plate H2D kits are generated as the `Adjustable-Stop` set in `tools/makerworld_exports.py`. Each contains the base, moving wall, keeper and accepted undimpled v10b #1 collar clip, with global normal Auto support on and PLA Basic for the interface. All four objects inherit that setting; the slicer decides where support is needed. The clip's 0.80 mm rear clearance was sized for sag in its unsupported 10.10 mm rear bridge, so support can change its printed fit. Remove support and try the clip before relying on its retention. The 0.8 mm/0.32 mm PETG geometry and unsupported clip have physical test results; the identical 0.4 mm/0.24 mm CAD export is supported but its fit, flex, bridge shape, retention and strength have not been physically tested. The Python API can also write source-oriented STEP, STL and core 3MF artifacts without adding another top-level CLI command.
@@ -128,7 +130,7 @@ The keeper is one 61.6x18 mm block from its Z=16.85 mm seat to its Z=26 mm top. 
 This command makes a ready-packed project for a Bambu Lab H2D with 0.8 mm or 0.4 mm nozzles: 24 tile sizes with the full 10 mm hole pattern and all 105 accessories, on named plates grouped by family. It only works with the standard 60 mm unit, 13 mm thickness and no fit offset; you can add `--solid-bottom-thickness-mm`. Edges and corners share plates by outward width, and each object's name still says which edge, corner variant and male/female joint it has.
 
 ```sh
-uv run cargo-grid catalogue --h2d-dual-safe --build-width-mm 350 --build-depth-mm 320 --build-height-mm 325 --bambu --material "Bambu PETG Basic @BBL H2D 0.8 nozzle" PETG "#637b70" --nozzle-diameter-mm 0.8 --layer-height-mm 0.32 --no-stl --output outputs/full-catalogue
+uv run cargo-grid catalogue --printer h2d --bambu --material "Bambu PETG Basic @BBL H2D 0.8 nozzle" PETG "#637b70" --nozzle-diameter-mm 0.8 --layer-height-mm 0.32 --no-stl --output outputs/full-catalogue
 ```
 
 Open `outputs/full-catalogue/job.3mf` as a project. Every part sits inside the area both H2D nozzles reach (X 25..325, Y 0..320, up to Z 320) with another 5 mm margin, parts are at least 4 mm apart, and every plate uses automatic filament matching (`Auto For Match`). The spacing doesn't allow for every brim, support or prime-tower path, so slice and check each plate before printing.
@@ -137,7 +139,7 @@ The 306x306 mm 5x5 tile is left out because it is wider than the 300 mm area bot
 
 The project names the H2D 0.8 nozzle, 0.32 mm Balanced Strength process, Textured PEI plate and Bambu PETG Basic profile. Check those profiles and your loaded filament before slicing. To add supports with a PLA interface under the joint roofs, see [auto roof support](#auto-roof-support-for-catalogues-and-extras).
 
-For 0.4 mm nozzles, use `--nozzle-diameter-mm 0.4 --layer-height-mm 0.24` and `--material "Bambu PETG Basic @BBL H2D 0.4 nozzle" PETG "#637b70"`. The project then names the H2D 0.4 nozzle and the 0.24 mm Standard process; the parts and plates are the same. With 0.2 mm layers the prime tower for [auto roof support](#auto-roof-support-for-catalogues-and-extras) gets too big for two catalogue plates. With auto roof support the matching PLA profile is `Bambu PLA Basic @BBL H2D`, which Bambu names without a nozzle size. `--h2d-dual-safe` accepts only these two nozzle and layer-height pairs.
+For 0.4 mm nozzles, use `--nozzle-diameter-mm 0.4 --layer-height-mm 0.24` and `--material "Bambu PETG Basic @BBL H2D 0.4 nozzle" PETG "#637b70"`. The project then names the H2D 0.4 nozzle and the 0.24 mm Standard process; the parts and plates are the same. With 0.2 mm layers the prime tower for [auto roof support](#auto-roof-support-for-catalogues-and-extras) gets too big for two catalogue plates. With auto roof support the matching PLA profile is `Bambu PLA Basic @BBL H2D`, which Bambu names without a nozzle size. `--printer h2d` accepts only these two nozzle and layer-height pairs.
 
 ## Generate X2D MakerWorld files
 
@@ -155,10 +157,10 @@ The script slices every plate with PETG on either nozzle before writing any name
 To generate a single X2D catalogue through the ordinary CLI:
 
 ```sh
-uv run cargo-grid catalogue --printer x2d --build-width-mm 256 --build-depth-mm 256 --build-height-mm 261 --bambu --material "Bambu PETG Basic @BBL X2D 0.8 nozzle" PETG "#688197" --material "Bambu PLA Basic @BBL X2D 0.8 nozzle" PLA "#0A2989" --nozzle-diameter-mm 0.8 --layer-height-mm 0.32 --roof-support --roof-support-mode auto --no-stl --output outputs/x2d-catalogue
+uv run cargo-grid catalogue --printer x2d --bambu --material "Bambu PETG Basic @BBL X2D 0.8 nozzle" PETG "#688197" --material "Bambu PLA Basic @BBL X2D 0.8 nozzle" PLA "#0A2989" --nozzle-diameter-mm 0.8 --layer-height-mm 0.32 --roof-support --roof-support-mode auto --no-stl --output outputs/x2d-catalogue
 ```
 
-For 0.4 mm nozzles, use 0.24 mm layers and the `Bambu PETG Basic @BBL X2D 0.4 nozzle` and `Bambu PLA Basic @BBL X2D 0.4 nozzle` materials. The X2D processes are 0.32 mm Balanced Quality and 0.24 mm Standard. `--printer h2d` is equivalent to the existing `--h2d-dual-safe`; both printer selections require the standard 60/13 geometry and the unmodified physical build envelope.
+For 0.4 mm nozzles, use 0.24 mm layers and the `Bambu PETG Basic @BBL X2D 0.4 nozzle` and `Bambu PLA Basic @BBL X2D 0.4 nozzle` materials. The X2D processes are 0.32 mm Balanced Quality and 0.24 mm Standard. Both printer selections supply the standard 60/13 geometry and the machine's physical build envelope.
 
 The X2D auto-support catalogue includes the 3x4 and 4x3 tiles as well as 1x4, 2x4, 4x1, 4x2 and the four-cell support rail. Its full-hole, ordinary/1.92 mm-bottom projects use an 18 mm-wide rectangular prime tower, with ribs off, on every catalogue plate; Bambu cannot store that shape per plate. Four-cell groups put it at front-left X=35.5, Y=15; ordinary groups keep it front-right at X=223, Y=15 to avoid extra plates. The planner reserves its brim and nozzle-change wipe lines separately from the models. The long tiles retain a 5 mm front/back inset and at least 5 mm at the right; the 3x4 turns 180 degrees and the 4x3 turns 90 degrees so their male sides face the tower. Prime volumes, automatic support feet and the named processes' support thresholds stay unchanged. Tower stability on tall plates, including the 120 mm brackets and stops, needs a physical print check. Other X2D sets and all H2D projects keep the default tower.
 
@@ -169,12 +171,12 @@ The 4x4 and five-cell designs remain omitted. The existing 240 mm above-mat rod 
 `extras zeekr-7x` makes every Zeekr-specific piece in one project: the ten 40 mm straight edges and the nine measured rear lift-out-panel contour pieces, 19 parts in all. The tiles and 30 mm north edges used with the rear panel are ordinary catalogue parts, so they are not in the set; print them with the commands further down.
 
 ```bash
-uv run cargo-grid extras zeekr-7x --h2d-dual-safe --build-width-mm 350 --build-depth-mm 320 --build-height-mm 325 --bambu --material "Bambu PETG Basic @BBL H2D 0.8 nozzle" PETG "#637b70" --nozzle-diameter-mm 0.8 --layer-height-mm 0.32 --no-stl --output outputs/zeekr-7x-expansion-set
+uv run cargo-grid extras zeekr-7x --printer h2d --bambu --material "Bambu PETG Basic @BBL H2D 0.8 nozzle" PETG "#637b70" --nozzle-diameter-mm 0.8 --layer-height-mm 0.32 --no-stl --output outputs/zeekr-7x-expansion-set
 ```
 
 The H2D project keeps each family on its own named plates inside the common reach: `Zeekr 7X - Male 40mm edges`, `Zeekr 7X - Female 40mm edges`, `Zeekr 7X - Rear panel contour side caps`, and `Zeekr 7X - Rear panel south contour ramps 1` and `2` (the five ramps need two plates). Edge plates space parts 4 mm apart and contour plates 10 mm; `--packing-gap-mm` sets one spacing for every plate. Every plate uses automatic `Auto For Match` filament matching, and the manifest records the plates and placements.
 
-The set needs the standard 60 mm unit, 13 mm thickness, original joints, zero fit offset and full 10 mm hole pattern, because the contour pieces are measured for that tile field. For plain or other-diameter 40 mm strips, make them one at a time with `part --family edge-x --length-cells 4 --edge-outward-mm 40` (or `edge-y` for female) plus `--plain-edge` or `--hole-diameter-mm`. For another printer, leave out `--h2d-dual-safe` and give its build size: the set keeps every straight-edge length that fits, and stops with an error if a contour piece doesn't fit.
+The set needs the standard 60 mm unit, 13 mm thickness, original joints, zero fit offset and full 10 mm hole pattern, because the contour pieces are measured for that tile field. For plain or other-diameter 40 mm strips, make them one at a time with `part --family edge-x --length-cells 4 --edge-outward-mm 40` (or `edge-y` for female) plus `--plain-edge` or `--hole-diameter-mm`. For a custom build, leave out `--printer` and give all three build dimensions: the set keeps every straight-edge length that fits, and stops with an error if a contour piece doesn't fit.
 
 Add `--solid-bottom-thickness-mm` to give every piece in the set a [solid bottom](#close-the-underside), and print the matching tiles and north edges with the same value. The outline doesn't change, but every piece is thicker and sits that much higher than in the test fit, so recheck clearance under the lift-out panel. The manifest records the thickness, and the contour piece names end in `_solid-bottom-<T>mm`.
 
@@ -208,14 +210,14 @@ The outline comes from tape measurements and pen traces of one car's rear panel;
 `extras pull-handle` makes a handle for sliding an assembled floor in and out of a ute tray, car boot or truck bed. It isn't part of the main catalogue. At the standard 60 mm unit the handle is two units wide and one deep and plugs into two neighbouring X sockets. Its grip is 24 mm deep and 18 mm thick, 62 mm above the mat, over an 88 x 40 mm hand opening. The set has one of each version on its own named plate: one with a front strap bar whose 30 x 8 mm slot takes a 25 mm strap or a cord, and one without.
 
 ```bash
-uv run cargo-grid extras pull-handle --h2d-dual-safe --build-width-mm 350 --build-depth-mm 320 --build-height-mm 325 --bambu --material "Bambu PETG Basic @BBL H2D 0.8 nozzle" PETG "#637b70" --material "Bambu PLA Basic @BBL H2D 0.8 nozzle" PLA "#0A2989" --nozzle-diameter-mm 0.8 --layer-height-mm 0.32 --roof-support --roof-support-mode auto --no-stl --output outputs/pull-handle-set
+uv run cargo-grid extras pull-handle --printer h2d --bambu --material "Bambu PETG Basic @BBL H2D 0.8 nozzle" PETG "#637b70" --material "Bambu PLA Basic @BBL H2D 0.8 nozzle" PLA "#0A2989" --nozzle-diameter-mm 0.8 --layer-height-mm 0.32 --roof-support --roof-support-mode auto --no-stl --output outputs/pull-handle-set
 ```
 
 For 0.4 mm nozzles, use `--nozzle-diameter-mm 0.4 --layer-height-mm 0.24`, `--material "Bambu PETG Basic @BBL H2D 0.4 nozzle" PETG "#637b70"` and `--material "Bambu PLA Basic @BBL H2D" PLA "#0A2989"`, as for the catalogue.
 
-Both handles lie on their front, which needs little support and lays the posts along the direction of a sideways pull. The strap-bar handle rests on the grip and strap-bar edges, the other on the grip and its front bottom edge. Both need support; clean it off the plugs before fitting. With `--roof-support --roof-support-mode auto`, as in the published files, the project opens with Bambu's global Auto support switched on, PETG with a PLA Basic contact layer, the same [auto roof support](#auto-roof-support-for-catalogues-and-extras) the catalogue uses, and each plate gets a prime tower. Leave those options out for PETG-only support switched on for each handle instead. For another printer, omit `--h2d-dual-safe` and give its build space.
+Both handles lie on their front, which needs little support and lays the posts along the direction of a sideways pull. The strap-bar handle rests on the grip and strap-bar edges, the other on the grip and its front bottom edge. Both need support; clean it off the plugs before fitting. With `--roof-support --roof-support-mode auto`, as in the published files, the project opens with Bambu's global Auto support switched on, PETG with a PLA Basic contact layer, the same [auto roof support](#auto-roof-support-for-catalogues-and-extras) the catalogue uses, and each plate gets a prime tower. Leave those options out for PETG-only support switched on for each handle instead. For a custom build, omit `--printer` and give all three build dimensions.
 
-The grip, posts and hand opening are sized for a hand, so they don't change with unit size. Instead the handle takes the fewest whole cells that are at least 120 x 60 mm, with an X plug in every cell: 4 x 2 cells at 30 mm units, 3 x 2 at 45 mm. Tile thickness sets the plug depth, as on other X attachments. On very thick tiles the long plugs stop the strap-bar handle from lying steadily on its front while printing, so at the standard unit size it is refused above about 21.5 mm. `--h2d-dual-safe` still needs the standard settings. The command rejects hole and solid-bottom options, because the handles have none of those features. An earlier strap-bar prototype printed in the same pose plugged into a tile well and its PETG-only support came off cleanly. This version's taller hand opening, the PLA support interface, the version without the strap bar, other unit sizes and thicknesses, how firmly the plugs hold and how hard you can pull haven't been tested. The plugs are held only by their fit, so don't lift the floor by the handle. There's no load rating.
+The grip, posts and hand opening are sized for a hand, so they don't change with unit size. Instead the handle takes the fewest whole cells that are at least 120 x 60 mm, with an X plug in every cell: 4 x 2 cells at 30 mm units, 3 x 2 at 45 mm. Tile thickness sets the plug depth, as on other X attachments. On very thick tiles the long plugs stop the strap-bar handle from lying steadily on its front while printing, so at the standard unit size it is refused above about 21.5 mm. `--printer` fixes the standard settings. The command rejects hole and solid-bottom options, because the handles have none of those features. An earlier strap-bar prototype printed in the same pose plugged into a tile well and its PETG-only support came off cleanly. This version's taller hand opening, the PLA support interface, the version without the strap bar, other unit sizes and thicknesses, how firmly the plugs hold and how hard you can pull haven't been tested. The plugs are held only by their fit, so don't lift the floor by the handle. There's no load rating.
 
 ## Round-hole rods and upper braces
 
@@ -326,10 +328,10 @@ Before printing:
 
 ### Auto roof support for catalogues and extras
 
-`--roof-support-mode auto` lets the slicer find the supports instead of painting them. It works with `part`, `layout`, `catalogue` and `extras`, including `--h2d-dual-safe`:
+`--roof-support-mode auto` lets the slicer find the supports instead of painting them. It works with `part`, `layout`, `catalogue` and `extras`, including both supported `--printer` selections:
 
 ```sh
-uv run cargo-grid catalogue --h2d-dual-safe --build-width-mm 350 --build-depth-mm 320 --build-height-mm 325 --solid-bottom-thickness-mm 1.92 --bambu --material "Bambu PETG Basic @BBL H2D 0.8 nozzle" PETG "#637b70" --material "Bambu PLA Basic @BBL H2D 0.8 nozzle" PLA "#dddddd" --nozzle-diameter-mm 0.8 --layer-height-mm 0.32 --roof-support --roof-support-mode auto --no-stl --output outputs/auto-support-catalogue
+uv run cargo-grid catalogue --printer h2d --solid-bottom-thickness-mm 1.92 --bambu --material "Bambu PETG Basic @BBL H2D 0.8 nozzle" PETG "#637b70" --material "Bambu PLA Basic @BBL H2D 0.8 nozzle" PLA "#dddddd" --nozzle-diameter-mm 0.8 --layer-height-mm 0.32 --roof-support --roof-support-mode auto --no-stl --output outputs/auto-support-catalogue
 ```
 
 Published H2D projects with a PLA support interface open with global Enable support on, so someone downloading the project can see that support is intended. Auto mode uses normal Auto support and the same PETG/PLA zero-contact settings as above. Objects inherit it without redundant per-object ON settings, and the slicer decides which overhangs need support; enabling it does not mean every object will get support. An object should be switched off only when support would harm a documented fit surface. Auto support covers whole overhangs, not just the small painted pads, and every generated support gets the PLA interface. That combination hasn't been tested on a real print. Painted mode, projects without roof support and the PETG-only pull-handle set keep their existing settings.
@@ -355,7 +357,8 @@ uv run cargo-grid catalogue --help
 
 Common options:
 
-- `--build-width-mm`, `--build-depth-mm`, `--build-height-mm`: your printer's X/Y/Z print space;
+- `--printer h2d|x2d`: fixed build size, standard geometry and dual-nozzle profiles for `catalogue` and `extras`;
+- `--build-width-mm`, `--build-depth-mm`, `--build-height-mm`: your printer's X/Y/Z print space; all three are required without `--printer` and cannot be combined with it;
 - `--unit-size-mm`: grid cell size, default 60 mm; joints and X sockets scale with it;
 - `--tile-thickness-mm`: tile thickness, which also sets plug and joint depth, default 13 mm;
 - `--solid-bottom-thickness-mm`: closed floor added under tiles, edges, corners and ramps, default 0 (off);
@@ -371,8 +374,6 @@ Common options:
 - `--layout-width-mm`, `--layout-depth-mm`: size of the finished floor;
 - `--packing-gap-mm`: space between packed parts.
 
-Older option names such as `--cells`, `--pitch` and `--quantity` are rejected with a message naming the replacement.
-
 See `--help` for build reservations and excluded areas, stacking and more roof-support settings.
 
 Roof support in either mode can't be used with stacking or `--joint-style full-height`. The default painted mode only works with `part` and `layout`, and not with parts that Bambu turns over for printing (plates, brackets, stops, angled stops, rods and rail ends). Auto mode also works with `catalogue`, `extras` and those parts.
@@ -385,7 +386,7 @@ Original roofed joints are the default. At standard 60/13 dimensions, the male l
 
 The full 10 mm hole pattern is on by default; use `--no-holes` to leave it out. The manifest lists any hole positions skipped for lack of room.
 
-Unit size must be at least 30 mm and tile thickness at least 6 mm. The 2x2 angled stop supports unit sizes up to 60 mm; use its 1x1 version with a larger unit. `--h2d-dual-safe` only works with the standard 60/13 settings.
+Unit size must be at least 30 mm and tile thickness at least 6 mm. The 2x2 angled stop supports unit sizes up to 60 mm; use its 1x1 version with a larger unit. `--printer` fixes the standard 60/13 settings.
 
 ## Stacking identical tiles
 

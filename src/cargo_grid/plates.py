@@ -22,7 +22,7 @@ from cargo_grid.packing import (
     pack_sizes,
 )
 from cargo_grid.parameters import BuildVolume, Exclusion, positive
-from cargo_grid.printers import H2D, X2D, DualNozzlePrinter, printer_for_common_build
+from cargo_grid.printers import X2D, DualNozzlePrinter, printer_for_common_build
 
 # Auto roof support prints a PLA interface, so every supported plate reserves a prime tower.
 DEFAULT_PRIME_TOWER = PrimeTower()
@@ -35,11 +35,9 @@ AUTO_SUPPORT_TOWER_CLEARANCE_MM = 6.5
 AUTO_SUPPORT_FOOT_ALLOWANCE_MM = 4.0
 AUTO_SUPPORT_PLATE_MARGIN_MM = 6.0
 FOOTPRINT_SEARCH_ALLOWANCE_MM = 0.75
-H2D_FOOTPRINT_SEARCH_ALLOWANCE_MM = FOOTPRINT_SEARCH_ALLOWANCE_MM
 # When Bambu Studio 02.08.02.61 opens a project it moves any tower whose estimated square is
 # not at least this far inside the area every nozzle reaches, so towers are written in range.
 BAMBU_TOWER_MARGIN_MM = 15.0
-H2D_SHARED_REACH_X_MM = H2D.common_x_mm
 # Local slices put the real tower up to 0.6 mm behind its estimated square and brim.
 TOWER_BACK_ALLOWANCE_MM = 1.0
 # Models beside the H2D tower keep this much less than the support-foot clearance so the 246 mm
@@ -47,7 +45,6 @@ TOWER_BACK_ALLOWANCE_MM = 1.0
 # path-conflict check with it at 0.32 and 0.24 mm layers; at 0.2 mm the larger tower conflicted
 # with a rotated tile and an edge strip whose supported sides faced it.
 TOWER_LEFT_CLEARANCE_MM = 1.5
-H2D_TOWER_LEFT_CLEARANCE_MM = TOWER_LEFT_CLEARANCE_MM
 # Perimeter plates can put first-layer tower paths 4.914 mm ahead of its stored origin.
 RECTANGULAR_TOWER_FRONT_ALLOWANCE_MM = 5.0
 # At 0.32 mm, native line-rounded rectangular depth needs another millimetre behind the brim.

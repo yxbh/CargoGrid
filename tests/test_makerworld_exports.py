@@ -6,8 +6,8 @@ from zipfile import ZipFile
 
 import pytest
 
-from cargo_grid.cli import H2D_PROFILES, parser
-from cargo_grid.printers import PRINTERS, X2D
+from cargo_grid.cli import parser
+from cargo_grid.printers import H2D, PRINTERS, X2D
 from cargo_grid.roof_support import BAMBU_SUPPORT_DEFAULTS
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,12 +24,13 @@ def _tool():
 
 def test_variants_cover_each_published_set_and_nozzle_once():
     variants = _tool().variants()
-    assert len(variants) == (2 * 2 + 2) * len(H2D_PROFILES)
+    assert len(variants) == (2 * 2 + 2) * len(H2D.profiles)
     assert len({variant.name for variant in variants}) == len(variants)
     for variant in variants:
         args = parser().parse_args([*variant.arguments, "--output", "unused"])
-        profiles = H2D_PROFILES[args.nozzle_diameter_mm]
-        assert args.h2d_dual_safe and args.bambu and args.no_stl
+        profiles = H2D.profiles[args.nozzle_diameter_mm]
+        assert args.printer == "h2d" and args.bambu and args.no_stl
+        assert not any(option.startswith("--build-") for option in variant.arguments)
         assert args.layer_height_mm == profiles.layer_height_mm
         assert variant.name.split("_")[:2] == ["CargoGrid", "H2D"]
         assert args.roof_support and args.roof_support_mode == "auto"
@@ -93,8 +94,8 @@ def test_x2d_variants_use_the_shared_sets_and_both_official_profile_pairs():
     for variant in variants:
         args = parser().parse_args([*variant.arguments, "--output", "unused"])
         profile = X2D.profiles[args.nozzle_diameter_mm]
-        assert args.printer == "x2d" and not args.h2d_dual_safe
-        assert (args.build_width_mm, args.build_depth_mm, args.build_height_mm) == (256, 256, 261)
+        assert args.printer == "x2d"
+        assert not any(option.startswith("--build-") for option in variant.arguments)
         assert args.layer_height_mm == profile.layer_height_mm
         assert args.roof_support and args.roof_support_mode == "auto"
         assert [m[0] for m in args.material] == [profile.petg, profile.pla]
@@ -154,7 +155,7 @@ def test_set_filter_builds_only_the_chosen_sets(monkeypatch, tmp_path, capsys):
     untouched.write_text("old")
     assert tool.main(["--output", str(tmp_path), "--set", "Pull-Handle-Set"]) == 0
     handles = [v for v in tool.variants() if v.set_name == "Pull-Handle-Set"]
-    assert len(handles) == len(H2D_PROFILES)
+    assert len(handles) == len(H2D.profiles)
     expected = {
         path.name for variant in handles for path in tool.destinations(tmp_path, variant).values()
     }
@@ -163,7 +164,7 @@ def test_set_filter_builds_only_the_chosen_sets(monkeypatch, tmp_path, capsys):
     capsys.readouterr()
     assert tool.main(["--output", str(tmp_path), "--dry-run", "--set", "Full-Catalogue"]) == 0
     listed = capsys.readouterr().out.splitlines()
-    assert len(listed) == 2 * len(H2D_PROFILES)
+    assert len(listed) == 2 * len(H2D.profiles)
     assert all(line.startswith("CargoGrid_H2D_Full-Catalogue_") for line in listed)
 
 

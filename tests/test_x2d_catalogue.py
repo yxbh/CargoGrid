@@ -95,12 +95,6 @@ def _arguments(nozzle=0.8):
         "catalogue",
         "--printer",
         "x2d",
-        "--build-width-mm",
-        "256",
-        "--build-depth-mm",
-        "256",
-        "--build-height-mm",
-        "261",
         "--bambu",
         "--material",
         profiles.petg,
@@ -188,9 +182,9 @@ def test_cli_selects_x2d_profiles_and_preserves_requested_contact_settings(
 @pytest.mark.parametrize(
     "extra,message",
     [
-        (["--build-width-mm", "255"], "unmodified X2D build envelope"),
-        (["--build-margin-mm", "1"], "unmodified X2D build envelope"),
-        (["--unit-size-mm", "61"], "requires original joints"),
+        (["--build-width-mm", "255"], "cannot be combined with --build-width-mm"),
+        (["--build-margin-mm", "1"], "cannot be combined with --build-margin-mm"),
+        (["--unit-size-mm", "61"], "cannot be combined with --unit-size-mm"),
         (["--layer-height-mm", "0.2"], "--layer-height-mm 0.24"),
         (["--nozzle-diameter-mm", "0.6"], "--nozzle-diameter-mm 0.8"),
         (["--material", H2D.profiles[0.8].petg, "PETG", "#112233"], "two official"),
@@ -206,10 +200,11 @@ def test_x2d_cli_rejects_incompatible_hardware_requests(extra, message, tmp_path
     assert not output.exists()
 
 
-def test_printer_and_legacy_h2d_selector_are_mutually_exclusive(tmp_path):
+def test_retired_h2d_selector_is_an_unknown_option(tmp_path, capsys):
     with pytest.raises(SystemExit) as error:
         cli.main([*_arguments(), "--h2d-dual-safe", "--output", str(tmp_path / "job")])
     assert error.value.code == 2
+    assert "unrecognized arguments: --h2d-dual-safe" in capsys.readouterr().err
 
 
 @pytest.fixture(scope="module")

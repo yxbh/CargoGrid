@@ -42,8 +42,6 @@ from cargo_grid.plates import (
 from cargo_grid.printers import DEFAULT_PART_CLEARANCE_MM, H2D, X2D, DualNozzlePrinter
 from cargo_grid.rods import BRACE_SPACINGS_MM, ROD_HEIGHTS_MM, Rod, RodBrace
 
-H2D_DEFAULT_PART_CLEARANCE_MM = DEFAULT_PART_CLEARANCE_MM
-
 BRACKET_DISPLAY_NAMES = {
     (1, 2, 2): "Deep tall tile bracket — floor 1x2, wall 1x2",
     (2, 1, 1): "Wide low tile bracket — floor 2x1, wall 2x1",
@@ -351,27 +349,6 @@ def _catalogue_job_with_sizes(
     if not designs:
         raise ValueError("no supported designs fit the configured build envelope")
     return Job(designs, build, "catalogue", omitted=omitted), sizes
-
-
-def h2d_dual_safe_catalogue_job(
-    *,
-    hole_diameter: float | None = DEFAULT_HOLE_DIAMETER_MM,
-    hole_scope: Literal["interior", "full"] = "full",
-    packing_gap: float = H2D_DEFAULT_PART_CLEARANCE_MM,
-    solid_bottom_mm: float = 0.0,
-    auto_roof_support: bool = False,
-    layer_height_mm: float = 0.32,
-) -> Job:
-    """Compatibility entry point for the family-grouped H2D catalogue."""
-    return dual_safe_catalogue_job(
-        H2D,
-        hole_diameter=hole_diameter,
-        hole_scope=hole_scope,
-        packing_gap=packing_gap,
-        solid_bottom_mm=solid_bottom_mm,
-        auto_roof_support=auto_roof_support,
-        layer_height_mm=layer_height_mm,
-    )
 
 
 def dual_safe_catalogue_job(

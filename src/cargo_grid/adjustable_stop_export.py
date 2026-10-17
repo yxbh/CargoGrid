@@ -116,15 +116,6 @@ def _adjustable_stop_profile(
     return profile
 
 
-def adjustable_stop_h2d_settings(
-    nozzle_diameter_mm: float = 0.8,
-    *,
-    dual_material: bool,
-) -> BambuSettings:
-    """Compatibility entry point for the official H2D profile pairs."""
-    return adjustable_stop_settings(nozzle_diameter_mm, dual_material=dual_material, printer=H2D)
-
-
 def adjustable_stop_settings(
     nozzle_diameter_mm: float = 0.8,
     *,
