@@ -7,19 +7,25 @@ from typing import Literal
 from cargo_grid.accessories import Accessory, tile_matched_perimeter
 from cargo_grid.catalogue import accessory_design
 from cargo_grid.jobs import Job
+from cargo_grid.packing import TowerClearance
 from cargo_grid.parameters import (
     DEFAULT_HOLE_DIAMETER_MM,
     BuildVolume,
     Interface,
     positive,
 )
-from cargo_grid.plates import PlateGroup, PlatePlan, plan_plates
+from cargo_grid.plates import (
+    AUTO_SUPPORT_TOWER_CLEARANCE_MM,
+    PlateGroup,
+    PlatePlan,
+    plan_plates,
+)
 from cargo_grid.vehicles import zeekr_7x_rear_review as rear_panel
 
 OUTWARD_MM = 40.0
 NORTH_EDGE_OUTWARD_MM = 30.0
 PLATE_PREFIX = "Zeekr 7X - "
-STRAIGHT_LENGTHS_CELLS = (1, 2, 3, 4, 2, 3)
+STRAIGHT_LENGTHS_CELLS = (2, 3, 4, 2, 3)
 RUN_PAIR_NOTE = (
     "Two butted strips cover the 300 mm five-cell run. Each strip is held by the tile joint "
     "along its length; the seam matches a tile-to-tile seam. The two end quarters and the "
@@ -33,7 +39,7 @@ def variants(
     hole_diameter: float | None = DEFAULT_HOLE_DIAMETER_MM,
     hole_scope: Literal["interior", "full"] = "full",
 ) -> list[Accessory]:
-    """Required straight edges, with the five-cell run replaced by a second 2+3 pair."""
+    """Required 2/3/4-cell edges, with the five-cell run supplied by a second 2+3 pair."""
     if interface.joint_style != "original":
         raise ValueError("Zeekr 7X extras require original roofed tile-edge joints")
     return [
@@ -156,12 +162,15 @@ def extras_job(
             raise ValueError(f"{result.unfit[0].name} does not fit its plate area")
         return result
 
+    edge_tower_clearance = TowerClearance.uniform(AUTO_SUPPORT_TOWER_CLEARANCE_MM)
     edge_groups = [
-        PlateGroup(f"{PLATE_PREFIX}{title}", members, gap)
+        PlateGroup(f"{PLATE_PREFIX}{title}", members, gap, tower_clearance=edge_tower_clearance)
         for title, members in (("Male 40mm edges", male), ("Female 40mm edges", female))
         if members
     ]
-    combined_edges = [PlateGroup(f"{PLATE_PREFIX}40mm edges", edges, gap)]
+    combined_edges = [
+        PlateGroup(f"{PLATE_PREFIX}40mm edges", edges, gap, tower_clearance=edge_tower_clearance)
+    ]
     grouped = plan(combined_edges).plate_count >= plan(edge_groups).plate_count
     groups = [
         *(edge_groups if grouped else combined_edges),
