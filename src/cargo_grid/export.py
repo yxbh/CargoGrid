@@ -909,6 +909,9 @@ def _write_3mf(
             }
             for v in volumes
         )
+    for plate in configured_plates.values():
+        config.remove(plate)
+    config.extend(configured_plates[i] for i in sorted(configured_plates))
     plates = [plate_records[i] for i in sorted(plate_records)]
     types = ET.Element("Types", xmlns=CONTENT)
     for extension, content_type in (

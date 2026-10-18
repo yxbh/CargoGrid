@@ -475,6 +475,33 @@ def test_explicit_placements_keep_plate_names_settings_and_reject_overlap(materi
         write_3mf(overlapping, tmp_path / "overlap.3mf", bambu=materials)
 
 
+def test_plate_records_follow_plate_numbers_not_design_encounter_order(materials, tmp_path):
+    job = Job(
+        [Design(f"part{i}", Box(10, 20, 2), {}) for i in range(3)],
+        BuildVolume(100, 100, 20),
+        "catalogue",
+        print_placements=[PrintPlacement(plate, 5, 5, 0) for plate in (2, 0, 1)],
+        plate_names={plate: f"Group {plate + 1}" for plate in range(3)},
+        plate_settings={1: {"filament_map_mode": "Manual", "filament_maps": "1"}},
+    )
+    path = tmp_path / "ordered.3mf"
+    result = write_3mf(job, path, bambu=materials)
+    assert [plate["number"] for plate in result["plates"]] == [1, 2, 3]
+    with ZipFile(path) as archive:
+        config = ET.fromstring(archive.read("Metadata/model_settings.config"))
+    plates = config.findall("plate")
+    assert [
+        (_metadata(plate)["plater_id"], _metadata(plate)["plater_name"]) for plate in plates
+    ] == [(str(i), f"Group {i}") for i in range(1, 4)]
+    assert _metadata(plates[1])["filament_map_mode"] == "Manual"
+    objects = {obj.get("id"): _metadata(obj)["name"] for obj in config.findall("object")}
+    assert [objects[_metadata(plate.find("model_instance"))["object_id"]] for plate in plates] == [
+        "part1_batch_2",
+        "part2_batch_3",
+        "part0_batch_1",
+    ]
+
+
 def test_export_rejects_mutated_nonplacement_before_writing(materials, tmp_path):
     job = Job(
         [Design("box", Box(10, 10, 3), {})],
