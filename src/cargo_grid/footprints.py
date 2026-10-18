@@ -11,7 +11,7 @@ from scipy.signal import fftconvolve
 from shapely import affinity, contains_xy, polygons, set_precision, union_all
 from shapely.geometry.base import BaseGeometry
 
-from cargo_grid.packing import PrintPlacement
+from cargo_grid.packing import PACKING_ROTATIONS, PrintPlacement
 from cargo_grid.parameters import count, positive
 
 _PROJECTION_UNION_CHUNK = 2048
@@ -99,8 +99,8 @@ def oriented_footprint(
     footprint: ProjectedFootprint,
     rotation: int,
 ) -> ProjectedFootprint:
-    if rotation not in (0, 90):
-        raise ValueError("projected footprint rotation must be 0 or 90 degrees")
+    if rotation not in PACKING_ROTATIONS:
+        raise ValueError("projected footprint rotation must be 0, 90, 180 or 270 degrees")
     geometry = (
         footprint.geometry
         if rotation == 0
@@ -316,6 +316,8 @@ def _pack_order(
     mesh_error: float,
     tolerance: float,
     max_candidate_positions: int,
+    rotations: tuple[int, ...],
+    first_rotation: int | None = None,
     obstacles: tuple[tuple[float, float, float, float], ...] = (),
 ) -> dict[int, tuple[float, float, int]] | None:
     protection_cells = ceil((search_gap / 2 + mesh_error + grid) / grid)
@@ -331,7 +333,9 @@ def _pack_order(
     candidate_positions = 0
     for index in order:
         options = []
-        for rotation in (0, 90):
+        for rotation in rotations:
+            if not placements and first_rotation is not None and rotation != first_rotation:
+                continue
             raster = rasters[index, rotation]
             if raster.width > width + tolerance or raster.depth > depth + tolerance:
                 continue
@@ -415,6 +419,8 @@ def pack_projected_footprints(
     width, depth = maximum_x - minimum_x, maximum_y - minimum_y
     positive("projected footprint region width", width)
     positive("projected footprint region depth", depth)
+    if sum(footprint.geometry.area for footprint in footprints) > width * depth + tolerance:
+        raise ValueError("could not fit projected footprints on one plate")
     local_obstacles = tuple(
         (x0 - minimum_x, y0 - minimum_y, x1 - minimum_x, y1 - minimum_y)
         for x0, y0, x1, y1 in obstacles
@@ -428,10 +434,14 @@ def pack_projected_footprints(
             rotation=rotation,
         )
         for index, footprint in enumerate(footprints)
-        for rotation in (0, 90)
+        for rotation in PACKING_ROTATIONS
     }
     placements = None
-    for order in _packing_orders(footprints, rasters, max_order_attempts):
+    orders = list(_packing_orders(footprints, rasters, max_order_attempts))
+    attempts = [(order, (0, 90), None) for order in orders] + [
+        (order, PACKING_ROTATIONS, rotation) for order in orders for rotation in PACKING_ROTATIONS
+    ]
+    for order, rotations, first_rotation in attempts:
         candidate = _pack_order(
             rasters,
             order,
@@ -442,6 +452,8 @@ def pack_projected_footprints(
             mesh_error=mesh_error,
             tolerance=tolerance,
             max_candidate_positions=max_candidate_positions,
+            rotations=rotations,
+            first_rotation=first_rotation,
             obstacles=local_obstacles,
         )
         if candidate is None:

@@ -223,7 +223,7 @@ def test_export_snapshot_is_independent_and_next_request_observes_mutation(tmp_p
     assert_serialized_closed(stl_triangles(tmp_path / "second/block.stl"), 2400)
 
 
-@pytest.mark.parametrize("rotation", [0, 90])
+@pytest.mark.parametrize("rotation", [0, 90, 180, 270])
 def test_prepared_packing_bounds_match_independent_cad_with_displaced_origin(rotation):
     shape = Box(20, 30, 4).moved(Location((7, 11, -13)))
     measured = prepared.Bounds.measure(shape).rotated_z(rotation)
@@ -233,9 +233,10 @@ def test_prepared_packing_bounds_match_independent_cad_with_displaced_origin(rot
 
 
 @pytest.mark.parametrize("pose_z", [None, 45])
-def test_combined_xy_and_packing_rotation_share_one_exact_transform(tmp_path, pose_z):
+@pytest.mark.parametrize("rotation_z", [90, 180, 270])
+def test_combined_xy_and_packing_rotation_share_one_exact_transform(tmp_path, pose_z, rotation_z):
     source = Box(20, 30, 4).moved(Location((7, 11, -13)))
-    rotation_x, rotation_y, rotation_z = 31, -17, 90
+    rotation_x, rotation_y = 31, -17
     design = Design(
         "combined",
         source,

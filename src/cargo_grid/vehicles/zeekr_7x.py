@@ -17,7 +17,6 @@ from cargo_grid.plates import PlateGroup, PlatePlan, plan_plates
 from cargo_grid.vehicles import zeekr_7x_rear_review as rear_panel
 
 OUTWARD_MM = 40.0
-CONTOUR_GAP_MM = rear_panel.H2D_REVIEW_GAP_MM
 NORTH_EDGE_OUTWARD_MM = 30.0
 PLATE_PREFIX = "Zeekr 7X - "
 STRAIGHT_LENGTHS_CELLS = (1, 2, 3, 4, 2, 3)
@@ -83,8 +82,7 @@ def extras_job(
     hole_diameter: float | None = DEFAULT_HOLE_DIAMETER_MM,
     hole_scope: Literal["interior", "full"] = "full",
     placement_build: BuildVolume | None = None,
-    edge_gap: float = 2,
-    contour_gap: float = CONTOUR_GAP_MM,
+    gap: float = 2,
     auto_roof_support: bool = False,
     layer_height_mm: float = 0.32,
 ) -> Job:
@@ -105,8 +103,7 @@ def extras_job(
             "the Zeekr 7X expansion set requires the standard full-scope 10 mm hole pattern; "
             "make other 40 mm straight-edge hole modes as single edge-x/edge-y parts"
         )
-    positive("Zeekr 7X edge packing gap", edge_gap, zero=True)
-    positive("Zeekr 7X contour packing gap", contour_gap)
+    positive("Zeekr 7X packing gap", gap, zero=True)
     envelope = placement_build or build
 
     edges, sizes, sources = [], {}, {}
@@ -160,24 +157,25 @@ def extras_job(
         return result
 
     edge_groups = [
-        PlateGroup(f"{PLATE_PREFIX}{title}", members, edge_gap)
+        PlateGroup(f"{PLATE_PREFIX}{title}", members, gap)
         for title, members in (("Male 40mm edges", male), ("Female 40mm edges", female))
         if members
     ]
-    combined_edges = [PlateGroup(f"{PLATE_PREFIX}40mm edges", edges, edge_gap)]
+    combined_edges = [PlateGroup(f"{PLATE_PREFIX}40mm edges", edges, gap)]
     grouped = plan(combined_edges).plate_count >= plan(edge_groups).plate_count
     groups = [
         *(edge_groups if grouped else combined_edges),
-        PlateGroup(f"{PLATE_PREFIX}Rear panel contour side caps", side_caps, contour_gap),
-        PlateGroup(f"{PLATE_PREFIX}Rear panel south contour ramps", south_ramps, contour_gap),
+        PlateGroup(f"{PLATE_PREFIX}Rear panel contour side caps", side_caps, gap, projected=True),
+        PlateGroup(
+            f"{PLATE_PREFIX}Rear panel south contour ramps", south_ramps, gap, projected=True
+        ),
     ]
     plates = plan(groups)
-    job_gap = min(edge_gap, contour_gap)
     return Job(
         plates.designs,
         build,
         "extras",
-        part_gap=job_gap,
+        part_gap=gap,
         print_placements=plates.placements,
         plate_names=plates.plate_names,
         plate_builds=plates.plate_builds,
@@ -185,10 +183,17 @@ def extras_job(
         prime_tower_positions=plates.prime_tower_positions,
         prime_tower_reaches=plates.prime_tower_reaches,
         prime_tower_clearances=plates.prime_tower_clearances,
+        projected_footprints=plates.projected_footprints,
+        projected_footprint_clearances=plates.projected_clearances,
         placement_policy={
             "collection": "zeekr-7x",
-            "minimum_model_gap_mm": job_gap,
+            "minimum_model_gap_mm": gap,
             "plate_group_minimum_model_gap_mm": plates.group_gaps,
+            "projected_footprint_packing": plates.projected_packing,
+            "projected_footprint_gap_overrides_mm": {
+                plates.plate_names[plate]: clearance
+                for plate, clearance in plates.projected_clearances.items()
+            },
             "grouped_by_family": True,
             "grouped_by_connector_sex": grouped,
             **(

@@ -456,7 +456,7 @@ def test_h2d_dual_safe_posed_solids_stay_in_reach_with_rectangle_gaps(h2d_plan, 
         assert design.shape.volume > 0
         # Measure the real posed solid independently of the size used by packing.
         width, depth, height = design.bambu_shape.bounding_box().size
-        if placement.rotation == 90:
+        if placement.rotation % 180 == 90:
             width, depth = depth, width
         bounds = (placement.x, placement.x + width, placement.y, placement.y + depth, height)
         assert bounds[4] <= 320 + 1e-6

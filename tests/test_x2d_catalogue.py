@@ -248,7 +248,7 @@ def test_real_x2d_catalogue_solids_and_prepared_placements_stay_in_reach(x2d_pla
         assert design.shape.is_valid and len(design.shape.solids()) == 1
         assert design.shape.volume > 0
         w, d, h = design.bambu_size
-        if placement.rotation == 90:
+        if placement.rotation % 180 == 90:
             w, d = d, w
         assert job.plate_builds[placement.plate].contains_box(placement.x, placement.y, w, d, h)
         assert 25.5 <= placement.x and placement.x + w <= 251 + 1e-6

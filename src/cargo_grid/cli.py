@@ -408,8 +408,7 @@ def parser() -> argparse.ArgumentParser:
             metavar="MM",
             help=(
                 "minimum packed-part separation in mm; default 2, or "
-                f"{DEFAULT_PART_CLEARANCE_MM:g} with --printer; "
-                f"Zeekr contour plates default to {zeekr_7x.CONTOUR_GAP_MM:g}"
+                f"{DEFAULT_PART_CLEARANCE_MM:g} with --printer"
             ),
         )
         for axis, meaning in (
@@ -943,10 +942,7 @@ def main(argv: list[str] | None = None) -> int:
                         hole_diameter=hole_diameter,
                         hole_scope=args.hole_scope,
                         placement_build=(printer.common_build() if printer else None),
-                        edge_gap=packing_gap,
-                        contour_gap=(
-                            zeekr_7x.CONTOUR_GAP_MM if requested_gap is None else requested_gap
-                        ),
+                        gap=packing_gap,
                         auto_roof_support=bool(roof_support and roof_support.mode == "auto"),
                         **({"layer_height_mm": bambu.layer_height} if bambu else {}),
                     )
@@ -954,7 +950,12 @@ def main(argv: list[str] | None = None) -> int:
                     job.placement_policy.update(
                         **printer.placement_policy(),
                         minimum_actual_part_xy_clearance_mm=job.part_gap,
-                        clearance_measurement="model bounds on rectangle-packed plates",
+                        clearance_measurement=(
+                            "model bounds on rectangle-packed plates; all-height projected "
+                            "model footprints on marked shape-packed plates"
+                            if job.projected_footprint_clearances
+                            else "model bounds on rectangle-packed plates"
+                        ),
                     )
             elif printer:
                 job = dual_safe_catalogue_job(

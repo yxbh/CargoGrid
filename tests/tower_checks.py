@@ -4,7 +4,7 @@ from cargo_grid.plates import BambuTowerEstimate
 
 
 def placed_bounds(design, placement, size):
-    width, depth = size[:2] if placement.rotation == 0 else size[1::-1]
+    width, depth = size[:2] if placement.rotation % 180 == 0 else size[1::-1]
     return placement.x, placement.y, placement.x + width, placement.y + depth
 
 

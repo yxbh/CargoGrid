@@ -20,14 +20,15 @@ from cargo_grid.catalogue import (
     accessory_variants,
 )
 from cargo_grid.cli import main
-from cargo_grid.export import BambuSettings, Material, export_job
-from cargo_grid.jobs import Design
+from cargo_grid.export import BambuSettings, Material, _PreparedProject, export_job
+from cargo_grid.footprints import minimum_projected_clearance
+from cargo_grid.jobs import Design, Job
 from cargo_grid.parameters import BuildVolume, Exclusion, Interface, interface_parameters
-from cargo_grid.plates import needs_auto_support
+from cargo_grid.plates import PlateGroup, needs_auto_support, plan_plates
 from cargo_grid.printers import DEFAULT_PART_CLEARANCE_MM, PRINTERS, X2D
 from cargo_grid.rods import Rod, RodBrace
 from cargo_grid.vehicles import zeekr_7x, zeekr_7x_rear_review
-from cargo_grid.vehicles.zeekr_7x import CONTOUR_GAP_MM, extras_job, variants
+from cargo_grid.vehicles.zeekr_7x import extras_job, variants
 
 COLLECTION = "zeekr-7x"
 H2D = BuildVolume(350, 320, 325)
@@ -73,14 +74,14 @@ PLATES = {
     0: ("Zeekr 7X - Male 40mm edges", {"edge-x"}, 6),
     1: ("Zeekr 7X - Female 40mm edges", {"edge-y"}, 6),
     2: ("Zeekr 7X - Rear panel contour side caps", {"zeekr-rear-contour-side"}, 4),
-    3: ("Zeekr 7X - Rear panel south contour ramps 1", {"zeekr-rear-contour-ramp"}, 2),
-    4: ("Zeekr 7X - Rear panel south contour ramps 2", {"zeekr-rear-contour-ramp"}, 3),
+    3: ("Zeekr 7X - Rear panel south contour ramps 1", {"zeekr-rear-contour-ramp"}, 3),
+    4: ("Zeekr 7X - Rear panel south contour ramps 2", {"zeekr-rear-contour-ramp"}, 2),
 }
 GROUP_GAPS = {
     "Zeekr 7X - Male 40mm edges": DEFAULT_PART_CLEARANCE_MM,
     "Zeekr 7X - Female 40mm edges": DEFAULT_PART_CLEARANCE_MM,
-    "Zeekr 7X - Rear panel contour side caps": CONTOUR_GAP_MM,
-    "Zeekr 7X - Rear panel south contour ramps": CONTOUR_GAP_MM,
+    "Zeekr 7X - Rear panel contour side caps": DEFAULT_PART_CLEARANCE_MM,
+    "Zeekr 7X - Rear panel south contour ramps": DEFAULT_PART_CLEARANCE_MM,
 }
 STANDARD_PARTS = [
     {"family": "tile", "width_cells": 4, "depth_cells": 4, "quantity": 4},
@@ -140,7 +141,7 @@ def expansion_plan():
         job = extras_job(
             H2D,
             placement_build=PRINTERS["h2d"].common_build(),
-            edge_gap=DEFAULT_PART_CLEARANCE_MM,
+            gap=DEFAULT_PART_CLEARANCE_MM,
         )
     return job
 
@@ -149,9 +150,9 @@ def _plate_rectangles(job):
     rectangles = defaultdict(list)
     for design, placement in zip(job.designs, job.print_placements, strict=True):
         width, depth, height = design.size
-        if placement.rotation == 90:
+        if placement.rotation % 180 == 90:
             width, depth = depth, width
-        assert placement.rotation in (0, 90)
+        assert placement.rotation in (0, 90, 180, 270)
         assert 30 <= placement.x and placement.x + width <= 320 + 1e-6
         assert 5 <= placement.y and placement.y + depth <= 315 + 1e-6
         assert height == pytest.approx(13)
@@ -200,7 +201,7 @@ def test_x2d_expansion_set_keeps_all_required_pairs_and_contours(contour_stand_i
     job = extras_job(
         X2D.build,
         placement_build=X2D.common_build(),
-        edge_gap=4,
+        gap=4,
         auto_roof_support=True,
         layer_height_mm=0.24,
     )
@@ -216,7 +217,7 @@ def test_x2d_expansion_set_keeps_all_required_pairs_and_contours(contour_stand_i
     assert set(job.prime_tower_positions.values()) == {(208.64, 15)}
     for design, placement in zip(job.designs, job.print_placements, strict=True):
         w, d, h = design.size
-        if placement.rotation == 90:
+        if placement.rotation % 180 == 90:
             w, d = d, w
         assert job.plate_builds[placement.plate].contains_box(placement.x, placement.y, w, d, h)
 
@@ -312,8 +313,7 @@ def test_forty_mm_corners_are_not_supported(family):
         ({"hole_diameter": 8}, "full-scope 10 mm hole pattern"),
         ({"hole_scope": "interior"}, "full-scope 10 mm hole pattern"),
         ({"hole_scope": "unknown"}, "full-scope 10 mm hole pattern"),
-        ({"edge_gap": -1}, "edge packing gap"),
-        ({"contour_gap": 0}, "contour packing gap"),
+        ({"gap": -1}, "packing gap"),
     ],
 )
 def test_expansion_set_rejects_nonstandard_settings_before_building(
@@ -384,15 +384,18 @@ def test_h2d_expansion_set_plans_five_family_plates_in_common_reach(expansion_pl
             for design, placement in zip(job.designs, job.print_placements)
             if placement.plate == plate
         } == families
-    assert members[3] == ["zeekr_rear_south_ramp_2_4cell", "zeekr_rear_south_ramp_4_4cell"]
+    assert members[3] == [
+        "zeekr_rear_south_ramp_1_4cell",
+        "zeekr_rear_south_ramp_2_4cell",
+        "zeekr_rear_south_ramp_4_4cell",
+    ]
     assert [d.parameters["nx"] for d in job.designs[:12]] == [1, 2, 3, 4, 2, 3] * 2
     assert all(d.quantity == 1 and not d.apply_orientation_to_bambu for d in job.designs)
     assert all(d.bambu_object_settings == {} for d in job.designs)
     assert job.plate_settings == {}
-    assert job.projected_footprints is None
+    assert not any(job.projected_footprints)
     assert job.projected_footprint_clearances == {}
     assert job.part_gap == DEFAULT_PART_CLEARANCE_MM == 4
-    assert CONTOUR_GAP_MM == 10
     _assert_group_clearances(job)
     policy = job.placement_policy
     assert policy["collection"] == COLLECTION
@@ -488,11 +491,11 @@ def test_h2d_expansion_set_exports_one_project_with_named_plates(expansion_plan,
 
 
 @pytest.mark.parametrize(
-    "options,edge_gap,contour_gap",
+    "options,gap",
     [
-        ([], 4, 10),
-        (["--packing-gap-mm", "6"], 6, 6),
-        (["--packing-gap-mm", "12"], 12, 12),
+        ([], 4),
+        (["--packing-gap-mm", "6"], 6),
+        (["--packing-gap-mm", "12"], 12),
     ],
 )
 def test_cli_h2d_extras_routes_shared_printer_settings(
@@ -501,8 +504,7 @@ def test_cli_h2d_extras_routes_shared_printer_settings(
     accessory_metadata_shape,
     contour_stand_ins,
     options,
-    edge_gap,
-    contour_gap,
+    gap,
 ):
     captured = []
 
@@ -516,7 +518,7 @@ def test_cli_h2d_extras_routes_shared_printer_settings(
     job, settings = captured[0]
     assert len(job.designs) == 21
     assert job.build == H2D
-    assert job.part_gap == min(edge_gap, contour_gap)
+    assert job.part_gap == gap
     policy = job.placement_policy
     assert policy["minimum_actual_part_xy_clearance_mm"] == job.part_gap
     assert policy["minimum_model_gap_mm"] == job.part_gap
@@ -527,7 +529,7 @@ def test_cli_h2d_extras_routes_shared_printer_settings(
         "Zeekr 7X - Rear panel contour side caps",
         "Zeekr 7X - Rear panel south contour ramps",
     }
-    assert gaps == {name: edge_gap if "40mm" in name else contour_gap for name in gaps}
+    assert gaps == dict.fromkeys(gaps, gap)
     assert policy["common_reach_mm"] == {
         "min_x": 25,
         "max_x": 325,
@@ -535,7 +537,7 @@ def test_cli_h2d_extras_routes_shared_printer_settings(
         "max_y": 320,
         "max_z": 320,
     }
-    assert job.projected_footprints is None
+    assert not any(job.projected_footprints)
     assert settings["stack"] is None
     assert settings["bambu"].machine_nozzle_count == 2
     assert settings["bambu"].roof_support is None
@@ -580,7 +582,7 @@ def test_extras_without_a_solid_bottom_record_no_solid_bottom(expansion_plan):
     assert all("solid_bottom_mm" not in d.parameters["interface"] for d in expansion_plan.designs)
 
 
-def test_cli_extras_outside_h2d_keeps_the_ordinary_and_contour_default_gaps(
+def test_cli_extras_outside_h2d_uses_the_same_default_gap_for_every_family(
     tmp_path,
     monkeypatch,
     accessory_metadata_shape,
@@ -593,7 +595,7 @@ def test_cli_extras_outside_h2d_keeps_the_ordinary_and_contour_default_gaps(
     (job,) = captured
     assert job.build == BuildVolume(400, 400, 50)
     assert job.part_gap == 2
-    assert set(job.placement_policy["plate_group_minimum_model_gap_mm"].values()) == {2, 10}
+    assert set(job.placement_policy["plate_group_minimum_model_gap_mm"].values()) == {2}
     assert "common_reach_mm" not in job.placement_policy
     assert sorted(d.parameters["nx"] for d in job.designs if "nx" in d.parameters) == sorted(
         [1, 2, 3, 4, 2, 3] * 2
@@ -726,9 +728,46 @@ def expansion_set_job():
         job=extras_job(
             H2D,
             placement_build=PRINTERS["h2d"].common_build(),
-            edge_gap=DEFAULT_PART_CLEARANCE_MM,
+            gap=DEFAULT_PART_CLEARANCE_MM,
         )
     )
+
+
+@pytest.mark.parametrize("layer", [0.24, 0.32])
+def test_real_x2d_caps_nest_on_one_supported_plate_with_shared_gap(expansion_set_job, layer):
+    caps = [
+        design
+        for design in expansion_set_job.job.designs
+        if design.parameters["family"] == "zeekr-rear-contour-side"
+    ]
+    plan = plan_plates(
+        [PlateGroup("Caps", caps, 4, projected=True)],
+        X2D.common_build(),
+        size=lambda design: design.size,
+        auto_roof_support=True,
+        layer_height_mm=layer,
+    )
+    assert not plan.unfit and plan.plate_count == 1
+    assert len(plan.designs) == 4 and plan.projected_clearances == {0: 8}
+    assert (
+        minimum_projected_clearance(plan.projected_footprints, plan.placements, plate=0) >= 8 - 1e-6
+    )
+    assert any(placement.rotation in (180, 270) for placement in plan.placements)
+    job = Job(
+        plan.designs,
+        X2D.build,
+        "extras",
+        part_gap=4,
+        print_placements=plan.placements,
+        projected_footprints=plan.projected_footprints,
+        projected_footprint_clearances=plan.projected_clearances,
+        plate_builds=plan.plate_builds,
+        prime_tower=plan.prime_tower,
+        prime_tower_positions=plan.prime_tower_positions,
+        prime_tower_reaches=plan.prime_tower_reaches,
+        prime_tower_clearances=plan.prime_tower_clearances,
+    )
+    assert _PreparedProject(job, None, None).placements == plan.placements
 
 
 @pytest.mark.slow
@@ -794,16 +833,15 @@ def _placed_by_plate(job):
 
 
 def test_auto_support_reserves_a_tower_on_plates_with_supported_pieces(auto_stand_ins):
-    default = extras_job(H2D, placement_build=PRINTERS["h2d"].common_build(), edge_gap=4)
+    default = extras_job(H2D, placement_build=PRINTERS["h2d"].common_build(), gap=4)
     job = extras_job(
-        H2D, placement_build=PRINTERS["h2d"].common_build(), edge_gap=4, auto_roof_support=True
+        H2D, placement_build=PRINTERS["h2d"].common_build(), gap=4, auto_roof_support=True
     )
     assert list(job.plate_names.values()) == [
         "Zeekr 7X - 40mm edges",
         "Zeekr 7X - Rear panel contour side caps",
         "Zeekr 7X - Rear panel south contour ramps 1",
         "Zeekr 7X - Rear panel south contour ramps 2",
-        "Zeekr 7X - Rear panel south contour ramps 3",
     ]
     assert len(default.plate_names) == 4
     plates = _placed_by_plate(job)
@@ -820,7 +858,9 @@ def test_auto_support_reserves_a_tower_on_plates_with_supported_pieces(auto_stan
                 == default.placement_policy["plate_group_minimum_model_gap_mm"][group] + 4
             )
             for design, placement in members:
-                width, depth = design.size[:2] if placement.rotation == 0 else design.size[1::-1]
+                width, depth = (
+                    design.size[:2] if placement.rotation % 180 == 0 else design.size[1::-1]
+                )
                 assert placement.x >= 30 - 1e-6 and placement.x + width <= 320 + 1e-6
                 assert placement.y >= 6 - 1e-6 and placement.y + depth <= 314 + 1e-6
     assert job.placement_policy["auto_roof_support"]["prime_tower_plates"] == [
@@ -839,7 +879,7 @@ def test_auto_support_outside_h2d_uses_a_front_left_tower_corner(auto_stand_ins)
         if plate in job.prime_tower_positions:
             name = job.plate_names[plate]
             gap = next(gaps[title] for title in gaps if name.startswith(title))
-            assert gap in (2 + 4, CONTOUR_GAP_MM + 4)
+            assert gap == 2 + 4
             assert all(
                 placement.x >= x1 + 6.5 - 1e-6 or placement.y >= y1 + 6.5 - 1e-6
                 for _, placement in members

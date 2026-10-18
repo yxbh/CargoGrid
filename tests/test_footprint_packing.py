@@ -11,6 +11,7 @@ from cargo_grid.export import _explicit_placements, _PreparedProject
 from cargo_grid.footprints import (
     ProjectedFootprint,
     minimum_projected_clearance,
+    oriented_footprint,
     pack_projected_footprints,
     placed_footprint,
     projected_mesh_footprint,
@@ -101,6 +102,42 @@ def test_projected_packer_handles_reordered_concave_shapes_and_mixed_rotations()
         )
 
 
+@pytest.mark.parametrize("bounds,required_rotation", [((0, 0, 18, 14), 270), ((0, 0, 20, 16), 180)])
+def test_projected_packer_retries_reversed_asymmetric_footprints(bounds, required_rotation):
+    footprint = ProjectedFootprint(Polygon(((0, 0), (14, 0), (14, 4), (4, 4), (4, 12), (0, 12))))
+    footprints = [footprint, footprint]
+    placements = pack_projected_footprints(footprints, bounds, gap=2, search_gap=1.25)
+    assert required_rotation in {placement.rotation for placement in placements}
+    assert {placement.plate for placement in placements} == {0}
+    assert minimum_projected_clearance(footprints, placements, plate=0) >= 2 - 1e-6
+    assert placements == pack_projected_footprints(footprints, bounds, gap=2, search_gap=1.25)
+
+
+@pytest.mark.parametrize("rotation", [0, 90, 180, 270])
+def test_oriented_footprint_normalizes_all_quarter_turns(rotation):
+    footprint = ProjectedFootprint(Polygon(((0, 0), (14, 0), (14, 4), (4, 4), (4, 12), (0, 12))))
+    oriented = oriented_footprint(footprint, rotation)
+    assert oriented.geometry.bounds[:2] == pytest.approx((0, 0))
+    assert oriented.size == pytest.approx((14, 12) if rotation % 180 == 0 else (12, 14))
+    assert oriented.geometry.area == pytest.approx(footprint.geometry.area)
+
+
+def test_projected_packer_refuses_impossible_area_before_raster_search(monkeypatch):
+    from cargo_grid import footprints as module
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("rasterized a group larger than the plate")
+
+    monkeypatch.setattr(module, "_rasterize", unexpected)
+    with pytest.raises(ValueError, match="could not fit"):
+        pack_projected_footprints(
+            [ProjectedFootprint(box(0, 0, 9, 9))] * 2,
+            (0, 0, 10, 10),
+            gap=1,
+            search_gap=1,
+        )
+
+
 def test_explicit_shape_clearance_validates_concave_aabb_overlap():
     concave = ProjectedFootprint(Polygon(((0, 0), (20, 0), (20, 5), (5, 5), (5, 20), (0, 20))))
     square = ProjectedFootprint(box(0, 0, 10, 10))
@@ -172,7 +209,7 @@ def test_explicit_placements_apply_physical_and_per_plate_envelopes():
     [
         (PrintPlacement(0, nan, 0, 0), (10, 10, 3), "coordinates must be finite"),
         (PrintPlacement(0, 0, inf, 0), (10, 10, 3), "coordinates must be finite"),
-        (PrintPlacement(0, 0, 0, 45), (10, 10, 3), "0/90 rotations"),
+        (PrintPlacement(0, 0, 0, 45), (10, 10, 3), "0/90/180/270 rotations"),
         (PrintPlacement(-1, 0, 0, 0), (10, 10, 3), "nonnegative plates"),
         (PrintPlacement(0, 0, 0, 0), (nan, 10, 3), "part dimension"),
     ],

@@ -33,7 +33,7 @@ from cargo_grid.footprints import (
 )
 from cargo_grid.jobs import Design, Job
 from cargo_grid.meshes import write_stl
-from cargo_grid.packing import PrintPlacement, TowerClearance, pack_sizes
+from cargo_grid.packing import PACKING_ROTATIONS, PrintPlacement, TowerClearance, pack_sizes
 from cargo_grid.parameters import DEFAULT_HOLE_DIAMETER_MM, BuildVolume, Interface, count, positive
 from cargo_grid.prepared import Bounds, PreparedShape, rotated_points, rotation_matrix_3mf
 from cargo_grid.printers import DualNozzlePrinter
@@ -436,14 +436,16 @@ def _explicit_placements(
             or placement.plate < 0
             or isinstance(placement.rotation, bool)
             or not isinstance(placement.rotation, int)
-            or placement.rotation not in (0, 90)
+            or placement.rotation not in PACKING_ROTATIONS
         ):
-            raise ValueError("explicit placements require nonnegative plates and 0/90 rotations")
+            raise ValueError(
+                "explicit placements require nonnegative plates and 0/90/180/270 rotations"
+            )
         if not isfinite(placement.x) or not isfinite(placement.y):
             raise ValueError("explicit placement coordinates must be finite")
         for dimension in size:
             positive("part dimension", dimension)
-        width, depth = size[:2] if placement.rotation == 0 else size[1::-1]
+        width, depth = size[:2] if placement.rotation % 180 == 0 else size[1::-1]
         if not build.contains_box(placement.x, placement.y, width, depth, size[2]):
             raise ValueError(f"explicit placement {index} exceeds the build envelope")
         plate_build = plate_builds.get(placement.plate)
@@ -605,7 +607,7 @@ class _PreparedProject:
             for placement, size in zip(self.placements, self.sizes):
                 if placement.plate != plate:
                     continue
-                width, depth = size[:2] if placement.rotation == 0 else size[1::-1]
+                width, depth = size[:2] if placement.rotation % 180 == 0 else size[1::-1]
                 # Planned models may touch the clearance edge; allow for rounding.
                 if (
                     k0 + 1e-6 < placement.x + width

@@ -410,7 +410,7 @@ def test_h2d_auto_plan_reserves_a_tower_corner_on_every_support_plate(stubbed_h2
         assert 25 <= x0 and x1 <= 325
         for design, placement in plates[plate]:
             size = design.bambu_size
-            width, depth = size[:2] if placement.rotation == 0 else size[1::-1]
+            width, depth = size[:2] if placement.rotation % 180 == 0 else size[1::-1]
             assert 6 - 1e-6 <= placement.y and placement.y + depth <= 314 + 1e-6
             assert placement.x + width <= 320 + 1e-6
     # The 5x5 only fits one nozzle's area, so neither H2D plan includes it or maps a nozzle.

@@ -4,6 +4,8 @@ from dataclasses import dataclass
 
 from cargo_grid.parameters import BuildVolume, positive
 
+PACKING_ROTATIONS = (0, 90, 180, 270)
+
 
 @dataclass(frozen=True)
 class PrimeTower:

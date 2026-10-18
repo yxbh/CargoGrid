@@ -9,6 +9,7 @@ from build123d import Shape
 from OCP.BRepTools import BRepTools
 
 from cargo_grid.meshes import checked_mesh
+from cargo_grid.packing import PACKING_ROTATIONS
 
 
 @dataclass(frozen=True)
@@ -35,13 +36,17 @@ class Bounds:
         return tuple(high - low for low, high in zip(self.minimum, self.maximum))
 
     def rotated_z(self, degrees: int) -> "Bounds":
+        if degrees not in PACKING_ROTATIONS:
+            raise ValueError("packing rotation must be 0, 90, 180 or 270 degrees")
         if degrees == 0:
             return self
-        if degrees != 90:
-            raise ValueError("packing rotation must be 0 or 90 degrees")
         x0, y0, z0 = self.minimum
         x1, y1, z1 = self.maximum
-        return Bounds((-y1, x0, z0), (-y0, x1, z1))
+        if degrees == 90:
+            return Bounds((-y1, x0, z0), (-y0, x1, z1))
+        if degrees == 180:
+            return Bounds((-x1, -y1, z0), (-x0, -y0, z1))
+        return Bounds((y0, -x1, z0), (y1, -x0, z1))
 
 
 @dataclass
