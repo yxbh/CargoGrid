@@ -45,7 +45,7 @@ from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from cargo_grid.footprints import PACKING_WORKERS_ENV
-from cargo_grid.printers import PRINTERS, DualNozzlePrinter, NozzleProfiles
+from cargo_grid.printers import PRINTERS, DualNozzlePrinter, NozzleProfiles, bambu_flush_settings
 from cargo_grid.sliced_extrusion import reach_problem
 
 PETG_COLOUR = "#688197"
@@ -271,17 +271,8 @@ def check_copy(project: Path, effective: dict, mapping: tuple[str, ...], target:
         filament_nozzle_map=list(mapping),
         filament_volume_map=["0"] * count,
         extruder_nozzle_stats=["Standard#1"] * extruders,
-        # The CLI needs a purge table sized for these filaments on every nozzle.
-        flush_volumes_matrix=[
-            "0" if row == column else "280"
-            for _ in range(extruders)
-            for row in range(count)
-            for column in range(count)
-        ],
-        flush_volumes_vector=["140"] * (2 * count),
-        flush_multiplier=["1"] * extruders,
-        flush_multiplier_fast=["1.2"] * extruders,
     )
+    settings.update(bambu_flush_settings(count, extruders))
     plates = 0
     with ZipFile(project) as original, ZipFile(target, "w", ZIP_DEFLATED) as copy:
         for entry in original.infolist():

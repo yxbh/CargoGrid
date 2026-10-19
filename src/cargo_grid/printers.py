@@ -2,10 +2,28 @@
 
 from dataclasses import dataclass
 
-from cargo_grid.parameters import DEFAULT_HOLE_DIAMETER_MM, BuildVolume, Exclusion
+from cargo_grid.parameters import DEFAULT_HOLE_DIAMETER_MM, BuildVolume, Exclusion, count
 
 DEFAULT_PART_CLEARANCE_MM = 4.0
 COMMON_MODEL_INSET_MM = 5.0
+
+
+def bambu_flush_settings(filament_count: int, nozzle_count: int) -> dict[str, list[str]]:
+    """Size Bambu Studio 02.08.02.61's default purge data for every nozzle."""
+    count("flush filament count", filament_count)
+    count("flush nozzle count", nozzle_count)
+    load_unload_mm3 = 140
+    return {
+        "flush_volumes_matrix": [
+            "0" if row == column else f"{2 * load_unload_mm3:g}"
+            for _ in range(nozzle_count)
+            for row in range(filament_count)
+            for column in range(filament_count)
+        ],
+        "flush_volumes_vector": [f"{load_unload_mm3:g}"] * (2 * filament_count),
+        "flush_multiplier": ["1"] * nozzle_count,
+        "flush_multiplier_fast": ["1.2"] * nozzle_count,
+    }
 
 
 @dataclass(frozen=True)

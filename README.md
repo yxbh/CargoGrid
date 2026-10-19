@@ -156,6 +156,8 @@ uv run python tools/makerworld_exports.py --printer x2d --output outputs/makerwo
 
 The script slices every plate with PETG on either nozzle before writing any named files. X2D slots 1/2 are Bambu's main/auxiliary nozzles; H2D slots 1/2 are left/right. A refused plate stops the batch. Existing files are left alone unless you pass `--replace`; uploading is separate. `--set Full-Catalogue`, `--set Zeekr-7X-Expansion-Set`, `--set Pull-Handle-Set` or `--set Adjustable-Stop` limits the rebuild, and either selection option can be repeated. Omit `--printer` for the existing H2D files, or use `--printer h2d --printer x2d` for both printers.
 
+Dual-nozzle projects initialize the complete purge table for both nozzles using Bambu Studio 02.08.02.61's defaults. This avoids an uninitialized auxiliary-nozzle table on loading, without changing automatic filament matching or claiming a calibrated flushing volume.
+
 The slicer check allows only support paths up to 0.5 mm beyond the reach shared by both nozzles; models, towers and bed edges stay strict. Bambu Studio 02.08.02.61 accepts the measured 0.14 mm support spread, but its physical effect has not been observed.
 
 To generate a single X2D catalogue through the ordinary CLI:

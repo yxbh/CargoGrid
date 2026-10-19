@@ -1,7 +1,11 @@
 """Audited printer envelopes and profile pairs, without inferring printed fit."""
 
 import json
+import os
 from dataclasses import replace
+from math import isfinite
+from pathlib import Path
+from subprocess import run
 from zipfile import ZipFile
 
 import pytest
@@ -18,8 +22,105 @@ from cargo_grid.jobs import Design, Job, tile_design
 from cargo_grid.packing import PrintPlacement
 from cargo_grid.parameters import BuildVolume, Exclusion, Tile
 from cargo_grid.plates import dual_nozzle_tower_reservation
-from cargo_grid.printers import H2D, PRINTERS, X2D, printer_for_common_build
+from cargo_grid.printers import H2D, PRINTERS, X2D, bambu_flush_settings, printer_for_common_build
 from cargo_grid.roof_support import RoofSupportSettings
+
+
+@pytest.mark.parametrize("filaments", [1, 2, 3])
+@pytest.mark.parametrize("nozzles", [1, 2])
+def test_flush_defaults_have_complete_finite_data_for_every_nozzle(filaments, nozzles):
+    settings = bambu_flush_settings(filaments, nozzles)
+    matrix = list(map(float, settings["flush_volumes_matrix"]))
+    assert len(matrix) == nozzles * filaments**2
+    assert matrix == [
+        0 if row == column else 280
+        for _ in range(nozzles)
+        for row in range(filaments)
+        for column in range(filaments)
+    ]
+    assert settings["flush_volumes_vector"] == ["140"] * (filaments * 2)
+    assert settings["flush_multiplier"] == ["1"] * nozzles
+    assert settings["flush_multiplier_fast"] == ["1.2"] * nozzles
+    assert all(isfinite(float(value)) for values in settings.values() for value in values)
+
+
+@pytest.mark.parametrize("value", [0, -1, 2.5, True])
+@pytest.mark.parametrize("key", ["filament_count", "nozzle_count"])
+def test_flush_defaults_reject_invalid_dimensions(key, value):
+    with pytest.raises(ValueError, match="positive integer"):
+        bambu_flush_settings(**({"filament_count": 2, "nozzle_count": 2} | {key: value}))
+
+
+@pytest.mark.parametrize("printer", [H2D, X2D, None], ids=["h2d", "x2d", "generic"])
+def test_dual_nozzle_project_initializes_purge_tables_without_mapping_caches(printer):
+    settings = BambuSettings(
+        (Material("PETG", "PETG", "#688197"), Material("PLA", "PLA", "#0A2989")),
+        0.8,
+        0.32,
+        printer=printer,
+        machine_nozzle_count=2 if printer is None else 1,
+    )
+    job = Job([Design("box", Box(10, 10, 2), {})], BuildVolume(256, 256, 256), "part")
+    project = _bambu_project_settings(job, settings)
+    expected = bambu_flush_settings(2, 2)
+    assert {key: project[key] for key in expected} == expected
+    assert len(project["nozzle_diameter"]) == 2
+    assert project["filament_map_mode"] == "Auto For Match"
+    assert (
+        not {
+            "filament_map",
+            "filament_map_2",
+            "filament_nozzle_map",
+            "filament_volume_map",
+            "extruder_nozzle_stats",
+        }
+        & project.keys()
+    )
+    assert not set(expected) & set(project["different_settings_to_system"][0].split(";"))
+
+
+@pytest.mark.native
+@pytest.mark.parametrize("printer", PRINTERS.values(), ids=PRINTERS)
+@pytest.mark.parametrize("nozzle", [0.8, 0.4])
+def test_native_direct_load_preserves_complete_dual_nozzle_purge_tables(printer, nozzle, tmp_path):
+    executable = os.environ.get("CARGO_GRID_BAMBU")
+    if not executable:
+        pytest.skip("Set CARGO_GRID_BAMBU for direct native purge-table loading")
+    profile = printer.profiles[nozzle]
+    settings = BambuSettings(
+        (Material(profile.petg, "PETG", "#688197"), Material(profile.pla, "PLA", "#0A2989")),
+        nozzle,
+        profile.layer_height_mm,
+        printer=printer,
+        printer_settings_id=profile.printer,
+        print_settings_id=profile.process,
+    )
+    job = Job([Design("box", Box(10, 10, 2), {})], printer.build, "part")
+    project = tmp_path / "direct-load.3mf"
+    write_3mf(job, project, bambu=settings)
+    exported = tmp_path / "resolved.json"
+    arguments = [
+        str(Path(executable).resolve()),
+        "--datadir",
+        str(tmp_path / "datadir"),
+        "--debug",
+        "1",
+        "--arrange",
+        "0",
+        "--orient",
+        "0",
+        "--export-settings",
+        str(exported),
+        str(project),
+    ]
+    with (tmp_path / "native.log").open("w") as log:
+        result = run(arguments, stdout=log, stderr=log)
+    assert result.returncode == 0, (tmp_path / "native.log").read_text()
+    restored = json.loads(exported.read_text())
+    for key, expected in bambu_flush_settings(2, 2).items():
+        assert restored[key] == expected
+        assert all(isfinite(float(value)) for value in restored[key])
+    assert restored["filament_map_mode"] == "Auto For Match"
 
 
 def test_h2d_shared_build_keeps_the_existing_envelope():

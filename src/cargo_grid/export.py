@@ -36,7 +36,7 @@ from cargo_grid.meshes import write_stl
 from cargo_grid.packing import PACKING_ROTATIONS, PrintPlacement, TowerClearance, pack_sizes
 from cargo_grid.parameters import DEFAULT_HOLE_DIAMETER_MM, BuildVolume, Interface, count, positive
 from cargo_grid.prepared import Bounds, PreparedShape, rotated_points, rotation_matrix_3mf
-from cargo_grid.printers import DualNozzlePrinter
+from cargo_grid.printers import DualNozzlePrinter, bambu_flush_settings
 from cargo_grid.rods import ROD_FAMILIES, Rod, RodBrace, fit_evidence
 from cargo_grid.roof_support import (
     RoofSupportSettings,
@@ -145,9 +145,10 @@ def _filament_mode(settings: BambuSettings) -> str:
 
 
 def _bambu_project_settings(job: Job, bambu: BambuSettings, plate_count: int = 1) -> dict:
-    nozzle_count = max(
-        bambu.machine_nozzle_count,
-        2 if bambu.roof_support else 1,
+    nozzle_count = (
+        len(bambu.printer.nozzles)
+        if bambu.printer is not None
+        else max(bambu.machine_nozzle_count, 2 if bambu.roof_support else 1)
     )
     settings = {
         "version": "2.8.2.61",
@@ -175,6 +176,7 @@ def _bambu_project_settings(job: Job, bambu: BambuSettings, plate_count: int = 1
     if bambu.printer is not None:
         settings["printer_model"] = bambu.printer.model
     if nozzle_count > 1:
+        settings.update(bambu_flush_settings(len(bambu.materials), nozzle_count))
         settings["extruder_type"] = (
             [nozzle.extruder_type for nozzle in bambu.printer.nozzles]
             if bambu.printer
