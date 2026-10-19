@@ -9,6 +9,8 @@ from dataclasses import asdict, dataclass, field, replace
 from math import floor, pi, sqrt
 
 from cargo_grid.footprints import (
+    PACKING_SEARCH_ATTEMPTS,
+    PACKING_SEARCH_SEED,
     ProjectedFootprint,
     pack_projected_footprints,
     projected_mesh_footprint,
@@ -20,6 +22,7 @@ from cargo_grid.packing import (
     PrintPlacement,
     TowerClearance,
     pack_sizes,
+    packing_score,
 )
 from cargo_grid.parameters import BuildVolume, Exclusion, positive
 from cargo_grid.printers import DualNozzlePrinter, printer_for_common_build
@@ -143,7 +146,7 @@ class TowerReservation:
 
 @dataclass(frozen=True)
 class PlateGroup:
-    """Designs that share plates; ``projected`` tries outline nesting when rectangles overflow."""
+    """A family whose rectangle and projected layouts are compared without mixing groups."""
 
     title: str | None
     designs: list[Design]
@@ -152,6 +155,7 @@ class PlateGroup:
     build: BuildVolume | None = None
     tower_clearance: TowerClearance | None = None
     front_left_tower: bool = False
+    max_layout_attempts: int = PACKING_SEARCH_ATTEMPTS
 
 
 def diagonal_fit(design: Design, build: BuildVolume) -> Design | None:
@@ -478,9 +482,11 @@ def plan_plates(
                 else size(design)
             )
 
-        rectangular = pack_sizes([placed_size(d) for d in members], group_build, gap=gap, pack=True)
+        sizes = [placed_size(d) for d in members]
+        rectangular = pack_sizes(sizes, group_build, gap=gap, pack=True)
         packed, footprints, nested = rectangular, [None] * len(members), False
-        if group.projected and max(p.plate for p in rectangular) > 0:
+        rectangle_score = packing_score(rectangular, sizes)
+        if group.projected and rectangle_score[0] > 1:
             candidate_footprints = []
             for design in members:
                 vertices, faces, _ = checked_mesh(design.bambu_shape)
@@ -488,9 +494,11 @@ def plan_plates(
             search_gap = max(gap - FOOTPRINT_SEARCH_ALLOWANCE_MM, gap / 2)
             bounds, obstacles = _projected_bounds(group_build)
             try:
-                packed = pack_projected_footprints(
+                candidate = pack_projected_footprints(
                     candidate_footprints,
                     bounds,
+                    bounding_sizes=[size[:2] for size in sizes],
+                    max_layout_attempts=group.max_layout_attempts,
                     gap=gap,
                     search_gap=search_gap,
                     obstacles=obstacles,
@@ -501,20 +509,19 @@ def plan_plates(
                     "reason": str(error),
                 }
             else:
-                footprints, nested = candidate_footprints, True
+                if packing_score(candidate, sizes) < rectangle_score:
+                    packed, footprints, nested = candidate, candidate_footprints, True
                 plan.projected_packing[group.title] = {
-                    "status": "applied",
+                    "status": "applied" if nested else "rectangle preferred",
+                    "rectangle_plates": max(p.plate for p in rectangular) + 1,
+                    "projected_plates": max(p.plate for p in candidate) + 1,
                     "minimum_projected_gap_mm": gap,
                     "search_gap_mm": search_gap,
                     "grid_mm": 1,
                     "maximum_candidate_positions": 4_000_000,
-                    "maximum_order_attempts": 8,
+                    "maximum_layout_attempts": group.max_layout_attempts,
+                    "random_seed": PACKING_SEARCH_SEED,
                 }
-        elif group.projected:
-            plan.projected_packing[group.title] = {
-                "status": "rectangle retained",
-                "reason": "the group already fits one plate at the requested bounds gap",
-            }
         offset = plan.plate_count
         count = max(placement.plate for placement in packed) + 1
         for local in range(count):
@@ -524,7 +531,7 @@ def plan_plates(
                 )
             plan.plate_builds[offset + local] = group_build
         if nested:
-            plan.projected_clearances[offset] = gap
+            plan.projected_clearances.update({plate + offset: gap for plate in range(count)})
         for design, placement in zip(members, packed):
             plate = placement.plate + offset
             if towered:

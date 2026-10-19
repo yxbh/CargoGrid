@@ -238,7 +238,6 @@ EXPECTED_GROUP_ORDER = [
     "Rails and connectors",
     "Rods and upper braces",
 ]
-NESTED_GROUP = "20mm edges and corners - complete holes"
 
 
 @pytest.fixture(scope="module")
@@ -447,7 +446,6 @@ def test_h2d_dual_safe_posed_solids_stay_in_reach_with_rectangle_gaps(h2d_plan, 
         if member_group == group
     }
     assert plates
-    nested_plate = next(iter(layout.group_plates[NESTED_GROUP]))
     by_plate = defaultdict(list)
     for design, placement in zip(job.designs, job.print_placements):
         if placement.plate not in plates:
@@ -464,7 +462,7 @@ def test_h2d_dual_safe_posed_solids_stay_in_reach_with_rectangle_gaps(h2d_plan, 
         assert bounds[0] >= 30 - 1e-6 and bounds[1] <= 320 + 1e-6
         assert bounds[2] >= 5 - 1e-6 and bounds[3] <= 315 + 1e-6
     for plate, rectangles in by_plate.items():
-        if plate == nested_plate:
+        if plate in job.projected_footprint_clearances:
             continue
         for index, first in enumerate(rectangles):
             for second in rectangles[index + 1 :]:
@@ -473,43 +471,39 @@ def test_h2d_dual_safe_posed_solids_stay_in_reach_with_rectangle_gaps(h2d_plan, 
                 assert hypot(dx, dy) >= 4 - 1e-5
 
 
-def test_h2d_dual_safe_plan_nests_one_perimeter_group_by_projected_footprint(h2d_plan):
+def test_h2d_dual_safe_plan_nests_accessories_and_checks_all_nested_plates(h2d_plan):
     job = h2d_plan.job
     packing = job.placement_policy["projected_footprint_packing"]
-    assert set(packing) == {
-        "10mm edges and corners - complete holes",
-        "20mm edges and corners - complete holes",
-        "30mm edges and corners - complete holes",
+    assert packing and set(packing) <= set(EXPECTED_GROUP_ORDER) - {"Tiles"}
+    for group, record in packing.items():
+        assert record["status"] in {"applied", "rectangle preferred"}
+        assert record["rectangle_plates"] > 1
+        assert len(h2d_plan.layout.group_plates[group]) <= record["rectangle_plates"]
+        assert record["minimum_projected_gap_mm"] == 4
+        assert record["search_gap_mm"] == 3.25
+        assert record["maximum_layout_attempts"] == 1024
+        assert record["random_seed"] == 0
+    assert job.placement_policy["projected_footprint_gap_overrides_mm"] == {
+        job.plate_names[plate]: clearance
+        for plate, clearance in job.projected_footprint_clearances.items()
     }
-    assert packing["10mm edges and corners - complete holes"]["status"] == "rectangle retained"
-    assert packing[NESTED_GROUP] == {
-        "status": "applied",
-        "minimum_projected_gap_mm": 4,
-        "search_gap_mm": 3.25,
-        "grid_mm": 1,
-        "maximum_candidate_positions": 4_000_000,
-        "maximum_order_attempts": 8,
-    }
-    assert packing["30mm edges and corners - complete holes"]["status"] == "rectangle fallback"
-    nested_plate = next(iter(h2d_plan.layout.group_plates[NESTED_GROUP]))
-    assert job.projected_footprint_clearances == {nested_plate: 4}
-    assert job.placement_policy["projected_footprint_gap_overrides_mm"] == {NESTED_GROUP: 4}
-    nested_footprints = []
-    nested_placements = []
     for footprint, placement in zip(job.projected_footprints, job.print_placements):
-        if placement.plate != nested_plate:
-            assert footprint is None
-            continue
-        assert footprint is not None
-        nested_footprints.append(footprint)
-        nested_placements.append(PrintPlacement(0, placement.x, placement.y, placement.rotation))
-    assert len(nested_footprints) == 20
-    assert {placement.rotation for placement in nested_placements} == {0, 90}
-    assert minimum_projected_clearance(
-        nested_footprints,
-        nested_placements,
-        plate=0,
-    ) == pytest.approx(4, abs=1e-6)
+        assert (footprint is not None) == (placement.plate in job.projected_footprint_clearances)
+    for plate, clearance in job.projected_footprint_clearances.items():
+        selected = [
+            (footprint, placement)
+            for footprint, placement in zip(job.projected_footprints, job.print_placements)
+            if placement.plate == plate
+        ]
+        if len(selected) > 1:
+            assert (
+                minimum_projected_clearance(
+                    [footprint for footprint, _ in selected],
+                    [placement for _, placement in selected],
+                    plate=plate,
+                )
+                >= clearance - 1e-6
+            )
 
 
 def test_h2d_dual_safe_prepared_project_keeps_the_planned_plates(h2d_plan):

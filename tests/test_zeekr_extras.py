@@ -55,8 +55,8 @@ H2D_BAMBU = BambuSettings(
     machine_nozzle_count=2,
     printer=PRINTERS["h2d"],
 )
-# Actual generated bounds of the measured contour pieces, rounded to 1 um. The slow real-set
-# test checks that stand-ins with these bounds produce the same plates as the real pieces.
+# Actual generated bounds of the measured contour pieces, rounded to 1 um. These stand-ins
+# cover inventory and conservative rectangle capacity; real outlines can nest more tightly.
 SIDE_CAP_SIZES = {
     ("west", "north"): (68.5, 147.673, 13),
     ("west", "south"): (68.565, 171.152, 13),
@@ -166,6 +166,23 @@ def _assert_group_clearances(job):
     for plate, bounds in _plate_rectangles(job).items():
         name = job.plate_names[plate]
         gap = next(value for group, value in GROUP_GAPS.items() if name.startswith(group))
+        if plate in job.projected_footprint_clearances:
+            selected = [
+                (footprint, placement)
+                for footprint, placement in zip(job.projected_footprints, job.print_placements)
+                if placement.plate == plate
+            ]
+            assert all(footprint is not None for footprint, _ in selected)
+            if len(selected) > 1:
+                assert (
+                    minimum_projected_clearance(
+                        [footprint for footprint, _ in selected],
+                        [placement for _, placement in selected],
+                        plate=plate,
+                    )
+                    >= gap - 1e-6
+                )
+            continue
         for index, first in enumerate(bounds):
             for second in bounds[index + 1 :]:
                 dx = max(0, first[0] - second[1], second[0] - first[1])
@@ -391,17 +408,18 @@ def test_h2d_expansion_set_plans_five_family_plates_in_common_reach(expansion_pl
             for design, placement in zip(job.designs, job.print_placements)
             if placement.plate == plate
         } == families
-    assert members[3] == [
-        "zeekr_rear_south_ramp_1_4cell",
-        "zeekr_rear_south_ramp_2_4cell",
-        "zeekr_rear_south_ramp_4_4cell",
-    ]
+    assert set(members[3] + members[4]) == {
+        f"zeekr_rear_south_ramp_{index}_{cells}cell"
+        for index, cells in enumerate((4, 4, 2, 4, 4), 1)
+    }
     assert [d.parameters["nx"] for d in job.designs[:10]] == [2, 3, 4, 2, 3] * 2
     assert all(d.quantity == 1 and not d.apply_orientation_to_bambu for d in job.designs)
     assert all(d.bambu_object_settings == {} for d in job.designs)
     assert job.plate_settings == {}
-    assert not any(job.projected_footprints)
-    assert job.projected_footprint_clearances == {}
+    assert all(
+        (footprint is not None) == (placement.plate in job.projected_footprint_clearances)
+        for footprint, placement in zip(job.projected_footprints, job.print_placements)
+    )
     assert job.part_gap == DEFAULT_PART_CLEARANCE_MM == 4
     _assert_group_clearances(job)
     policy = job.placement_policy
@@ -749,7 +767,7 @@ def test_real_x2d_caps_nest_on_one_supported_plate_with_shared_gap(expansion_set
         if design.parameters["family"] == "zeekr-rear-contour-side"
     ]
     plan = plan_plates(
-        [PlateGroup("Caps", caps, 4, projected=True)],
+        [PlateGroup("Caps", caps, 4)],
         X2D.common_build(),
         size=lambda design: design.size,
         auto_roof_support=True,
@@ -779,16 +797,36 @@ def test_real_x2d_caps_nest_on_one_supported_plate_with_shared_gap(expansion_set
 
 
 @pytest.mark.slow
-def test_real_expansion_set_matches_the_planned_plates(expansion_set_job, expansion_plan):
+def test_real_expansion_set_keeps_families_and_never_exceeds_rectangle_capacity(
+    expansion_set_job, expansion_plan
+):
     job = expansion_set_job.job
     assert [d.name for d in job.designs] == [d.name for d in expansion_plan.designs]
-    assert job.plate_names == expansion_plan.plate_names
-    assert _plate_members(job) == _plate_members(expansion_plan)
+    gaps = job.placement_policy["plate_group_minimum_model_gap_mm"]
+    actual_groups, box_groups = (
+        Counter(
+            next(group for group in gaps if name.startswith(group))
+            for name in j.plate_names.values()
+        )
+        for j in (job, expansion_plan)
+    )
+    assert actual_groups.keys() == box_groups.keys()
+    assert all(count <= box_groups[group] for group, count in actual_groups.items())
+    family_groups = {
+        family: next(group for group in gaps if title.startswith(group))
+        for title, families, _ in PLATES.values()
+        for family in families
+    }
+    for design, placement in zip(job.designs, job.print_placements):
+        expected_group = family_groups[design.parameters["family"]]
+        assert job.plate_names[placement.plate].startswith(expected_group)
     for design, planned in zip(job.designs, expansion_plan.designs):
         assert design.size == pytest.approx(planned.size, abs=1e-3)
         assert design.shape.is_valid and len(design.shape.solids()) == 1
         assert design.shape.volume > 0
-    assert job.placement_policy == expansion_plan.placement_policy
+    for key, value in expansion_plan.placement_policy.items():
+        if key not in {"projected_footprint_packing", "projected_footprint_gap_overrides_mm"}:
+            assert job.placement_policy[key] == value
     assert job.manifest_metadata == expansion_plan.manifest_metadata
     _assert_group_clearances(job)
     contour = job.designs[10:]
@@ -814,7 +852,8 @@ def test_real_expansion_set_exports_every_piece_in_one_project(expansion_set_job
         assert design["mesh"]["closed_oriented_manifold"]
         assert design["compatibility"]["tile_edge_interface_present"]
     plates = manifest["export"]["plates"]
-    assert [len(plate["items"]) for plate in plates] == [count for _, _, count in PLATES.values()]
+    assert len(plates) <= len(PLATES)
+    assert sum(len(plate["items"]) for plate in plates) == 19
     serialized = json.dumps(manifest)
     for private in ("/Users/", "session-state", "photogrammetry"):
         assert private not in serialized
@@ -825,7 +864,10 @@ def test_real_expansion_set_exports_every_piece_in_one_project(expansion_set_job
             {e.get("key"): e.get("value") for e in plate.findall("metadata")}["plater_name"]
             for plate in config.findall("plate")
         ]
-        assert sorted(names) == sorted(name for name, _, _ in PLATES.values())
+        assert names == [
+            expansion_set_job.job.plate_names[plate]
+            for plate in sorted(expansion_set_job.job.plate_names)
+        ]
 
 
 @pytest.fixture

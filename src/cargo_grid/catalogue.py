@@ -45,6 +45,8 @@ from cargo_grid.printers import (
 )
 from cargo_grid.rods import BRACE_SPACINGS_MM, ROD_HEIGHTS_MM, Rod, RodBrace
 
+PERIMETER_PACKING_ATTEMPTS = 1024
+
 BRACKET_DISPLAY_NAMES = {
     (1, 2, 2): "Deep tall tile bracket — floor 1x2, wall 1x2",
     (2, 1, 1): "Wide low tile bracket — floor 2x1, wall 2x1",
@@ -435,6 +437,7 @@ def dual_safe_catalogue_job(
                         members,
                         packing_gap,
                         projected=True,
+                        max_layout_attempts=PERIMETER_PACKING_ATTEMPTS,
                     )
                 )
     groups.append(
@@ -445,7 +448,12 @@ def dual_safe_catalogue_job(
         )
     )
     groups.append(
-        PlateGroup("Rods and upper braces", family_members({"rod", "rod-brace"}), packing_gap)
+        PlateGroup(
+            "Rods and upper braces",
+            family_members({"rod", "rod-brace"}),
+            packing_gap,
+            projected=True,
+        )
     )
     tower_width_mm = tuning.tower_width_mm if tuning is not None else None
     if tuning is not None:

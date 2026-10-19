@@ -71,6 +71,24 @@ class PrintPlacement:
     rotation: int
 
 
+def packing_score(
+    placements: list[PrintPlacement], sizes: list[tuple[float, float, float]]
+) -> tuple[int, float]:
+    """Prefer fewer plates, then the smallest occupied bounding rectangle on the last."""
+    if not placements:
+        return 0, 0.0
+    last = max(p.plate for p in placements)
+    bounds = []
+    for placement, size in zip(placements, sizes):
+        if placement.plate == last:
+            width, depth = size[:2] if placement.rotation % 180 == 0 else size[1::-1]
+            bounds.append((placement.x, placement.y, placement.x + width, placement.y + depth))
+    area = (max(b[2] for b in bounds) - min(b[0] for b in bounds)) * (
+        max(b[3] for b in bounds) - min(b[1] for b in bounds)
+    )
+    return last + 1, round(area, 6)
+
+
 def pack_sizes(
     sizes: list[tuple[float, float, float]],
     build: BuildVolume,

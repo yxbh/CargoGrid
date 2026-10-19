@@ -1,13 +1,21 @@
 """Projected-footprint packing and explicit-placement collision checks."""
 
 from math import inf, nan
+from types import SimpleNamespace
+from zipfile import ZipFile
 
 import numpy as np
 import pytest
-from build123d import Box
+from build123d import Align, Box
 from shapely.geometry import Polygon, box
 
-from cargo_grid.export import _explicit_placements, _PreparedProject
+from cargo_grid.export import (
+    BambuSettings,
+    Material,
+    _explicit_placements,
+    _PreparedProject,
+    export_job,
+)
 from cargo_grid.footprints import (
     ProjectedFootprint,
     minimum_projected_clearance,
@@ -17,7 +25,7 @@ from cargo_grid.footprints import (
     projected_mesh_footprint,
 )
 from cargo_grid.jobs import Design, Job
-from cargo_grid.packing import PrintPlacement
+from cargo_grid.packing import PrintPlacement, packing_score
 from cargo_grid.parameters import BuildVolume
 
 
@@ -43,6 +51,176 @@ def test_projected_mesh_footprint_unions_large_triangle_sets_in_bounded_chunks()
     footprint = projected_mesh_footprint(vertices, faces)
     assert footprint.geometry.area == pytest.approx(50)
     assert footprint.size == pytest.approx((10, 10))
+
+
+def test_projected_tile_rounds_preserve_all_non_degenerate_triangle_centres():
+    from shapely import contains_xy
+
+    from cargo_grid.jobs import tile_design
+    from cargo_grid.meshes import checked_mesh
+    from cargo_grid.parameters import Tile
+
+    design = tile_design(Tile(1, 4))
+    vertices, faces, _ = checked_mesh(design.bambu_shape)
+    footprint = projected_mesh_footprint(vertices, faces)
+    triangles = vertices[faces, :2]
+    first, second = triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0]
+    selected = triangles[np.abs(first[:, 0] * second[:, 1] - first[:, 1] * second[:, 0]) > 1e-6]
+    centres = selected.mean(axis=1)
+    assert footprint.geometry.is_valid
+    assert footprint.size == pytest.approx(design.bambu_size[:2], abs=1e-6)
+    assert contains_xy(footprint.geometry.buffer(1e-9), centres[:, 0], centres[:, 1]).all()
+
+
+def test_restart_budget_and_seed_are_fixed_and_repeatable():
+    from cargo_grid.footprints import PACKING_SEARCH_ATTEMPTS, _packing_attempts
+
+    footprints = [ProjectedFootprint(box(0, 0, w, d)) for w, d in ((8, 8), (9, 4), (5, 6))]
+    rasters = {
+        (i, 0): SimpleNamespace(width=footprint.size[0], depth=footprint.size[1])
+        for i, footprint in enumerate(footprints)
+    }
+    attempts = list(_packing_attempts(footprints, rasters, PACKING_SEARCH_ATTEMPTS))
+    assert PACKING_SEARCH_ATTEMPTS == 32 and len(attempts) == 32
+    assert attempts == list(_packing_attempts(footprints, rasters, PACKING_SEARCH_ATTEMPTS))
+    assert len({tuple(order) for order, _, _, _ in attempts}) > 1
+    assert {seed for _, _, seed, _ in attempts} == {None, 0, 90, 180, 270}
+    assert all(
+        sorted(order) == [0, 90, 180, 270]
+        for _, _, _, preferences in attempts
+        if preferences
+        for order in preferences.values()
+    )
+
+
+def test_packing_score_prefers_plate_count_then_compact_last_plate():
+    sizes = [(5, 5, 1)] * 3
+    compact = [PrintPlacement(0, 0, 0, 0), PrintPlacement(0, 7, 0, 0), PrintPlacement(1, 0, 0, 0)]
+    spread = [PrintPlacement(0, 0, 0, 0), PrintPlacement(1, 0, 0, 0), PrintPlacement(1, 7, 0, 0)]
+    one_plate = [
+        PrintPlacement(0, 0, 0, 0),
+        PrintPlacement(0, 7, 0, 0),
+        PrintPlacement(0, 14, 0, 0),
+    ]
+    assert packing_score(compact, sizes) == (2, 25)
+    assert packing_score(spread, sizes) == (2, 60)
+    assert (
+        packing_score(one_plate, sizes)
+        < packing_score(compact, sizes)
+        < packing_score(spread, sizes)
+    )
+
+
+def test_later_over_budget_attempts_do_not_discard_a_verified_layout(monkeypatch):
+    from cargo_grid import footprints as module
+
+    original = module._pack_order
+
+    def limited(*args, **kwargs):
+        if len(kwargs["rotations"]) == 4:
+            raise module._CandidateBudgetExceeded("projected-footprint candidate budget")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(module, "_pack_order", limited)
+    footprints = [ProjectedFootprint(box(0, 0, 8, 8)) for _ in range(2)]
+    placements = pack_projected_footprints(footprints, (0, 0, 20, 10), gap=2, search_gap=2)
+    assert {p.plate for p in placements} == {0}
+    assert minimum_projected_clearance(footprints, placements, plate=0) >= 2 - 1e-6
+
+
+@pytest.mark.parametrize("adaptive", [False, True])
+def test_process_workers_produce_identical_multi_plate_placements(adaptive):
+    footprints = (
+        [ProjectedFootprint(box(0, 0, 10, 10))] * 2
+        if adaptive
+        else [
+            ProjectedFootprint(Polygon([(0, 0), (14, 0), (14, 4), (4, 4), (4, 12), (0, 12)]))
+            for _ in range(4)
+        ]
+    )
+    serial = pack_projected_footprints(
+        footprints, (0, 0, 18, 14), gap=2, search_gap=1.25, workers=1, max_layout_attempts=64
+    )
+    parallel = pack_projected_footprints(
+        footprints, (0, 0, 18, 14), gap=2, search_gap=1.25, workers=2, max_layout_attempts=64
+    )
+    assert parallel == serial and {p.plate for p in parallel} == {0, 1}
+
+
+def test_repeated_nested_exports_are_byte_identical_including_zip_metadata(tmp_path, monkeypatch):
+    from cargo_grid.plates import PlateGroup, plan_plates
+
+    def generate(folder, workers):
+        monkeypatch.setenv("CARGO_GRID_PACKING_WORKERS", str(workers))
+        aligned = (Align.MIN, Align.MIN, Align.MIN)
+        corner = Box(14, 4, 3, align=aligned) + Box(4, 12, 3, align=aligned)
+        designs = [Design(name, corner, {}) for name in ("first", "second")]
+        build = BuildVolume(18, 14, 10)
+        plan = plan_plates(
+            [PlateGroup("Corners", designs, 2, projected=True, max_layout_attempts=64)],
+            build,
+            size=lambda d: d.size,
+        )
+        assert plan.plate_count == 1 and plan.projected_clearances == {0: 2}
+        job = Job(
+            plan.designs,
+            build,
+            "catalogue",
+            print_placements=plan.placements,
+            projected_footprints=plan.projected_footprints,
+            projected_footprint_clearances=plan.projected_clearances,
+            plate_builds=plan.plate_builds,
+        )
+        settings = BambuSettings((Material("PETG", "PETG", "#637b70"),), 0.8, 0.32)
+        return export_job(job, tmp_path / folder, stl=False, bambu=settings)
+
+    first, second = [generate(folder, workers) for folder, workers in (("first", 1), ("second", 2))]
+    assert first.read_bytes() == second.read_bytes()
+    archives = [path.parent / "job.3mf" for path in (first, second)]
+    assert archives[0].read_bytes() == archives[1].read_bytes()
+    with ZipFile(archives[0]) as archive:
+        assert {entry.date_time for entry in archive.infolist()} == {(1980, 1, 1, 0, 0, 0)}
+
+
+def test_cad_envelope_sizes_are_not_replaced_by_smaller_mesh_bounds():
+    footprints = [ProjectedFootprint(box(0, 0, 8.2, 8.2))] * 2
+    placements = pack_projected_footprints(
+        footprints,
+        (0, 0, 19, 10),
+        gap=0.5,
+        search_gap=0.25,
+        bounding_sizes=[(9.1, 9.1)] * 2,
+    )
+    assert {p.plate for p in placements} == {0, 1}
+    assert all(p.x + 9.1 <= 19 + 1e-6 and p.y + 9.1 <= 10 + 1e-6 for p in placements)
+    with pytest.raises(ValueError, match="must match"):
+        pack_projected_footprints(
+            footprints, (0, 0, 19, 10), gap=0.5, search_gap=0.25, bounding_sizes=[(9.1, 9.1)]
+        )
+    with pytest.raises(ValueError, match="must contain"):
+        pack_projected_footprints(
+            footprints, (0, 0, 19, 10), gap=0.5, search_gap=0.25, bounding_sizes=[(8, 8)] * 2
+        )
+
+
+@pytest.mark.parametrize(("width", "obstacles"), [(19, ()), (30, ((19.05, 0, 30, 10),))])
+def test_refinement_keeps_cad_bounds_inside_the_envelope_and_clear_of_obstacles(width, obstacles):
+    from cargo_grid.footprints import _refine_clearance
+
+    footprints = [ProjectedFootprint(box(0, 0, 8.2, 8.2))] * 2
+    placements = {0: (0, 0, 0), 1: (9, 0, 0)}
+    options = dict(
+        width=width,
+        depth=10,
+        target=1.5,
+        grid=1,
+        tolerance=1e-6,
+        max_refinements=20,
+        obstacles=obstacles,
+    )
+    assert _refine_clearance(footprints, placements, **options)[1][0] == 10
+    with pytest.raises(ValueError, match="could not refine"):
+        _refine_clearance(footprints, placements, bounding_sizes=[(9.1, 9.1)] * 2, **options)
 
 
 def test_projected_packer_is_deterministic_and_bounded():
@@ -122,7 +300,7 @@ def test_oriented_footprint_normalizes_all_quarter_turns(rotation):
     assert oriented.geometry.area == pytest.approx(footprint.geometry.area)
 
 
-def test_projected_packer_refuses_impossible_area_before_raster_search(monkeypatch):
+def test_projected_packer_refuses_an_oversized_part_before_raster_search(monkeypatch):
     from cargo_grid import footprints as module
 
     def unexpected(*args, **kwargs):
@@ -131,11 +309,45 @@ def test_projected_packer_refuses_impossible_area_before_raster_search(monkeypat
     monkeypatch.setattr(module, "_rasterize", unexpected)
     with pytest.raises(ValueError, match="could not fit"):
         pack_projected_footprints(
-            [ProjectedFootprint(box(0, 0, 9, 9))] * 2,
+            [ProjectedFootprint(box(0, 0, 11, 11))],
             (0, 0, 10, 10),
             gap=1,
             search_gap=1,
         )
+
+
+def test_projected_packer_carries_large_total_area_across_single_part_plates():
+    footprints = [ProjectedFootprint(box(0, 0, 9, 9))] * 3
+    placements = pack_projected_footprints(footprints, (2, 3, 12, 13), gap=1, search_gap=1)
+    assert [p.plate for p in placements] == [0, 1, 2]
+    assert all(p.x >= 2 and p.y >= 3 for p in placements)
+    assert placements == pack_projected_footprints(footprints, (2, 3, 12, 13), gap=1, search_gap=1)
+
+
+def test_projected_packer_nests_quarter_turned_shapes_on_every_plate():
+    corner = ProjectedFootprint(Polygon(((0, 0), (14, 0), (14, 4), (4, 4), (4, 12), (0, 12))))
+    footprints = [corner] * 4
+    placements = pack_projected_footprints(footprints, (0, 0, 18, 14), gap=2, search_gap=1.25)
+    assert {p.plate for p in placements} == {0, 1}
+    assert 270 in {p.rotation for p in placements}
+    for plate in (0, 1):
+        assert sum(p.plate == plate for p in placements) == 2
+        assert minimum_projected_clearance(footprints, placements, plate=plate) >= 2 - 1e-6
+    assert placements == pack_projected_footprints(
+        footprints, (0, 0, 18, 14), gap=2, search_gap=1.25
+    )
+
+
+def test_projected_packer_fills_space_after_a_larger_piece_is_deferred():
+    footprints = [
+        ProjectedFootprint(box(0, 0, 12, 8)),
+        ProjectedFootprint(box(0, 0, 12, 8)),
+        ProjectedFootprint(box(0, 0, 4, 4)),
+    ]
+    placements = pack_projected_footprints(footprints, (0, 0, 20, 10), gap=2, search_gap=2)
+    assert placements[0].plate == placements[2].plate == 0
+    assert placements[1].plate == 1
+    assert minimum_projected_clearance(footprints, placements, plate=0) >= 2 - 1e-6
 
 
 def test_explicit_shape_clearance_validates_concave_aabb_overlap():

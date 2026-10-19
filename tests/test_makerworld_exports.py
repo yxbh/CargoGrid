@@ -48,13 +48,84 @@ def test_variants_cover_each_published_set_and_nozzle_once():
         assert ("Zeekr" in variant.name) == (args.command == "extras")
 
 
-def _fake_generate(variant, scratch):
+def _fake_generate(variant, scratch, *, packing_workers=1):
     folder = scratch / variant.name
     folder.mkdir()
     (folder / "job.3mf").write_text(f"new {variant.name}")
     plates = [{"items": [{"quantity": 2}]}, {"items": [{"quantity": 1}]}]
     (folder / "manifest.json").write_text(json.dumps({"export": {"plates": plates}}))
     return folder
+
+
+def test_automatic_capacity_reserves_cores_and_memory(monkeypatch):
+    tool = _tool()
+    monkeypatch.setattr(tool.os, "sched_getaffinity", lambda pid: set(range(18)), raising=False)
+    monkeypatch.setattr(tool, "_available_memory_bytes", lambda: 16 * 1024**3)
+    assert tool._process_capacity() == (16, 4)
+    monkeypatch.setattr(tool, "_available_memory_bytes", lambda: 1024**3)
+    assert tool._process_capacity() == (16, 1)
+
+
+@pytest.mark.parametrize(
+    ("override", "capacity", "jobs", "workers"),
+    [
+        (None, (16, 32), 16, 1),
+        (None, (16, 6), 6, 1),
+        (4, (16, 32), 4, 4),
+        (2, (16, 6), 2, 2),
+        (20, (16, 6), 20, 1),
+    ],
+)
+def test_variant_and_search_workers_share_one_budget(
+    monkeypatch, tmp_path, override, capacity, jobs, workers
+):
+    tool = _tool()
+    observed = []
+
+    class Pool:
+        def __init__(self, count):
+            assert count == jobs
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def map(self, function, variants):
+            return map(function, variants)
+
+    def generate(variant, scratch, *, packing_workers):
+        observed.append(packing_workers)
+        return _fake_generate(variant, scratch)
+
+    monkeypatch.setattr(tool, "_process_capacity", lambda: capacity)
+    monkeypatch.setattr(tool, "ThreadPoolExecutor", Pool)
+    monkeypatch.setattr(tool, "generate", generate)
+    arguments = ["--output", str(tmp_path), "--printer", "h2d", "--printer", "x2d"]
+    if override is not None:
+        arguments += ["--jobs", str(override)]
+    assert tool.main(arguments) == 0
+    assert observed == [workers] * 24
+
+
+def test_generation_passes_a_private_process_quota_without_mutating_the_environment(
+    monkeypatch, tmp_path
+):
+    from types import SimpleNamespace
+
+    tool = _tool()
+    name = tool.PACKING_WORKERS_ENV
+    monkeypatch.setenv(name, "7")
+    observed = []
+
+    def run(command, **kwargs):
+        observed.append(kwargs["env"][name])
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(tool.subprocess, "run", run)
+    tool.generate(tool.variants()[0], tmp_path, packing_workers=3)
+    assert observed == ["3"] and os.environ[name] == "7"
 
 
 def test_writes_named_files_and_replaces_only_on_request(monkeypatch, tmp_path, capsys):
@@ -185,7 +256,7 @@ def test_failed_variant_leaves_the_output_folder_untouched(monkeypatch, tmp_path
     tool = _tool()
     broken = tool.variants()[-1].name
 
-    def generate(variant, scratch):
+    def generate(variant, scratch, **kwargs):
         if variant.name == broken:
             raise RuntimeError("generation failed")
         return _fake_generate(variant, scratch)
@@ -454,7 +525,7 @@ def test_bambu_check_runs_before_anything_is_written(monkeypatch, tmp_path, caps
 def test_bambu_check_passes_rectangular_reservations_from_the_manifest(monkeypatch, tmp_path):
     tool = _tool()
 
-    def generate(variant, scratch):
+    def generate(variant, scratch, **kwargs):
         folder = _fake_generate(variant, scratch)
         manifest = folder / "manifest.json"
         data = json.loads(manifest.read_text())

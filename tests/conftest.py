@@ -10,6 +10,7 @@ from cargo_grid import catalogue
 EARLY_FIXTURES = {
     "h2d_plan": "h2d-plan",
     "x2d_plan": "x2d-plan",
+    "wide_perimeter_designs": "wide-perimeter",
     "expansion_set_job": "zeekr-expansion-set",
     "review_job": None,
 }

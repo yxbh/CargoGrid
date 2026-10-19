@@ -171,7 +171,11 @@ def extras_job(
     combined_edges = [
         PlateGroup(f"{PLATE_PREFIX}40mm edges", edges, gap, tower_clearance=edge_tower_clearance)
     ]
-    grouped = plan(combined_edges).plate_count >= plan(edge_groups).plate_count
+
+    def rectangle_plate_count(groups: list[PlateGroup]) -> int:
+        return plan([replace(group, projected=False) for group in groups]).plate_count
+
+    grouped = rectangle_plate_count(combined_edges) >= rectangle_plate_count(edge_groups)
     groups = [
         *(edge_groups if grouped else combined_edges),
         PlateGroup(f"{PLATE_PREFIX}Rear panel contour side caps", side_caps, gap, projected=True),

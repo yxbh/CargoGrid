@@ -683,6 +683,12 @@ def write_3mf(
         return _write_3mf(prepared, path, mesh_buffer, bambu=bambu)
 
 
+def _write_archive_entry(archive: ZipFile, name: str, data: bytes) -> None:
+    """Streaming entries use the fixed ZIP epoch rather than the current wall-clock time."""
+    with archive.open(name, "w") as output:
+        output.write(data)
+
+
 def _write_3mf(
     prepared: _PreparedProject,
     path: Path,
@@ -935,8 +941,8 @@ def _write_3mf(
         Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel",
     )
     with ZipFile(path, "x", ZIP_DEFLATED) as archive:
-        archive.writestr("[Content_Types].xml", _bytes(types))
-        archive.writestr("_rels/.rels", _bytes(rels))
+        _write_archive_entry(archive, "[Content_Types].xml", _bytes(types))
+        _write_archive_entry(archive, "_rels/.rels", _bytes(rels))
         with archive.open("3D/3dmodel.model", "w", force_zip64=True) as output:
             output.write(
                 f'<?xml version="1.0" encoding="utf-8"?>'
@@ -954,10 +960,11 @@ def _write_3mf(
                     output.write(ET.tostring(child, encoding="utf-8"))
             output.write(b"</model>")
         if bambu:
-            archive.writestr("Metadata/model_settings.config", _bytes(config))
-            archive.writestr(
+            _write_archive_entry(archive, "Metadata/model_settings.config", _bytes(config))
+            _write_archive_entry(
+                archive,
                 "Metadata/project_settings.config",
-                json.dumps(_bambu_project_settings(job, bambu, plate_count), indent=2),
+                json.dumps(_bambu_project_settings(job, bambu, plate_count), indent=2).encode(),
             )
     tower_printer = bambu.printer.name if bambu and bambu.printer else "H2D"
     return {

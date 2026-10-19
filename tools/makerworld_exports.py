@@ -33,6 +33,7 @@ with ``--printer h2d --printer x2d`` to build both.
 
 import argparse
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -43,6 +44,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
+from cargo_grid.footprints import PACKING_WORKERS_ENV
 from cargo_grid.printers import PRINTERS, DualNozzlePrinter, NozzleProfiles
 from cargo_grid.sliced_extrusion import reach_problem
 
@@ -54,6 +56,55 @@ HANDLE_SET = (("extras", "pull-handle"), "Pull-Handle-Set")
 ADJUSTABLE_STOP_SET = (("extras", "adjustable-stop"), "Adjustable-Stop")
 SET_NAMES = tuple(title for _, title in (*SETS, HANDLE_SET, ADJUSTABLE_STOP_SET))
 SUFFIXES = {"job.3mf": ".3mf", "manifest.json": ".manifest.json"}
+PROCESS_MEMORY_BYTES = 3 * 1024**3
+
+
+def _available_memory_bytes() -> int:
+    if sys.platform == "darwin":
+        stats = subprocess.check_output(["vm_stat"], text=True)
+        page_size = int(re.search(r"page size of (\d+) bytes", stats)[1])
+        pages = sum(
+            int(value)
+            for value in re.findall(r"Pages (?:free|inactive|speculative):\s+(\d+)", stats)
+        )
+        return page_size * pages
+    if sys.platform == "win32":
+        import ctypes
+        from ctypes import wintypes
+
+        class MemoryStatus(ctypes.Structure):
+            _fields_ = [
+                ("length", wintypes.DWORD),
+                ("load", wintypes.DWORD),
+                *(
+                    (name, ctypes.c_ulonglong)
+                    for name in (
+                        "total",
+                        "available",
+                        "page_total",
+                        "page_available",
+                        "virtual_total",
+                        "virtual_available",
+                        "extended",
+                    )
+                ),
+            ]
+
+        status = MemoryStatus()
+        status.length = ctypes.sizeof(status)
+        if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+            raise ctypes.WinError()
+        return status.available
+    values = dict(line.split(":", 1) for line in Path("/proc/meminfo").read_text().splitlines())
+    return int(values["MemAvailable"].split()[0]) * 1024
+
+
+def _process_capacity() -> tuple[int, int]:
+    cores = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count()
+    cores = max(1, (cores or 1) - 2)
+    memory = _available_memory_bytes()
+    usable = max(0, memory - max(2 * 1024**3, memory // 4))
+    return cores, max(1, usable // PROCESS_MEMORY_BYTES)
 
 
 @dataclass(frozen=True)
@@ -123,7 +174,7 @@ def destinations(output: Path, variant: Variant) -> dict[str, Path]:
     return {source: output / f"{variant.name}{suffix}" for source, suffix in SUFFIXES.items()}
 
 
-def generate(variant: Variant, scratch: Path) -> Path:
+def generate(variant: Variant, scratch: Path, *, packing_workers: int = 1) -> Path:
     folder = scratch / variant.name
     log = scratch / f"{variant.name}.log"
     with log.open("w") as handle:
@@ -132,6 +183,7 @@ def generate(variant: Variant, scratch: Path) -> Path:
             stdout=handle,
             stderr=subprocess.STDOUT,
             check=False,
+            env={**os.environ, PACKING_WORKERS_ENV: str(packing_workers)},
         )
     if result.returncode:
         tail = "".join(log.read_text().splitlines(keepends=True)[-20:])
@@ -324,7 +376,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--replace", action="store_true", help="replace files with the same names in --output"
     )
-    parser.add_argument("--jobs", type=int, default=4, help="variants generated at once")
+    parser.add_argument(
+        "--jobs",
+        type=int,
+        help="variants at once; default uses available cores and memory with headroom",
+    )
     parser.add_argument(
         "--printer",
         dest="printers",
@@ -348,7 +404,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Bambu Studio executable used to slice every plate before anything is written",
     )
     args = parser.parse_args(argv)
-    if args.jobs < 1:
+    if args.jobs is not None and args.jobs < 1:
         parser.error("--jobs must be at least 1")
     selected = [
         variant
@@ -359,6 +415,9 @@ def main(argv: list[str] | None = None) -> int:
         for variant in selected:
             print(f"{variant.name}: cargo-grid {' '.join(variant.arguments)}")
         return 0
+    cores, memory_slots = _process_capacity()
+    jobs = min(args.jobs if args.jobs is not None else min(cores, memory_slots), len(selected))
+    packing_workers = max(1, min(cores // jobs, memory_slots // jobs - 1))
     if not args.output.is_dir():
         parser.error(f"--output must be an existing folder: {args.output}")
     if args.bambu_studio is not None and not args.bambu_studio.is_file():
@@ -376,8 +435,18 @@ def main(argv: list[str] | None = None) -> int:
         )
     with tempfile.TemporaryDirectory(prefix="cargo-grid-makerworld-") as temporary:
         scratch = Path(temporary)
-        with ThreadPoolExecutor(args.jobs) as pool:
-            folders = list(pool.map(lambda variant: generate(variant, scratch), selected))
+        print(
+            f"Generating {len(selected)} variants with {jobs} jobs; "
+            f"at most {packing_workers} search workers per variant",
+            flush=True,
+        )
+        with ThreadPoolExecutor(jobs) as pool:
+            folders = list(
+                pool.map(
+                    lambda variant: generate(variant, scratch, packing_workers=packing_workers),
+                    selected,
+                )
+            )
         if args.bambu_studio is not None:
             bambu = args.bambu_studio.resolve()
             problems = []
@@ -396,7 +465,7 @@ def main(argv: list[str] | None = None) -> int:
                     folder / "job.3mf",
                     bambu,
                     scratch / f"{variant.name}-check",
-                    args.jobs,
+                    jobs,
                     tower_bounds,
                 )
                 result = f"{len(found)} plate slices refused" if found else "every plate sliced"

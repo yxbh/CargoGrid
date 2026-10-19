@@ -1,9 +1,10 @@
 """Shared plate planning: named groups, prime-tower reservations and fit reporting."""
 
 import pytest
-from build123d import Box
+from build123d import Align, Box
 from tower_checks import assert_towers_stay_where_bambu_keeps_them
 
+from cargo_grid.export import _PreparedProject
 from cargo_grid.jobs import Design, Job
 from cargo_grid.packing import TowerClearance
 from cargo_grid.parameters import BuildVolume, Exclusion
@@ -20,6 +21,79 @@ from cargo_grid.plates import (
     plan_plates,
 )
 from cargo_grid.printers import H2D, X2D
+
+
+def test_projected_packing_marks_every_nested_plate_after_the_group_offset():
+    aligned = (Align.MIN, Align.MIN, Align.MIN)
+    corner = Box(14, 4, 3, align=aligned) + Box(4, 12, 3, align=aligned)
+    designs = [Design(f"corner-{i}", corner, {}) for i in range(4)]
+    plan = plan_plates(
+        [
+            PlateGroup("First", [_design("first", (8, 8, 3))], 2),
+            PlateGroup("Corners", designs, 2, projected=True),
+        ],
+        BuildVolume(18, 14, 10),
+        size=_size,
+    )
+    assert plan.plate_count == 3
+    assert plan.projected_clearances == {1: 2, 2: 2}
+    assert plan.plate_names == {0: "First", 1: "Corners 1", 2: "Corners 2"}
+    assert plan.projected_packing["Corners"]["rectangle_plates"] == 4
+    assert plan.projected_packing["Corners"]["projected_plates"] == 2
+    assert plan.projected_footprints[0] is None
+    assert all(footprint is not None for footprint in plan.projected_footprints[1:])
+    job = Job(
+        plan.designs,
+        BuildVolume(18, 14, 10),
+        "catalogue",
+        print_placements=plan.placements,
+        plate_builds=plan.plate_builds,
+        projected_footprints=plan.projected_footprints,
+        projected_footprint_clearances=plan.projected_clearances,
+    )
+    prepared = _PreparedProject(job, None, None)
+    assert prepared.placements == plan.placements and prepared.plate_count == 3
+
+
+def test_projected_packing_never_replaces_a_better_rectangle_result(monkeypatch):
+    from cargo_grid import plates
+    from cargo_grid.packing import PrintPlacement
+
+    monkeypatch.setattr(
+        plates,
+        "pack_projected_footprints",
+        lambda footprints, *args, **kwargs: [
+            PrintPlacement(index, 0, 0, 0) for index in range(len(footprints))
+        ],
+    )
+    plan = plan_plates(
+        [PlateGroup("Boxes", [_design(str(i), (8, 8, 3)) for i in range(3)], 2, projected=True)],
+        BuildVolume(20, 12, 10),
+        size=_size,
+    )
+    assert plan.plate_count == 2
+    assert plan.projected_packing["Boxes"]["status"] == "rectangle preferred"
+    assert not any(plan.projected_footprints) and not plan.projected_clearances
+
+
+@pytest.mark.parametrize("quantity", [1, 2])
+def test_single_plate_rectangle_groups_do_not_pay_for_footprint_meshing(monkeypatch, quantity):
+    from cargo_grid import plates
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("meshed a group whose rectangles already fit one plate")
+
+    monkeypatch.setattr(plates, "checked_mesh", unexpected)
+    plan = plan_plates(
+        [
+            PlateGroup(
+                "Box", [_design(str(i), (8, 8, 3)) for i in range(quantity)], 2, projected=True
+            )
+        ],
+        BuildVolume(20, 12, 10),
+        size=_size,
+    )
+    assert plan.plate_count == 1 and not plan.projected_packing
 
 
 def _design(name, size):

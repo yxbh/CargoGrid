@@ -9,11 +9,59 @@ from build123d import Box, Pos
 from cargo_grid import catalogue, cli
 from cargo_grid.catalogue import dual_safe_catalogue_job
 from cargo_grid.export import BambuSettings, Material, _PreparedProject
-from cargo_grid.jobs import Design, tile_identity
+from cargo_grid.jobs import Design, Job, tile_identity
 from cargo_grid.packing import PrintPlacement
+from cargo_grid.plates import PlateGroup, plan_plates
 from cargo_grid.printers import H2D, X2D
 from cargo_grid.rods import Rod
 from cargo_grid.roof_support import RoofSupportSettings
+
+
+@pytest.fixture(scope="module")
+def wide_perimeter_designs():
+    return [
+        catalogue.accessory_design(spec)
+        for spec in catalogue.accessory_variants(H2D.build)
+        if spec.family in {"edge-x", "edge-y", "corner-in", "corner-out"}
+        and spec.edge_outward == 30
+        and spec.nx <= 4
+    ]
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("layer", [0.32, 0.24])
+def test_real_wide_perimeter_family_uses_multi_plate_outline_packing(wide_perimeter_designs, layer):
+    plan = plan_plates(
+        [
+            PlateGroup(
+                "30mm edges and corners - complete holes",
+                wide_perimeter_designs,
+                4,
+                projected=True,
+                max_layout_attempts=catalogue.PERIMETER_PACKING_ATTEMPTS,
+            )
+        ],
+        X2D.common_build(),
+        size=lambda design: design.bambu_size,
+        auto_roof_support=True,
+        layer_height_mm=layer,
+        tower_width_mm=18,
+    )
+    assert not plan.unfit and len(plan.designs) == 18
+    record = plan.projected_packing["30mm edges and corners - complete holes"]
+    assert plan.plate_count == 2 and record["rectangle_plates"] == 3
+    assert record["maximum_layout_attempts"] == catalogue.PERIMETER_PACKING_ATTEMPTS
+    assert set(plan.projected_clearances) <= set(range(plan.plate_count))
+    job = Job(
+        plan.designs,
+        X2D.build,
+        "catalogue",
+        print_placements=plan.placements,
+        projected_footprints=plan.projected_footprints,
+        projected_footprint_clearances=plan.projected_clearances,
+        plate_builds=plan.plate_builds,
+    )
+    assert _PreparedProject(job, None, None).placements == plan.placements
 
 
 @pytest.fixture
@@ -247,6 +295,8 @@ def test_real_x2d_catalogue_solids_and_prepared_placements_stay_in_reach(x2d_pla
     for design, placement in zip(job.designs, job.print_placements, strict=True):
         assert design.shape.is_valid and len(design.shape.solids()) == 1
         assert design.shape.volume > 0
+        if "family" not in design.parameters:
+            assert placement.plate not in job.projected_footprint_clearances
         w, d, h = design.bambu_size
         if placement.rotation % 180 == 90:
             w, d = d, w
