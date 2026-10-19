@@ -322,6 +322,7 @@ def _plan_layout(job):
     return layout
 
 
+@pytest.mark.slow
 def test_h2d_dual_safe_plan_keeps_full_family_inventory_and_hardware_zones(h2d_plan):
     job = h2d_plan.job
     # Every planned design, and the omitted 5x5, is measured exactly once.
@@ -353,6 +354,7 @@ def test_h2d_dual_safe_plan_keeps_full_family_inventory_and_hardware_zones(h2d_p
     assert job.placement_policy["omitted_tiles"] == [omitted["name"]]
 
 
+@pytest.mark.slow
 def test_h2d_dual_safe_plan_keeps_every_plate_in_common_reach_without_manual_maps(h2d_plan):
     job = h2d_plan.job
     plate_count = h2d_plan.layout.plate_count
@@ -389,6 +391,7 @@ def test_h2d_dual_safe_plan_keeps_every_plate_in_common_reach_without_manual_map
     assert job.placement_policy["minimum_actual_part_xy_clearance_mm"] == 4
 
 
+@pytest.mark.slow
 def test_h2d_dual_safe_plan_groups_families_on_named_plates(h2d_plan):
     job = h2d_plan.job
     layout = h2d_plan.layout
@@ -436,6 +439,7 @@ def test_h2d_dual_safe_plan_groups_families_on_named_plates(h2d_plan):
     assert job.placement_policy["perimeter_grouping"] == "outward width and boundary-hole mode"
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("group", EXPECTED_GROUP_ORDER)
 def test_h2d_dual_safe_posed_solids_stay_in_reach_with_rectangle_gaps(h2d_plan, group):
     job = h2d_plan.job
@@ -471,6 +475,7 @@ def test_h2d_dual_safe_posed_solids_stay_in_reach_with_rectangle_gaps(h2d_plan, 
                 assert hypot(dx, dy) >= 4 - 1e-5
 
 
+@pytest.mark.slow
 def test_h2d_dual_safe_plan_nests_accessories_and_checks_all_nested_plates(h2d_plan):
     job = h2d_plan.job
     packing = job.placement_policy["projected_footprint_packing"]
@@ -506,6 +511,7 @@ def test_h2d_dual_safe_plan_nests_accessories_and_checks_all_nested_plates(h2d_p
             )
 
 
+@pytest.mark.slow
 def test_h2d_dual_safe_prepared_project_keeps_the_planned_plates(h2d_plan):
     job = h2d_plan.job
     prepared = _PreparedProject(
@@ -518,6 +524,7 @@ def test_h2d_dual_safe_prepared_project_keeps_the_planned_plates(h2d_plan):
     assert prepared.plate_count == h2d_plan.layout.plate_count
 
 
+@pytest.mark.slow
 def test_h2d_dual_safe_plan_requests_support_only_for_supported_families(h2d_plan):
     job = h2d_plan.job
     assert all(

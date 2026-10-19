@@ -237,6 +237,14 @@ def test_complete_print_project_uses_shared_h2d_support_conventions(
     monkeypatch.setattr(
         adjustable_stop_export, "_apply_adjustable_stop_support_settings", check_unpatched_objects
     )
+
+    def reuse_checked_job(nozzle, spec, *, printer):
+        assert nozzle == nozzle_diameter_mm
+        assert spec == AdjustableStopSpec()
+        assert printer == H2D
+        return job
+
+    monkeypatch.setattr(adjustable_stop_export, "adjustable_stop_print_job", reuse_checked_job)
     project = tmp_path / f"adjustable-stop-{nozzle_diameter_mm:g}.3mf"
     write_adjustable_stop_print_project(project, nozzle_diameter_mm)
     first_export = project.read_bytes()

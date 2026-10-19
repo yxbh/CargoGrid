@@ -6,6 +6,7 @@ Portable CI runs every test not marked `native`, `reference` or `slow` with four
 - Query geometry near the feature. Clip shapes to a small box around a hole before classifying points (`_local_assembly_contains` in `test_edge_variants.py`), and use `local_geometry.bounded_distance` for contact checks. Skip shapes whose bounding boxes can't reach the region. Point queries and distances against a whole tile can take seconds each.
 - Avoid whole-solid witness Booleans when a clipped or local check answers the same question, and keep a small test showing that the local check agrees with the whole-solid one.
 - Don't export full multi-part packages in portable tests. Export one or two designs, or mark the package check `slow`.
+- Whole H2D catalogue planning and prepared-export checks are `slow`; portable tests cover family inventories, representative real geometry and the shared planner. When a test also inspects a generated job, reuse that read-only job for its export instead of rebuilding the same CAD.
 - Build expensive geometry once. Use a module fixture that tests only read and list it in `EARLY_FIXTURES` in `conftest.py`, so its tests start first and stay on one worker. Don't change a shared shape; move or copy it first.
 - Split long integration checks by responsibility, so a failure names the broken contract and no single test becomes the tail of the run.
 - A faster check must answer the same question. Keep assertions and tolerances.

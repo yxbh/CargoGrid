@@ -21,18 +21,8 @@ from pathlib import Path
 DEFAULT_BUDGET_SECONDS = 120.0
 DEFAULT_TARGET_SECONDS = 780.0
 
-H2D = "tests/test_h2d_catalogue.py::"
 # Reviewed exceptions: node id -> (limit in seconds, reason).
-ALLOWLIST: dict[str, tuple[float, str]] = {
-    H2D + "test_h2d_dual_safe_plan_keeps_full_family_inventory_and_hardware_zones": (
-        520.0,
-        "first user of the shared H2D plan fixture, which builds and packs the whole catalogue",
-    ),
-    H2D + "test_h2d_dual_safe_prepared_project_keeps_the_planned_plates": (
-        240.0,
-        "replans every catalogue design through the export snapshot",
-    ),
-}
+ALLOWLIST: dict[str, tuple[float, str]] = {}
 
 
 def node_id(case: ET.Element, root: Path) -> str:
