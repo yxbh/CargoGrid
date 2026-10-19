@@ -618,3 +618,22 @@ def test_projected_packing_keeps_bounding_boxes_out_of_obstacles():
         pack_projected_footprints(
             footprints, (10, 10, 130, 130), gap=2, search_gap=1.5, obstacles=((0, 0, 130, 130),)
         )
+
+
+def test_folded_exclusions_remain_strict_when_outer_bounds_allow_numerical_tolerance():
+    from cargo_grid.parameters import Exclusion
+    from cargo_grid.plates import _projected_bounds
+
+    build = BuildVolume(20, 10, 5, exclusions=(Exclusion(0, 0, 1, 10), Exclusion(10, 0, 10, 10)))
+    bounds, obstacles = _projected_bounds(build)
+    placements = pack_projected_footprints(
+        [ProjectedFootprint(box(0, 0, 9, 9))],
+        bounds,
+        gap=1,
+        search_gap=1,
+        bounding_sizes=[(9 + 1e-7, 9)],
+        obstacles=obstacles,
+    )
+    p = placements[0]
+    assert p.rotation in (90, 270)
+    assert build.contains_box(p.x, p.y, 9, 9 + 1e-7, 1)

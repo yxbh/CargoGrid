@@ -385,7 +385,7 @@ def _tower_layout(
 def _projected_bounds(
     build: BuildVolume,
 ) -> tuple[tuple[float, float, float, float], tuple[tuple[float, float, float, float], ...]]:
-    """Model area for outline nesting plus any partial-depth exclusions as obstacles."""
+    """Model area plus every exclusion, including strict folded full-depth boundaries."""
     x0, y0 = build.margin, build.margin
     x1 = build.x - build.margin - build.reserve_x
     y1 = build.y - build.margin - build.reserve_y
@@ -396,8 +396,7 @@ def _projected_bounds(
             x0 = max(x0, area.x + area.width)
         elif full_depth and area.x + area.width >= build.x:
             x1 = min(x1, area.x)
-        else:
-            obstacles.append((area.x, area.y, area.x + area.width, area.y + area.depth))
+        obstacles.append((area.x, area.y, area.x + area.width, area.y + area.depth))
     return (x0, y0, x1, y1), tuple(obstacles)
 
 

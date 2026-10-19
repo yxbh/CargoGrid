@@ -24,37 +24,50 @@ def wide_perimeter_designs():
         for spec in catalogue.accessory_variants(H2D.build)
         if spec.family in {"edge-x", "edge-y", "corner-in", "corner-out"}
         and spec.edge_outward == 30
-        and spec.nx <= 4
     ]
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("layer", [0.32, 0.24])
-def test_real_wide_perimeter_family_uses_multi_plate_outline_packing(wide_perimeter_designs, layer):
+@pytest.mark.parametrize(
+    "printer,layer,max_cells,rectangle_plates",
+    [(X2D, 0.32, 4, 3), (X2D, 0.24, 4, 3), (H2D, 0.32, 5, 2)],
+    ids=["x2d-0.32", "x2d-0.24", "h2d-0.32"],
+)
+def test_real_wide_perimeter_family_uses_multi_plate_outline_packing(
+    wide_perimeter_designs, printer, layer, max_cells, rectangle_plates
+):
     plan = plan_plates(
         [
             PlateGroup(
                 "30mm edges and corners - complete holes",
-                wide_perimeter_designs,
+                [
+                    design
+                    for design in wide_perimeter_designs
+                    if design.parameters["nx"] <= max_cells
+                ],
                 4,
                 projected=True,
                 max_layout_attempts=catalogue.WIDE_PERIMETER_PACKING_ATTEMPTS,
             )
         ],
-        X2D.common_build(),
+        printer.common_build(),
         size=lambda design: design.bambu_size,
         auto_roof_support=True,
         layer_height_mm=layer,
-        tower_width_mm=18,
+        tower_width_mm=(
+            printer.catalogue_support.tower_width_mm if printer.catalogue_support else None
+        ),
     )
-    assert not plan.unfit and len(plan.designs) == 18
+    assert not plan.unfit and len(plan.designs) == 2 * max_cells + 10
     record = plan.projected_packing["30mm edges and corners - complete holes"]
-    assert plan.plate_count == 2 and record["rectangle_plates"] == 3
-    assert record["maximum_layout_attempts"] == catalogue.WIDE_PERIMETER_PACKING_ATTEMPTS
+    assert plan.plate_count == 2 and record["rectangle_plates"] == rectangle_plates
+    assert record["maximum_layout_attempts"] == (
+        catalogue.WIDE_PERIMETER_PACKING_ATTEMPTS if rectangle_plates > 2 else 32
+    )
     assert set(plan.projected_clearances) <= set(range(plan.plate_count))
     job = Job(
         plan.designs,
-        X2D.build,
+        printer.build,
         "catalogue",
         print_placements=plan.placements,
         projected_footprints=plan.projected_footprints,

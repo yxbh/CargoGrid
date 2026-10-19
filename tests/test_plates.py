@@ -300,10 +300,13 @@ def test_generic_build_uses_a_front_left_corner_and_reports_unfit_designs():
 
 
 def test_projected_bounds_keep_side_exclusions_and_return_corner_obstacles():
-    assert _projected_bounds(H2D.common_build()) == ((30, 5, 320, 315), ())
+    common_bounds, common_exclusions = _projected_bounds(H2D.common_build())
+    assert common_bounds == (30, 5, 320, 315)
+    assert common_exclusions == ((0, 0, 30, 320), (320, 0, 350, 320))
     reservation = _DualNozzleTowerLayout(H2D, BambuTowerEstimate(0.32)).reserve(14.92)
-    bounds, (area,) = _projected_bounds(reservation.build)
+    bounds, (*exclusions, area) = _projected_bounds(reservation.build)
     assert bounds == (30, 6, 320, 314)
+    assert tuple(exclusions) == common_exclusions
     assert area == pytest.approx(reservation.clearance.grow(reservation.bounds))
     inner = BuildVolume(200, 200, 50, exclusions=(Exclusion(50, 50, 10, 10),))
     assert _projected_bounds(inner) == ((0, 0, 200, 200), ((50, 50, 60, 60),))
@@ -324,7 +327,7 @@ def test_x2d_tower_uses_its_larger_petg_prime_volume(layer, side, origin):
     bounds, obstacles = _projected_bounds(tower.build)
     assert bounds == (25.5, 6, 250, 250)
     x0, y0, _, y1 = tower.clearance.grow(tower.bounds)
-    assert obstacles == ((x0, y0, 256, y1),)
+    assert obstacles == ((0, 0, 25.5, 256), (251, 0, 256, 256), (x0, y0, 256, y1))
 
 
 @pytest.mark.parametrize("layer,height", [(0.24, 13), (0.32, 14.92), (0.24, 120)])

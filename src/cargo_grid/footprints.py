@@ -226,15 +226,10 @@ def _blocked(
     y: float,
     width: float,
     depth: float,
-    tolerance: float,
 ) -> bool:
     """Whether a placed bounding box overlaps any obstacle rectangle (local coordinates)."""
     return any(
-        x < x1 - tolerance
-        and x0 < x + width - tolerance
-        and y < y1 - tolerance
-        and y0 < y + depth - tolerance
-        for x0, y0, x1, y1 in obstacles
+        x < x1 and x0 < x + width and y < y1 and y0 < y + depth for x0, y0, x1, y1 in obstacles
     )
 
 
@@ -307,7 +302,6 @@ def _refine_clearance(
                         minimum_y,
                         maximum_x - minimum_x,
                         maximum_y - minimum_y,
-                        tolerance,
                     )
                 ):
                     continue
@@ -368,7 +362,6 @@ def _candidate_anchor(
     max_y: int,
     global_minimum: int,
     grid: float,
-    tolerance: float,
     obstacles: tuple[tuple[float, float, float, float], ...],
 ) -> tuple[int, int] | None:
     collision = fftconvolve(occupied, raster.mask[::-1, ::-1].astype(np.uint8), mode="valid")
@@ -383,8 +376,8 @@ def _candidate_anchor(
     xs = np.arange(x0, x1) * grid
     ys = np.arange(y0, y1) * grid
     for ox0, oy0, ox1, oy1 in obstacles:
-        blocked_x = (xs < ox1 - tolerance) & (ox0 < xs + raster.width - tolerance)
-        blocked_y = (ys < oy1 - tolerance) & (oy0 < ys + raster.depth - tolerance)
+        blocked_x = (xs < ox1) & (ox0 < xs + raster.width)
+        blocked_y = (ys < oy1) & (oy0 < ys + raster.depth)
         free &= ~(blocked_y[:, None] & blocked_x[None, :])
     columns = np.flatnonzero(free.any(axis=0))
     if not len(columns):
@@ -442,7 +435,6 @@ def _pack_order(
                 max_y=max_y,
                 global_minimum=global_minimum,
                 grid=grid,
-                tolerance=tolerance,
                 obstacles=obstacles,
             )
             if anchor is not None:
@@ -753,7 +745,6 @@ def pack_projected_footprints(
             placement.y,
             w,
             d,
-            tolerance,
         ):
             raise ValueError("projected-footprint placement overlaps a reserved area")
     return result
