@@ -767,7 +767,7 @@ def test_real_x2d_caps_nest_on_one_supported_plate_with_shared_gap(expansion_set
         if design.parameters["family"] == "zeekr-rear-contour-side"
     ]
     plan = plan_plates(
-        [PlateGroup("Caps", caps, 4)],
+        [PlateGroup("Caps", caps, 4, projected=True)],
         X2D.common_build(),
         size=lambda design: design.size,
         auto_roof_support=True,

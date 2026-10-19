@@ -481,7 +481,7 @@ def test_h2d_dual_safe_plan_nests_accessories_and_checks_all_nested_plates(h2d_p
         assert len(h2d_plan.layout.group_plates[group]) <= record["rectangle_plates"]
         assert record["minimum_projected_gap_mm"] == 4
         assert record["search_gap_mm"] == 3.25
-        assert record["maximum_layout_attempts"] == 1024
+        assert record["maximum_layout_attempts"] == 32
         assert record["random_seed"] == 0
     assert job.placement_policy["projected_footprint_gap_overrides_mm"] == {
         job.plate_names[plate]: clearance

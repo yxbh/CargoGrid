@@ -20,6 +20,7 @@ from cargo_grid.accessories import (
     required_bambu_object_settings,
     tile_matched_perimeter,
 )
+from cargo_grid.footprints import PACKING_SEARCH_ATTEMPTS
 from cargo_grid.jobs import Design, Job, omitted_design, tile_design
 from cargo_grid.packing import TowerClearance
 from cargo_grid.parameters import (
@@ -45,7 +46,7 @@ from cargo_grid.printers import (
 )
 from cargo_grid.rods import BRACE_SPACINGS_MM, ROD_HEIGHTS_MM, Rod, RodBrace
 
-PERIMETER_PACKING_ATTEMPTS = 1024
+WIDE_PERIMETER_PACKING_ATTEMPTS = 1024
 
 BRACKET_DISPLAY_NAMES = {
     (1, 2, 2): "Deep tall tile bracket — floor 1x2, wall 1x2",
@@ -437,7 +438,11 @@ def dual_safe_catalogue_job(
                         members,
                         packing_gap,
                         projected=True,
-                        max_layout_attempts=PERIMETER_PACKING_ATTEMPTS,
+                        max_layout_attempts=(
+                            WIDE_PERIMETER_PACKING_ATTEMPTS
+                            if outward == max(EDGE_OUTWARD_OPTIONS_MM)
+                            else PACKING_SEARCH_ATTEMPTS
+                        ),
                     )
                 )
     groups.append(

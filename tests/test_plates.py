@@ -76,6 +76,34 @@ def test_projected_packing_never_replaces_a_better_rectangle_result(monkeypatch)
     assert not any(plan.projected_footprints) and not plan.projected_clearances
 
 
+@pytest.mark.parametrize("quantity,attempts", [(2, 32), (3, 1024)])
+def test_deeper_family_search_is_reserved_for_three_or_more_rectangle_plates(
+    monkeypatch, quantity, attempts
+):
+    from cargo_grid import plates
+    from cargo_grid.packing import PrintPlacement
+
+    def search(footprints, *args, **kwargs):
+        assert kwargs["max_layout_attempts"] == attempts
+        return [PrintPlacement(index, 0, 0, 0) for index in range(len(footprints))]
+
+    monkeypatch.setattr(plates, "pack_projected_footprints", search)
+    plan = plan_plates(
+        [
+            PlateGroup(
+                "Boxes",
+                [_design(str(i), (10, 10, 2)) for i in range(quantity)],
+                1,
+                projected=True,
+                max_layout_attempts=1024,
+            )
+        ],
+        BuildVolume(10, 10, 10),
+        size=_size,
+    )
+    assert plan.projected_packing["Boxes"]["maximum_layout_attempts"] == attempts
+
+
 @pytest.mark.parametrize("quantity", [1, 2])
 def test_single_plate_rectangle_groups_do_not_pay_for_footprint_meshing(monkeypatch, quantity):
     from cargo_grid import plates

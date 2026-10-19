@@ -38,7 +38,7 @@ def test_real_wide_perimeter_family_uses_multi_plate_outline_packing(wide_perime
                 wide_perimeter_designs,
                 4,
                 projected=True,
-                max_layout_attempts=catalogue.PERIMETER_PACKING_ATTEMPTS,
+                max_layout_attempts=catalogue.WIDE_PERIMETER_PACKING_ATTEMPTS,
             )
         ],
         X2D.common_build(),
@@ -50,7 +50,7 @@ def test_real_wide_perimeter_family_uses_multi_plate_outline_packing(wide_perime
     assert not plan.unfit and len(plan.designs) == 18
     record = plan.projected_packing["30mm edges and corners - complete holes"]
     assert plan.plate_count == 2 and record["rectangle_plates"] == 3
-    assert record["maximum_layout_attempts"] == catalogue.PERIMETER_PACKING_ATTEMPTS
+    assert record["maximum_layout_attempts"] == catalogue.WIDE_PERIMETER_PACKING_ATTEMPTS
     assert set(plan.projected_clearances) <= set(range(plan.plate_count))
     job = Job(
         plan.designs,

@@ -493,12 +493,17 @@ def plan_plates(
                 candidate_footprints.append(projected_mesh_footprint(vertices, faces))
             search_gap = max(gap - FOOTPRINT_SEARCH_ALLOWANCE_MM, gap / 2)
             bounds, obstacles = _projected_bounds(group_build)
+            attempts = (
+                group.max_layout_attempts
+                if rectangle_score[0] > 2
+                else min(group.max_layout_attempts, PACKING_SEARCH_ATTEMPTS)
+            )
             try:
                 candidate = pack_projected_footprints(
                     candidate_footprints,
                     bounds,
                     bounding_sizes=[size[:2] for size in sizes],
-                    max_layout_attempts=group.max_layout_attempts,
+                    max_layout_attempts=attempts,
                     gap=gap,
                     search_gap=search_gap,
                     obstacles=obstacles,
@@ -519,7 +524,7 @@ def plan_plates(
                     "search_gap_mm": search_gap,
                     "grid_mm": 1,
                     "maximum_candidate_positions": 4_000_000,
-                    "maximum_layout_attempts": group.max_layout_attempts,
+                    "maximum_layout_attempts": attempts,
                     "random_seed": PACKING_SEARCH_SEED,
                 }
         offset = plan.plate_count
