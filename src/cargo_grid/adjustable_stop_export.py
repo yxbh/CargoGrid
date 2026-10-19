@@ -307,7 +307,8 @@ def _apply_adjustable_stop_support_settings(path: Path) -> None:
     patched = path.with_suffix(".patched")
     with ZipFile(patched, "w", ZIP_DEFLATED) as target:
         for name, data in entries.items():
-            target.writestr(name, data)
+            with target.open(name, "w") as output:
+                output.write(data)
     patched.replace(path)
 
 

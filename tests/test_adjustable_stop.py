@@ -239,7 +239,11 @@ def test_complete_print_project_uses_shared_h2d_support_conventions(
     )
     project = tmp_path / f"adjustable-stop-{nozzle_diameter_mm:g}.3mf"
     write_adjustable_stop_print_project(project, nozzle_diameter_mm)
+    first_export = project.read_bytes()
+    apply_settings(project)
+    assert project.read_bytes() == first_export
     with ZipFile(project) as archive:
+        assert {entry.date_time for entry in archive.infolist()} == {(1980, 1, 1, 0, 0, 0)}
         settings = json.loads(archive.read("Metadata/project_settings.config"))
         model_data = archive.read("Metadata/model_settings.config")
         assert original_model == [model_data]
