@@ -79,7 +79,7 @@ def test_smaller_printer_accounts_for_the_whole_bounded_inventory(
                 design.parameters["nx"],
                 design.parameters["ny"],
             ):
-                assert placement.x >= 26.5
+                assert placement.x >= 25.5
                 assert job.plate_builds[placement.plate].margin == 6
         turned = next(
             d
@@ -147,7 +147,7 @@ def test_catalogue_policy_works_with_a_distinct_printer_value(inventory_stand_in
     ]
     assert len(wide) == 2
     assert all(p.x == 64.9 and p.y == 5 for _, p in wide)
-    assert all(printer.common_x_mm[1] - (p.x + 186) == pytest.approx(5.1) for _, p in wide)
+    assert all(printer.shared_x_mm[1] - (p.x + 186) == pytest.approx(5.1) for _, p in wide)
     assert all("Test" in entry["reason"] for entry in job.omitted)
     strict = replace(printer, omit_unfit=False, diagonal_fallback=False)
     with pytest.raises(

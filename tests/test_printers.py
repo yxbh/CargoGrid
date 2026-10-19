@@ -70,8 +70,32 @@ def test_profile_names_keep_printer_specific_bambu_spelling():
     assert X2D.profiles[0.4].process == "0.24mm Standard @BBL X2D"
     assert H2D.tower_prime_volume_mm3 == 30
     assert X2D.tower_prime_volume_mm3 == 45
-    assert H2D.extruder_types == ("Direct Drive", "Direct Drive")
-    assert X2D.extruder_types == ("Direct Drive", "Bowden")
+    assert [(n.name, n.extruder_type, n.x_mm, n.height_mm, n.is_master) for n in H2D.nozzles] == [
+        ("left", "Direct Drive", (0, 325), 320, False),
+        ("right", "Direct Drive", (25, 350), 325, True),
+    ]
+    assert [(n.name, n.extruder_type, n.x_mm, n.height_mm, n.is_master) for n in X2D.nozzles] == [
+        ("main", "Direct Drive", (0, 256), 261, True),
+        ("auxiliary", "Bowden", (20.5, 256), 256, False),
+    ]
+    assert H2D.shared_x_mm == (25, 325) and H2D.shared_height_mm == 320
+    assert X2D.shared_x_mm == (20.5, 256) and X2D.shared_height_mm == 256
+
+
+def test_shared_reach_is_derived_from_nozzle_records_without_parallel_aliases():
+    auxiliary = replace(X2D.nozzles[1], x_mm=(24, 250), height_mm=250)
+    printer = replace(X2D, nozzles=(X2D.nozzles[0], auxiliary))
+    assert printer.shared_x_mm == (24, 250) and printer.shared_height_mm == 250
+    for name in (
+        "common_x_mm",
+        "common_height_mm",
+        "extruder_types",
+        "nozzle_names",
+        "master_extruder_id",
+    ):
+        assert not hasattr(printer, name)
+    with pytest.raises(ValueError, match="exactly one master"):
+        replace(printer, nozzles=(replace(printer.nozzles[0], is_master=False), auxiliary))
 
 
 @pytest.mark.parametrize(
@@ -103,7 +127,7 @@ def test_tower_manifest_names_the_selected_printer(printer, tmp_path):
     assert f"On the {printer.name} " in result["prime_tower"]["note"]
     with ZipFile(path) as archive:
         project = json.loads(archive.read("Metadata/project_settings.config"))
-    assert project["extruder_type"] == list(printer.extruder_types)
+    assert project["extruder_type"] == [nozzle.extruder_type for nozzle in printer.nozzles]
 
 
 def test_x2d_catalogue_rectangle_is_a_process_override_without_changing_support_or_prime_volume():

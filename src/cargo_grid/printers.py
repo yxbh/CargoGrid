@@ -18,6 +18,17 @@ class NozzleProfiles:
 
 
 @dataclass(frozen=True)
+class PrinterNozzle:
+    """One nozzle in Bambu slicer-slot order, not physical-extruder order."""
+
+    name: str
+    extruder_type: str
+    x_mm: tuple[float, float]
+    height_mm: float
+    is_master: bool
+
+
+@dataclass(frozen=True)
 class CatalogueSupportTuning:
     """Measured full-hole Auto-support catalogue settings for Bambu Studio 02.08.02.61."""
 
@@ -32,15 +43,25 @@ class CatalogueSupportTuning:
 class DualNozzlePrinter:
     name: str
     build: BuildVolume
-    common_x_mm: tuple[float, float]
-    common_height_mm: float
+    nozzles: tuple[PrinterNozzle, PrinterNozzle]
     profiles: dict[float, NozzleProfiles]
     tower_prime_volume_mm3: float = 30.0
-    extruder_types: tuple[str, str] = ("Direct Drive", "Direct Drive")
     diagonal_fallback: bool = False
     omit_unfit: bool = False
     common_omission_reason: str | None = None
     catalogue_support: CatalogueSupportTuning | None = None
+
+    def __post_init__(self) -> None:
+        if len(self.nozzles) != 2 or sum(nozzle.is_master for nozzle in self.nozzles) != 1:
+            raise ValueError("dual-nozzle printers need two nozzle slots and exactly one master")
+
+    @property
+    def shared_x_mm(self) -> tuple[float, float]:
+        return max(n.x_mm[0] for n in self.nozzles), min(n.x_mm[1] for n in self.nozzles)
+
+    @property
+    def shared_height_mm(self) -> float:
+        return min(nozzle.height_mm for nozzle in self.nozzles)
 
     @property
     def model(self) -> str:
@@ -48,12 +69,12 @@ class DualNozzlePrinter:
 
     def common_build(self) -> BuildVolume:
         """Shared nozzle reach, with another 5 mm inset for models."""
-        left, right = self.common_x_mm
+        left, right = self.shared_x_mm
         inset = COMMON_MODEL_INSET_MM
         return BuildVolume(
             self.build.x,
             self.build.y,
-            self.common_height_mm,
+            self.shared_height_mm,
             margin=inset,
             exclusions=(
                 Exclusion(0, 0, left + inset, self.build.y),
@@ -65,11 +86,11 @@ class DualNozzlePrinter:
         return {
             "name": f"{self.name} dual-nozzle safe",
             "common_reach_mm": {
-                "min_x": self.common_x_mm[0],
-                "max_x": self.common_x_mm[1],
+                "min_x": self.shared_x_mm[0],
+                "max_x": self.shared_x_mm[1],
                 "min_y": 0,
                 "max_y": self.build.y,
-                "max_z": self.common_height_mm,
+                "max_z": self.shared_height_mm,
             },
             "common_model_inset_mm": COMMON_MODEL_INSET_MM,
         }
@@ -77,8 +98,8 @@ class DualNozzlePrinter:
     def common_fit_reason(self) -> str:
         return self.common_omission_reason or (
             f"actual bounds exceed {self.name} common reach "
-            f"(X {self.common_x_mm[0]:g}..{self.common_x_mm[1]:g}, "
-            f"Y 0..{self.build.y:g}, Z <= {self.common_height_mm:g}) "
+            f"(X {self.shared_x_mm[0]:g}..{self.shared_x_mm[1]:g}, "
+            f"Y 0..{self.build.y:g}, Z <= {self.shared_height_mm:g}) "
             "with its 5 mm model inset; no scaling applied"
         )
 
@@ -107,8 +128,10 @@ class DualNozzlePrinter:
 H2D = DualNozzlePrinter(
     "H2D",
     BuildVolume(350, 320, 325),
-    (25, 325),
-    320,
+    (
+        PrinterNozzle("left", "Direct Drive", (0, 325), 320, False),
+        PrinterNozzle("right", "Direct Drive", (25, 350), 325, True),
+    ),
     {
         0.8: NozzleProfiles(
             0.32,
@@ -134,8 +157,10 @@ H2D = DualNozzlePrinter(
 X2D = DualNozzlePrinter(
     "X2D",
     BuildVolume(256, 256, 261),
-    (20.5, 256),
-    256,
+    (
+        PrinterNozzle("main", "Direct Drive", (0, 256), 261, True),
+        PrinterNozzle("auxiliary", "Bowden", (20.5, 256), 256, False),
+    ),
     {
         0.8: NozzleProfiles(
             0.32,
@@ -153,7 +178,6 @@ X2D = DualNozzlePrinter(
         ),
     },
     tower_prime_volume_mm3=45,
-    extruder_types=("Direct Drive", "Bowden"),
     diagonal_fallback=True,
     omit_unfit=True,
     catalogue_support=CatalogueSupportTuning(

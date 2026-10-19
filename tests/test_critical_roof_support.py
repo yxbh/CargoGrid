@@ -136,8 +136,8 @@ def test_coverage_without_support_is_not_silently_ignored(tmp_path):
         assert caught.value.code == 2 and not (tmp_path / coverage).exists()
 
 
-@pytest.mark.parametrize("nozzle_map", [None, (2, 1)])
-def test_cli_implicit_critical_and_explicit_full(tmp_path, nozzle_map):
+@pytest.mark.parametrize("nozzle_slots", [None, (2, 1)])
+def test_cli_implicit_critical_and_explicit_full(tmp_path, nozzle_slots):
     base = [
         "part",
         "--build-width-mm",
@@ -168,8 +168,8 @@ def test_cli_implicit_critical_and_explicit_full(tmp_path, nozzle_map):
         "--roof-interface-spacing-mm",
         "0",
     ]
-    if nozzle_map:
-        base += ["--roof-nozzle-slots", *map(str, nozzle_map)]
+    if nozzle_slots:
+        base += ["--roof-nozzle-slots", *map(str, nozzle_slots)]
     for coverage in ("critical", "full"):
         command = base + ["--output", str(tmp_path / coverage)]
         if coverage == "full":
@@ -177,8 +177,8 @@ def test_cli_implicit_critical_and_explicit_full(tmp_path, nozzle_map):
         assert main(command) == 0
         report = json.loads((tmp_path / coverage / "manifest.json").read_text())
         assert report["export"]["roof_support"]["settings"]["coverage"] == coverage
-        assert report["export"]["roof_support"]["settings"]["nozzle_map"] == (
-            list(nozzle_map) if nozzle_map else None
+        assert report["export"]["roof_support"]["settings"]["nozzle_slots"] == (
+            list(nozzle_slots) if nozzle_slots else None
         )
         assert report["export"]["roof_support"]["settings"]["foot_expansion"] == (
             0 if coverage == "full" else None

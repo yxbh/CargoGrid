@@ -564,7 +564,17 @@ def parser() -> argparse.ArgumentParser:
             type=int,
             nargs=2,
             metavar=("PETG_SLOT", "PLA_SLOT"),
-            help="optional Custom nozzle assignment; omit to keep automatic matching",
+            help=(
+                "optional PETG/PLA nozzle slots 1/2 for Custom matching ("
+                + "; ".join(
+                    f"{printer.name}: "
+                    + ", ".join(
+                        f"{slot}={nozzle.name}" for slot, nozzle in enumerate(printer.nozzles, 1)
+                    )
+                    for printer in PRINTERS.values()
+                )
+                + "); omit to keep automatic matching"
+            ),
         )
         p.add_argument(
             "--roof-foot-expansion-mm",

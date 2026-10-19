@@ -120,7 +120,7 @@ def test_print_job_uses_default_tower_only_for_multi_material_plates(
         estimate = BambuTowerEstimate(profile.layer_height_mm)
         side = estimate.side_mm(tallest_part_mm)
         brim = estimate.brim_mm(tallest_part_mm)
-        limit = H2D.common_x_mm[1]
+        limit = H2D.shared_x_mm[1]
         expected_x = floor((limit - BAMBU_TOWER_MARGIN_MM - side) * 100) / 100
         expected_reach = PrimeTower(
             brim,
@@ -141,7 +141,7 @@ def test_print_job_uses_default_tower_only_for_multi_material_plates(
         assert job.prime_tower_clearances == {0: expected_clearance}
         x, y = job.prime_tower_positions[0]
         x0, y0, x1, y1 = job.tower_bounds(0)
-        assert x0 >= H2D.common_x_mm[0]
+        assert x0 >= H2D.shared_x_mm[0]
         assert y0 >= 0
         assert y1 <= build.y
         assert x1 == pytest.approx(limit)
@@ -217,7 +217,7 @@ def test_complete_print_project_uses_shared_h2d_support_conventions(
     assert {placement.plate for placement in job.print_placements} == {0}
     assert job.part_gap == 8
     assert set(job.prime_tower_positions) == {0}
-    assert job.tower_bounds(0)[2] == pytest.approx(H2D.common_x_mm[1])
+    assert job.tower_bounds(0)[2] == pytest.approx(H2D.shared_x_mm[1])
 
     original_model = []
     apply_settings = adjustable_stop_export._apply_adjustable_stop_support_settings

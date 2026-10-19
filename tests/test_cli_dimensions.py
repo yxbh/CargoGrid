@@ -96,6 +96,9 @@ def test_help_explains_dimensions_and_multivalue_order(command, capsys):
         "X_MM Y_MM WIDTH_MM DEPTH_MM",
     ):
         assert explanation in normalized
+    for printer in PRINTERS.values():
+        slots = ", ".join(f"{slot}={nozzle.name}" for slot, nozzle in enumerate(printer.nozzles, 1))
+        assert f"{printer.name}: {slots}" in normalized
     assert not re.search(r"--build(?:[ =,]|$)", text)
 
 

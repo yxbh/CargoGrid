@@ -9,6 +9,7 @@ import pytest
 from cargo_grid.cli import parser
 from cargo_grid.printers import H2D, PRINTERS, X2D
 from cargo_grid.roof_support import BAMBU_SUPPORT_DEFAULTS
+from cargo_grid.sliced_extrusion import SUPPORT_REACH_ALLOWANCE_MM, feature_bounds
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -195,11 +196,11 @@ def test_failed_variant_leaves_the_output_folder_untouched(monkeypatch, tmp_path
     assert not any(tmp_path.iterdir())
 
 
-def _project(path, plates=2):
+def _project(path, plates=2, printer=H2D):
     settings = {
-        "printer_model": "Bambu Lab H2D",
-        "printer_settings_id": "Bambu Lab H2D 0.8 nozzle",
-        "print_settings_id": "0.32mm Balanced Strength @BBL H2D 0.8 nozzle",
+        "printer_model": printer.model,
+        "printer_settings_id": printer.profiles[0.8].printer,
+        "print_settings_id": printer.profiles[0.8].process,
         "filament_settings_id": ["PETG", "PLA"],
         "nozzle_diameter": ["0.8", "0.8"],
     }
@@ -284,7 +285,7 @@ def test_slice_plate_reports_what_bambu_refuses(monkeypatch, tmp_path, code, log
 )
 def test_all_layer_extrusion_bounds_include_width_and_arc_extrema(move, expected):
     gcode = f"M83\nG0 X30 Y10 Z0.2\n; FEATURE: Outer wall\n; LINE_WIDTH: 0.4\n{move}\n"
-    assert _tool().extrusion_bounds(gcode) == pytest.approx(expected)
+    assert feature_bounds(gcode)["Outer wall"] == pytest.approx(expected)
 
 
 def test_extrusion_bounds_ignore_startup_travel_and_retraction_and_track_absolute_e():
@@ -294,7 +295,9 @@ def test_extrusion_bounds_ignore_startup_travel_and_retraction_and_track_absolut
         "G0 X30 Y10\n; FEATURE: Prime tower\n; LINE_WIDTH: 0.4\n"
         "G1 X40 E11\nG1 X100 E10\nG0 X200\n"
     )
-    assert _tool().extrusion_bounds(gcode) == pytest.approx((29.8, 9.8, 0.2, 40.2, 10.2, 0.2))
+    assert feature_bounds(gcode) == {
+        "Prime tower": pytest.approx((29.8, 9.8, 0.2, 40.2, 10.2, 0.2))
+    }
 
 
 @pytest.mark.parametrize("x,passes", [(20.75, True), (20.74, False)])
@@ -304,12 +307,76 @@ def test_common_reach_check_uses_printed_width_not_just_the_centerline(tmp_path,
         archive.writestr("Metadata/project_settings.config", '{"printer_model":"Bambu Lab X2D"}')
         archive.writestr(
             "Metadata/plate_1.gcode",
-            f"M83\nG0 X{x} Y10 Z0.2\n; FEATURE: Support\n; LINE_WIDTH: 0.5\nG1 Y20 E1\n",
+            f"M83\nG0 X{x} Y10 Z0.2\n; FEATURE: Outer wall\n; LINE_WIDTH: 0.5\nG1 Y20 E1\n",
         )
     problem = _tool().extrusion_problem(path)
     assert (problem is None) == passes
     if not passes:
         assert "exceed X2D common reach/bed" in problem
+
+
+def _sliced_project(path, gcode, printer=X2D):
+    with ZipFile(path, "w") as archive:
+        archive.writestr(
+            "Metadata/project_settings.config", json.dumps({"printer_model": printer.model})
+        )
+        archive.writestr("Metadata/plate_1.gcode", gcode)
+
+
+@pytest.mark.parametrize("feature", ["Support", "Support interface", "Support transition"])
+@pytest.mark.parametrize("x,passes", [(20.25, True), (20.249, False)])
+def test_support_only_common_reach_allowance_has_an_exact_boundary(tmp_path, feature, x, passes):
+    tool = _tool()
+    assert SUPPORT_REACH_ALLOWANCE_MM == 0.5
+    path = tmp_path / "sliced.3mf"
+    _sliced_project(
+        path,
+        f"M83\nG0 X{x} Y10 Z0.2\n; FEATURE: {feature}\n; LINE_WIDTH: 0.5\nG1 Y20 E1\n",
+    )
+    assert (tool.extrusion_problem(path) is None) == passes
+
+
+@pytest.mark.parametrize(
+    "feature", ["Outer wall", "Inner wall", "Prime tower", "Brim", "Support interface extra"]
+)
+def test_support_allowance_does_not_hide_any_other_feature_overrun(tmp_path, feature):
+    path = tmp_path / "sliced.3mf"
+    _sliced_project(
+        path,
+        "M83\nG0 X20.25 Y10 Z0.2\n; FEATURE: Support\n; LINE_WIDTH: 0.5\nG1 Y20 E1\n"
+        f"G0 X20.74 Y10\n; FEATURE: {feature}\nG1 Y20 E1\n",
+    )
+    problem = _tool().extrusion_problem(path)
+    assert problem is not None and problem.startswith(feature)
+
+
+@pytest.mark.parametrize(
+    "move",
+    [
+        "X256 Y10 Z0.2",
+        "X40 Y0.24 Z0.2",
+        "X40 Y255.76 Z0.2",
+        "X40 Y10 Z-0.01",
+        "X40 Y10 Z256.01",
+    ],
+)
+def test_support_allowance_never_extends_the_bed_or_height(tmp_path, move):
+    path = tmp_path / "sliced.3mf"
+    _sliced_project(path, f"M83\nG0 {move}\n; FEATURE: Support\n; LINE_WIDTH: 0.5\nG1 X50 E1\n")
+    assert _tool().extrusion_problem(path) is not None
+
+
+@pytest.mark.parametrize(
+    "x,passes", [(24.75, True), (24.749, False), (325.25, True), (325.251, False)]
+)
+def test_support_allowance_applies_to_both_shared_x_edges_without_moving_h2d(tmp_path, x, passes):
+    path = tmp_path / "sliced.3mf"
+    _sliced_project(
+        path,
+        f"M83\nG0 X{x} Y10 Z0.2\n; FEATURE: Support\n; LINE_WIDTH: 0.5\nG1 Y20 E1\n",
+        printer=H2D,
+    )
+    assert (_tool().extrusion_problem(path) is None) == passes
 
 
 @pytest.mark.parametrize("rear,passes", [(47.5, True), (47.3, False)])
@@ -328,10 +395,12 @@ def test_rectangular_tower_check_uses_its_actual_reserved_envelope(tmp_path, rea
         assert "exceed reserved footprint" in problem
 
 
-def test_bambu_problems_name_the_plate_and_petg_nozzle(monkeypatch, tmp_path):
+@pytest.mark.parametrize("printer", PRINTERS.values(), ids=PRINTERS)
+@pytest.mark.parametrize("failed_slot", ["1", "2"])
+def test_bambu_problems_name_the_plate_and_petg_nozzle(monkeypatch, tmp_path, printer, failed_slot):
     tool = _tool()
     source = tmp_path / "job.3mf"
-    settings = _project(source)
+    settings = _project(source, printer=printer)
     monkeypatch.setattr(tool, "effective_settings", lambda project, bambu, work: settings)
     seen = []
 
@@ -341,7 +410,7 @@ def test_bambu_problems_name_the_plate_and_petg_nozzle(monkeypatch, tmp_path):
             "filament_map"
         ]
         seen.append((tuple(mapping), plate))
-        return "conflict" if (mapping[0], plate) == ("2", 2) else None
+        return "conflict" if (mapping[0], plate) == (failed_slot, 2) else None
 
     monkeypatch.setattr(tool, "slice_plate", fake_slice)
     problems = tool.bambu_problems(
@@ -351,7 +420,8 @@ def test_bambu_problems_name_the_plate_and_petg_nozzle(monkeypatch, tmp_path):
         jobs=2,
         tower_bounds={2: (25.75, 12, 63.25, 48)},
     )
-    assert problems == ["plate 2 with PETG on the right nozzle: conflict"]
+    nozzle = printer.nozzles[int(failed_slot) - 1].name
+    assert problems == [f"plate 2 with PETG on the {nozzle} nozzle: conflict"]
     assert sorted(seen) == [(("1", "2"), 1), (("1", "2"), 2), (("2", "1"), 1), (("2", "1"), 2)]
 
 
@@ -363,13 +433,16 @@ def test_bambu_check_runs_before_anything_is_written(monkeypatch, tmp_path, caps
     output = tmp_path / "out"
     output.mkdir()
     refused = tool.variants()[1].name
+    nozzle = H2D.nozzles[0].name
 
     def fake_problems(project, executable, work, jobs, tower_bounds=None):
         assert executable == bambu.resolve() and project.name == "job.3mf"
-        return ["plate 9 with PETG on the left nozzle: conflict"] if refused in str(work) else []
+        return (
+            [f"plate 9 with PETG on the {nozzle} nozzle: conflict"] if refused in str(work) else []
+        )
 
     monkeypatch.setattr(tool, "bambu_problems", fake_problems)
-    with pytest.raises(RuntimeError, match=f"{refused}: plate 9 with PETG on the left"):
+    with pytest.raises(RuntimeError, match=f"{refused}: plate 9 with PETG on the {nozzle}"):
         tool.main(["--output", str(output), "--bambu-studio", str(bambu)])
     assert not any(output.iterdir())
     monkeypatch.setattr(tool, "bambu_problems", lambda *args: [])
@@ -440,13 +513,17 @@ def test_native_system_presets_match_the_audited_printer_and_support_defaults(pr
     assert machine["printer_model"] == printer.model
     assert [float(v) for v in machine["nozzle_diameter"]] == [nozzle, nozzle]
     assert float(machine["printable_height"]) == printer.build.z
-    assert min(map(float, machine["extruder_printable_height"])) == printer.common_height_mm
+    assert [float(v) for v in machine["extruder_printable_height"]] == [
+        n.height_mm for n in printer.nozzles
+    ]
+    assert machine["extruder_type"] == [n.extruder_type for n in printer.nozzles]
     areas = [
         [tuple(map(float, point.split("x"))) for point in polygon.split(",")]
         for polygon in machine["extruder_printable_area"]
     ]
-    assert max(min(x for x, y in area) for area in areas) == printer.common_x_mm[0]
-    assert min(max(x for x, y in area) for area in areas) == printer.common_x_mm[1]
+    assert [(min(x for x, y in area), max(x for x, y in area)) for area in areas] == [
+        n.x_mm for n in printer.nozzles
+    ]
     assert all(min(y for x, y in area) == 0 for area in areas)
     assert all(max(y for x, y in area) == printer.build.y for area in areas)
     process = tool._resolve(root, "process", profiles.process)
@@ -458,3 +535,23 @@ def test_native_system_presets_match_the_audited_printer_and_support_defaults(pr
     assert max(float(p["filament_prime_volume"][0]) for p in filaments) == (
         printer.tower_prime_volume_mm3
     )
+
+
+@pytest.mark.native
+@pytest.mark.parametrize("printer,model_id", [(H2D, "O1D"), (X2D, "N6")])
+def test_native_nozzle_names_follow_the_resource_and_physical_extruder_map(printer, model_id):
+    executable = os.environ.get("CARGO_GRID_BAMBU")
+    if not executable:
+        pytest.skip("Set CARGO_GRID_BAMBU to enable local Bambu printer-resource checks")
+    tool = _tool()
+    root = tool._profiles(Path(executable).resolve(strict=True))
+    resource = json.loads((root.parent.parent / "printers" / f"{model_id}.json").read_text())
+    names = resource["00.00.00.00"]["tool_head_display_names"]
+    machine = tool._resolve(root, "machine", printer.profiles[0.8].printer)
+    assert tuple(n.name for n in printer.nozzles) == tuple(
+        names[physical]["nozzle"][2].removesuffix(" nozzle")
+        for physical in machine["physical_extruder_map"]
+    )
+    assert [slot for slot, n in enumerate(printer.nozzles, 1) if n.is_master] == [
+        int(machine["master_extruder_id"])
+    ]

@@ -32,7 +32,6 @@ from cargo_grid.parameters import (
     positive,
 )
 from cargo_grid.plates import (
-    AUTO_SUPPORT_PLATE_MARGIN_MM,
     AUTO_SUPPORT_TOWER_CLEARANCE_MM,
     TOWER_LEFT_CLEARANCE_MM,
     PlateGroup,
@@ -410,24 +409,8 @@ def dual_safe_catalogue_job(
         hole_diameter=hole_diameter,
         hole_scope=hole_scope,
     )
-    tile_build = None
-    if tuning is not None:
-        # A native 0.32 mm support foot on an ordinary tile reaches 5.14 mm west.
-        tile_build = replace(
-            common_build,
-            margin=AUTO_SUPPORT_PLATE_MARGIN_MM,
-            exclusions=(
-                Exclusion(
-                    0,
-                    0,
-                    printer.common_x_mm[0] + AUTO_SUPPORT_PLATE_MARGIN_MM,
-                    common_build.y,
-                ),
-                *common_build.exclusions[1:],
-            ),
-        )
     groups = [
-        PlateGroup("Tiles", family_members({"tile"}), packing_gap, build=tile_build),
+        PlateGroup("Tiles", family_members({"tile"}), packing_gap),
         PlateGroup("Female ramps", family_members({"ramp"}, "female"), packing_gap),
         PlateGroup("Male ramps", family_members({"ramp"}, "male"), packing_gap),
         PlateGroup("Normal stops", family_members({"vertical-stop"}), packing_gap),
@@ -486,7 +469,7 @@ def dual_safe_catalogue_job(
         )
         # Derive the nominal boundary; packing still checks each part's actual posed bounds.
         widest_member_mm = widest_cells * interface.pitch + interface.male_join_depth
-        left = printer.common_x_mm[1] - tuning.long_right_inset_mm - widest_member_mm
+        left = printer.shared_x_mm[1] - tuning.long_right_inset_mm - widest_member_mm
         long_build = replace(
             common_build,
             exclusions=(

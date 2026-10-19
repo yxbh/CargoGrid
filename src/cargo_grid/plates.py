@@ -257,7 +257,7 @@ class _DualNozzleTowerLayout(_TowerLayout):
         )
         self.printer = printer
         self.estimate = estimate
-        left, right = printer.common_x_mm
+        left, right = printer.shared_x_mm
         self.reason = (
             "PLA interface plates need a prime tower both nozzles reach; Bambu's default tower goes "
             "in the front-right corner where Bambu Studio keeps it (its estimated square 15 mm inside "
@@ -277,9 +277,9 @@ class _DualNozzleTowerLayout(_TowerLayout):
         brim = self.estimate.brim_mm(height)
         if self.estimate.width_mm is not None:
             x = (
-                self.printer.common_x_mm[0] + BAMBU_TOWER_MARGIN_MM
+                self.printer.shared_x_mm[0] + BAMBU_TOWER_MARGIN_MM
                 if front_left
-                else floor((self.printer.common_x_mm[1] - BAMBU_TOWER_MARGIN_MM - width) * 100)
+                else floor((self.printer.shared_x_mm[1] - BAMBU_TOWER_MARGIN_MM - width) * 100)
                 / 100
             )
             y = BAMBU_TOWER_MARGIN_MM
@@ -293,7 +293,7 @@ class _DualNozzleTowerLayout(_TowerLayout):
             return self._with_keep_out((x, y), reach, clearance)
         if front_left:
             raise ValueError("front-left dual-nozzle towers require a rectangular catalogue")
-        limit = self.printer.common_x_mm[1]
+        limit = self.printer.shared_x_mm[1]
         # Round down so Bambu's in-range test (x + margin + side <= limit) keeps the position.
         x = floor((limit - BAMBU_TOWER_MARGIN_MM - width) * 100) / 100
         y = BAMBU_TOWER_MARGIN_MM

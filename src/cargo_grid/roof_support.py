@@ -42,7 +42,7 @@ class RoofSupportSettings:
     top_gap: float = 0.0
     interface_layers: int = 2
     interface_spacing: float = 0.0
-    nozzle_map: tuple[int, int] | None = None
+    nozzle_slots: tuple[int, int] | None = None
     coverage: RoofCoverage = "critical"
     foot_expansion: float | None = None
     mode: RoofSupportMode = "painted"
@@ -65,13 +65,13 @@ class RoofSupportSettings:
             )
         if self.foot_expansion is not None and self.foot_expansion != -1:
             positive("roof support-foot expansion", self.foot_expansion, zero=True)
-        if self.nozzle_map is not None:
-            if len(self.nozzle_map) != 2:
+        if self.nozzle_slots is not None:
+            if len(self.nozzle_slots) != 2:
                 raise ValueError("roof supports need a PETG/PLA two-nozzle mapping")
-            for nozzle in self.nozzle_map:
-                count("physical nozzle", nozzle)
-            if set(self.nozzle_map) != {1, 2}:
-                raise ValueError("PETG and PLA must use distinct physical nozzles 1 and 2")
+            for nozzle in self.nozzle_slots:
+                count("nozzle slot", nozzle)
+            if set(self.nozzle_slots) != {1, 2}:
+                raise ValueError("PETG and PLA must use distinct nozzle slots 1 and 2")
 
     @property
     def contact_mode(self) -> Literal["zero-contact", "gapped"]:
@@ -107,9 +107,9 @@ class RoofSupportSettings:
             settings["support_object_xy_distance"] = "0.4"
         elif not inherit_defaults:
             settings.update(support_expansion="0", support_object_xy_distance="0.35")
-        if self.nozzle_map is not None:
+        if self.nozzle_slots is not None:
             settings.update(
-                filament_map=[str(n) for n in self.nozzle_map],
+                filament_map=[str(n) for n in self.nozzle_slots],
                 filament_map_mode="Manual",
             )
         if self.foot_expansion is not None and self.foot_expansion != -1:

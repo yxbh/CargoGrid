@@ -186,7 +186,7 @@ def adjustable_stop_print_job(
     tower = dual_nozzle_tower_reservation(printer, profile.layer_height_mm, tallest)
     tower_left = tower.bounds[0] - tower.clearance.left
     bounds = (
-        printer.common_x_mm[0] + build.margin,
+        printer.shared_x_mm[0] + build.margin,
         AUTO_SUPPORT_PLATE_MARGIN_MM,
         tower_left,
         build.y - AUTO_SUPPORT_PLATE_MARGIN_MM,

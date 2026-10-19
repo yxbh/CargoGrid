@@ -139,7 +139,7 @@ def _sides(clearance: TowerClearance) -> str:
 
 
 def _filament_mode(settings: BambuSettings) -> str:
-    if settings.roof_support and settings.roof_support.nozzle_map is not None:
+    if settings.roof_support and settings.roof_support.nozzle_slots is not None:
         return "Manual"
     return "Auto For Match"
 
@@ -176,7 +176,9 @@ def _bambu_project_settings(job: Job, bambu: BambuSettings, plate_count: int = 1
         settings["printer_model"] = bambu.printer.model
     if nozzle_count > 1:
         settings["extruder_type"] = (
-            list(bambu.printer.extruder_types) if bambu.printer else ["Direct Drive"] * nozzle_count
+            [nozzle.extruder_type for nozzle in bambu.printer.nozzles]
+            if bambu.printer
+            else ["Direct Drive"] * nozzle_count
         )
         settings["default_nozzle_volume_type"] = ["Standard"] * nozzle_count
         settings["nozzle_volume_type"] = ["Standard"] * nozzle_count
@@ -822,9 +824,11 @@ def _write_3mf(
                 for key in ("filament_maps", "filament_volume_maps"):
                     if key in settings:
                         _metadata(plate, key, settings[key])
-            if bambu and bambu.roof_support and bambu.roof_support.nozzle_map is not None:
+            if bambu and bambu.roof_support and bambu.roof_support.nozzle_slots is not None:
                 _metadata(
-                    plate, "filament_maps", " ".join(str(n) for n in bambu.roof_support.nozzle_map)
+                    plate,
+                    "filament_maps",
+                    " ".join(str(n) for n in bambu.roof_support.nozzle_slots),
                 )
                 _metadata(plate, "filament_volume_maps", "0 0")
             configured_plates[plate_index] = plate
@@ -974,8 +978,8 @@ def _write_3mf(
             {
                 "mode": _filament_mode(bambu),
                 "physical_map_requested": (
-                    list(bambu.roof_support.nozzle_map)
-                    if bambu.roof_support and bambu.roof_support.nozzle_map is not None
+                    list(bambu.roof_support.nozzle_slots)
+                    if bambu.roof_support and bambu.roof_support.nozzle_slots is not None
                     else None
                 ),
             }

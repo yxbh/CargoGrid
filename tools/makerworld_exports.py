@@ -15,8 +15,9 @@ With ``--bambu-studio PATH`` every plate is also sliced by that Bambu Studio exe
 with PETG on each nozzle, before anything is written. The check copy gets the full printer,
 process and filament profiles from that installation and a fixed filament-to-nozzle map; the
 written project is unchanged. Any G-code path conflict or unprintable plate stops the run.
-Generated extrusion must stay inside common reach and the bed; rectangular towers must
-also stay inside the manifest's reserved footprint.
+Generated extrusion must stay inside the bed; only support features have a small XY
+allowance beyond common nozzle reach. Rectangular towers must also stay inside the
+manifest's reserved footprint.
 MakerWorld re-slices uploads and rejects the same conflicts, which the Bambu Studio GUI only
 shows as a warning on the plate being previewed.
 
@@ -39,11 +40,11 @@ import sys
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from math import atan2, cos, hypot, pi, sin
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from cargo_grid.printers import PRINTERS, DualNozzlePrinter, NozzleProfiles
+from cargo_grid.sliced_extrusion import reach_problem
 
 PETG_COLOUR = "#688197"
 PLA_COLOUR = "#0A2989"
@@ -140,7 +141,7 @@ def generate(variant: Variant, scratch: Path) -> Path:
 
 # Bambu stores resolved filament-to-nozzle maps in the project; the check sets its own.
 PROFILE_CACHES = {"filament_map", "filament_map_2", "filament_nozzle_map", "filament_volume_map"}
-# PETG then PLA: on the left (1) and right (2) nozzle, then the other way round.
+# PETG then PLA in slicer slots 1/2, then swapped; display names are printer-specific.
 NOZZLE_MAPS = (("1", "2"), ("2", "1"))
 # Messages the CLI logs as errors on plates it slices successfully.
 PROBLEMS = re.compile(
@@ -248,75 +249,6 @@ def check_copy(project: Path, effective: dict, mapping: tuple[str, ...], target:
     return plates
 
 
-def extrusion_bounds(gcode: str, feature: str | None = None) -> tuple[float, ...] | None:
-    """Bound generated extrusion, including line width and XY arc extrema, not startup macros."""
-    x = y = z = e = width = 0.0
-    absolute_e, absolute_xyz = False, True
-    role, bounds = "unknown", None
-    for line in gcode.splitlines():
-        if line.startswith("; FEATURE:"):
-            role = line.split(":", 1)[1].strip()
-        elif line.startswith("; LINE_WIDTH:"):
-            width = float(line.split(":", 1)[1])
-        command = line.split(";", 1)[0].strip()
-        operation = command.split(maxsplit=1)[0] if command else ""
-        if operation in ("M82", "M83"):
-            absolute_e = operation == "M82"
-        elif operation in ("G90", "G91"):
-            absolute_xyz = operation == "G90"
-        fields = {
-            key: float(value)
-            for key, value in re.findall(r"([XYZEIJ])([+-]?(?:\d+(?:\.\d*)?|\.\d+))", command)
-        }
-        if operation == "G92":
-            x, y, z, e = (fields.get(key, value) for key, value in zip("XYZE", (x, y, z, e)))
-        elif operation in ("G0", "G1", "G2", "G3"):
-            nx, ny, nz = (
-                fields.get(key, value) if absolute_xyz else value + fields.get(key, 0)
-                for key, value in zip("XYZ", (x, y, z))
-            )
-            extrusion = fields.get("E", e if absolute_e else 0)
-            delta = extrusion - e if absolute_e else extrusion
-            if (
-                delta > 0
-                and role not in ("unknown", "Custom")
-                and (feature is None or role == feature)
-                and (nx != x or ny != y or "I" in fields or "J" in fields)
-            ):
-                if width <= 0:
-                    raise ValueError("generated extrusion has no positive line width")
-                points = [(x, y), (nx, ny)]
-                if operation in ("G2", "G3"):
-                    cx, cy = x + fields.get("I", 0), y + fields.get("J", 0)
-                    radius = hypot(x - cx, y - cy)
-                    start, end = atan2(y - cy, x - cx), atan2(ny - cy, nx - cx)
-                    direction = -1 if operation == "G2" else 1
-                    sweep = (direction * (end - start)) % (2 * pi)
-                    if (x, y) == (nx, ny):
-                        sweep = 2 * pi
-                    for angle in (0, pi / 2, pi, 3 * pi / 2):
-                        if (direction * (angle - start)) % (2 * pi) <= sweep + 1e-9:
-                            points.append((cx + radius * cos(angle), cy + radius * sin(angle)))
-                box = (
-                    min(p[0] for p in points) - width / 2,
-                    min(p[1] for p in points) - width / 2,
-                    min(z, nz),
-                    max(p[0] for p in points) + width / 2,
-                    max(p[1] for p in points) + width / 2,
-                    max(z, nz),
-                )
-                bounds = (
-                    tuple(min(a, b) for a, b in zip(bounds[:3], box[:3]))
-                    + tuple(max(a, b) for a, b in zip(bounds[3:], box[3:]))
-                    if bounds is not None
-                    else box
-                )
-            x, y, z = nx, ny, nz
-            if absolute_e:
-                e = extrusion
-    return bounds
-
-
 def extrusion_problem(sliced: Path, reserved_tower: tuple[float, ...] | None = None) -> str | None:
     with ZipFile(sliced) as archive:
         settings = json.loads(archive.read("Metadata/project_settings.config"))
@@ -325,31 +257,7 @@ def extrusion_problem(sliced: Path, reserved_tower: tuple[float, ...] | None = N
         if len(names) != 1:
             return f"expected one sliced plate, found {len(names)} G-code files"
         gcode = archive.read(names[0]).decode()
-        bounds = extrusion_bounds(gcode)
-    if bounds is None:
-        return "sliced plate has no generated extrusion"
-    x0, y0, z0, x1, y1, z1 = bounds
-    if (
-        x0 < printer.common_x_mm[0]
-        or y0 < 0
-        or z0 < 0
-        or x1 > printer.common_x_mm[1]
-        or y1 > printer.build.y
-        or z1 > printer.common_height_mm
-    ):
-        return f"all-layer extrusion bounds {bounds} exceed {printer.name} common reach/bed"
-    if reserved_tower is not None:
-        tower = extrusion_bounds(gcode, feature="Prime tower")
-        if tower is not None and (
-            tower[0] < reserved_tower[0]
-            or tower[1] < reserved_tower[1]
-            or tower[3] > reserved_tower[2]
-            or tower[4] > reserved_tower[3]
-        ):
-            return (
-                f"prime-tower extrusion bounds {tower} exceed reserved footprint {reserved_tower}"
-            )
-    return None
+    return reach_problem(gcode, printer, reserved_tower)
 
 
 def slice_plate(
@@ -384,6 +292,7 @@ def bambu_problems(
     """Slice every plate with PETG on each nozzle; list what Bambu Studio refuses."""
     work.mkdir(parents=True)
     effective = effective_settings(project, bambu, work)
+    printer = next(p for p in PRINTERS.values() if p.model == effective["printer_model"])
     tasks = []
     for mapping in NOZZLE_MAPS:
         folder = work / f"petg-nozzle-{mapping[0]}"
@@ -401,9 +310,9 @@ def bambu_problems(
                 tasks,
             )
         )
-    side = {"1": "left", "2": "right"}
     return [
-        f"plate {plate} with PETG on the {side[mapping[0]]} nozzle: {problem}"
+        f"plate {plate} with PETG on the {printer.nozzles[int(mapping[0]) - 1].name} nozzle: "
+        f"{problem}"
         for (mapping, _, plate, _), problem in zip(tasks, results)
         if problem
     ]
