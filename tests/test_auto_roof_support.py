@@ -16,7 +16,7 @@ from tower_checks import assert_towers_stay_where_bambu_keeps_them
 from cargo_grid import BuildVolume, Interface, Tile
 from cargo_grid import catalogue as catalogue_module
 from cargo_grid.accessories import Accessory
-from cargo_grid.catalogue import accessory_design, h2d_dual_safe_catalogue_job
+from cargo_grid.catalogue import accessory_design, dual_safe_catalogue_job
 from cargo_grid.cli import main
 from cargo_grid.export import BambuSettings, Material, export_job, write_3mf
 from cargo_grid.jobs import Design, Job, tile_design, tile_identity
@@ -25,9 +25,10 @@ from cargo_grid.plates import (
     AUTO_SUPPORT_TOWER_CLEARANCE_MM,
     DEFAULT_PRIME_TOWER,
     BambuTowerEstimate,
-    _H2DTowerLayout,
+    _DualNozzleTowerLayout,
     needs_auto_support,
 )
+from cargo_grid.printers import H2D
 from cargo_grid.rods import Rod, RodBrace
 from cargo_grid.roof_support import (
     OBJECT_AUTO_SUPPORT,
@@ -51,6 +52,13 @@ H2D_PLA = "Bambu PLA Basic @BBL H2D 0.8 nozzle"
 MATERIALS = (Material(H2D_PETG, "PETG", "#637b70"), Material(H2D_PLA, "PLA", "#dddddd"))
 AUTO = RoofSupportSettings(mode="auto")
 BUILD = BuildVolume(350, 320, 325)
+BAMBU_ARGS = [
+    "--bambu",
+    "--nozzle-diameter-mm",
+    "0.8",
+    "--layer-height-mm",
+    "0.32",
+]
 H2D_ARGS = [
     "--build-width-mm",
     "350",
@@ -58,11 +66,7 @@ H2D_ARGS = [
     "320",
     "--build-height-mm",
     "325",
-    "--bambu",
-    "--nozzle-diameter-mm",
-    "0.8",
-    "--layer-height-mm",
-    "0.32",
+    *BAMBU_ARGS,
 ]
 TWO_MATERIALS = [
     "--material",
@@ -271,7 +275,7 @@ def test_prime_tower_must_stay_on_the_plate_and_clear_of_models(
 def test_planned_tower_clearance_allows_touching_and_names_each_side(
     designs, tmp_path, offset, fits
 ):
-    reservation = _H2DTowerLayout(BambuTowerEstimate(0.2)).reserve(14.92)
+    reservation = _DualNozzleTowerLayout(H2D, BambuTowerEstimate(0.2)).reserve(14.92)
     area = reservation.build.exclusions[-1]
     job = Job(
         [designs[0]["tile"]],
@@ -328,26 +332,26 @@ def test_auto_part_job_turns_rail_ends_over_without_object_overrides(designs):
     "command,message",
     [
         (
-            ["catalogue", "--h2d-dual-safe", "--material", H2D_PETG, "PETG", "#637b70"],
+            ["catalogue", "--printer", "h2d", "--material", H2D_PETG, "PETG", "#637b70"],
             "two official",
         ),
         (
-            ["catalogue", "--h2d-dual-safe", *TWO_MATERIALS, "--roof-coverage", "full"],
+            ["catalogue", "--printer", "h2d", *TWO_MATERIALS, "--roof-coverage", "full"],
             "--roof-coverage applies to painted",
         ),
-        (["catalogue", "--h2d-dual-safe", *TWO_MATERIALS], "requires one official"),
+        (["catalogue", "--printer", "h2d", *TWO_MATERIALS], "requires one official"),
         (
-            ["extras", "zeekr-7x", "--h2d-dual-safe", "--material", H2D_PETG, "PETG", "#637b70"],
+            ["extras", "zeekr-7x", "--printer", "h2d", "--material", H2D_PETG, "PETG", "#637b70"],
             "two official",
         ),
     ],
 )
 def test_cli_rejects_unsupported_auto_combinations(command, message, tmp_path, capsys):
     mode = ["--roof-support", "--roof-support-mode", "auto"]
-    if command[1] == "--h2d-dual-safe" and "requires one official" in message:
+    if "requires one official" in message:
         mode = []
     with pytest.raises(SystemExit) as error:
-        main([*command, *H2D_ARGS, *mode, "--output", str(tmp_path / "job")])
+        main([*command, *BAMBU_ARGS, *mode, "--output", str(tmp_path / "job")])
     assert error.value.code == 2
     assert message in capsys.readouterr().err
     assert not (tmp_path / "job").exists()
@@ -390,9 +394,9 @@ def _corner(size):
 
 @pytest.mark.parametrize("layer_height", [0.32, 0.24])
 def test_h2d_auto_plan_reserves_a_tower_corner_on_every_support_plate(stubbed_h2d, layer_height):
-    default = h2d_dual_safe_catalogue_job(solid_bottom_mm=T)
-    job = h2d_dual_safe_catalogue_job(
-        solid_bottom_mm=T, auto_roof_support=True, layer_height_mm=layer_height
+    default = dual_safe_catalogue_job(H2D, solid_bottom_mm=T)
+    job = dual_safe_catalogue_job(
+        H2D, solid_bottom_mm=T, auto_roof_support=True, layer_height_mm=layer_height
     )
     assert default.prime_tower is None and default.prime_tower_positions == {}
     plates = {}
@@ -406,7 +410,7 @@ def test_h2d_auto_plan_reserves_a_tower_corner_on_every_support_plate(stubbed_h2
         assert 25 <= x0 and x1 <= 325
         for design, placement in plates[plate]:
             size = design.bambu_size
-            width, depth = size[:2] if placement.rotation == 0 else size[1::-1]
+            width, depth = size[:2] if placement.rotation % 180 == 0 else size[1::-1]
             assert 6 - 1e-6 <= placement.y and placement.y + depth <= 314 + 1e-6
             assert placement.x + width <= 320 + 1e-6
     # The 5x5 only fits one nozzle's area, so neither H2D plan includes it or maps a nozzle.
@@ -459,7 +463,7 @@ def test_plain_auto_catalogue_reserves_a_front_left_tower_corner(stubbed_h2d):
 
 @pytest.mark.slow
 def test_real_h2d_auto_plan_with_solid_bottom(tmp_path):
-    job = h2d_dual_safe_catalogue_job(solid_bottom_mm=T, auto_roof_support=True)
+    job = dual_safe_catalogue_job(H2D, solid_bottom_mm=T, auto_roof_support=True)
     assert max(p.plate for p in job.print_placements) + 1 == 27
     report = write_3mf(job, tmp_path / "auto.3mf", bambu=bambu())
     roof = report["roof_support"]

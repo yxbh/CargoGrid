@@ -33,9 +33,10 @@ from cargo_grid.footprints import (
 )
 from cargo_grid.jobs import Design, Job
 from cargo_grid.meshes import write_stl
-from cargo_grid.packing import PrintPlacement, TowerClearance, pack_sizes
+from cargo_grid.packing import PACKING_ROTATIONS, PrintPlacement, TowerClearance, pack_sizes
 from cargo_grid.parameters import DEFAULT_HOLE_DIAMETER_MM, BuildVolume, Interface, count, positive
 from cargo_grid.prepared import Bounds, PreparedShape, rotated_points, rotation_matrix_3mf
+from cargo_grid.printers import DualNozzlePrinter, bambu_flush_settings
 from cargo_grid.rods import ROD_FAMILIES, Rod, RodBrace, fit_evidence
 from cargo_grid.roof_support import (
     RoofSupportSettings,
@@ -91,7 +92,7 @@ class BambuSettings:
     print_settings_id: str | None = None
     bed_type: str | None = None
     machine_nozzle_count: int = 1
-    printer_model: str | None = None
+    printer: DualNozzlePrinter | None = None
 
     def __post_init__(self) -> None:
         from cargo_grid.parameters import positive
@@ -107,8 +108,8 @@ class BambuSettings:
             not self.printer_settings_id.strip() or not self.print_settings_id.strip()
         ):
             raise ValueError("printer and process profile IDs must not be empty")
-        if self.printer_model is not None and not self.printer_model.strip():
-            raise ValueError("printer model must not be empty")
+        if self.printer is not None and not isinstance(self.printer, DualNozzlePrinter):
+            raise ValueError("printer must be DualNozzlePrinter")
         if self.roof_support is not None:
             if not isinstance(self.roof_support, RoofSupportSettings):
                 raise ValueError("roof_support must be RoofSupportSettings")
@@ -138,15 +139,16 @@ def _sides(clearance: TowerClearance) -> str:
 
 
 def _filament_mode(settings: BambuSettings) -> str:
-    if settings.roof_support and settings.roof_support.nozzle_map is not None:
+    if settings.roof_support and settings.roof_support.nozzle_slots is not None:
         return "Manual"
     return "Auto For Match"
 
 
 def _bambu_project_settings(job: Job, bambu: BambuSettings, plate_count: int = 1) -> dict:
-    nozzle_count = max(
-        bambu.machine_nozzle_count,
-        2 if bambu.roof_support else 1,
+    nozzle_count = (
+        len(bambu.printer.nozzles)
+        if bambu.printer is not None
+        else max(bambu.machine_nozzle_count, 2 if bambu.roof_support else 1)
     )
     settings = {
         "version": "2.8.2.61",
@@ -171,15 +173,27 @@ def _bambu_project_settings(job: Job, bambu: BambuSettings, plate_count: int = 1
         "filament_map_mode": _filament_mode(bambu),
     }
     settings.update(BAMBU_PROCESS_DEFAULTS)
-    if bambu.printer_model is not None:
-        settings["printer_model"] = bambu.printer_model
+    if bambu.printer is not None:
+        settings["printer_model"] = bambu.printer.model
     if nozzle_count > 1:
-        settings["extruder_type"] = ["Direct Drive"] * nozzle_count
+        settings.update(bambu_flush_settings(len(bambu.materials), nozzle_count))
+        settings["extruder_type"] = (
+            [nozzle.extruder_type for nozzle in bambu.printer.nozzles]
+            if bambu.printer
+            else ["Direct Drive"] * nozzle_count
+        )
         settings["default_nozzle_volume_type"] = ["Standard"] * nozzle_count
         settings["nozzle_volume_type"] = ["Standard"] * nozzle_count
     if bambu.bed_type is not None:
         settings["curr_bed_type"] = bambu.bed_type
     overrides = set(BAMBU_PROCESS_DEFAULTS)
+    if job.prime_tower_width_mm is not None:
+        tower_shape = {
+            "prime_tower_width": f"{job.prime_tower_width_mm:g}",
+            "prime_tower_rib_wall": "0",
+        }
+        settings.update(tower_shape)
+        overrides.update(tower_shape)
     if bambu.roof_support:
         settings.update(bambu.roof_support.native_settings(process_profile=bambu.print_settings_id))
         overrides.update(
@@ -187,7 +201,7 @@ def _bambu_project_settings(job: Job, bambu: BambuSettings, plate_count: int = 1
         )
     default = next(iter(job.prime_tower_positions.values()), None)
     if job.prime_tower is not None and default is not None:
-        # Bambu's default tower is used; only its per-plate position is written.
+        # Positions remain per plate; a catalogue's rectangular shape is project-wide.
         positions = [job.prime_tower_positions.get(plate, default) for plate in range(plate_count)]
         tower = {
             "wipe_tower_x": [f"{x:g}" for x, _ in positions],
@@ -290,6 +304,17 @@ def _validate_request(job: Job, bambu: BambuSettings | None, stack: StackSetting
     if not job.designs:
         raise ValueError("a job needs at least one design")
     positive("part gap", job.part_gap, zero=True)
+    if (
+        job.prime_tower_width_mm is not None
+        and bambu
+        and (
+            bambu.printer is None
+            or bambu.printer.catalogue_support is None
+            or not bambu.roof_support
+            or bambu.roof_support.mode != "auto"
+        )
+    ):
+        raise ValueError("rectangular prime towers are limited to X2D Auto-support catalogues")
     names = set()
     reserved = {
         "CON",
@@ -415,14 +440,16 @@ def _explicit_placements(
             or placement.plate < 0
             or isinstance(placement.rotation, bool)
             or not isinstance(placement.rotation, int)
-            or placement.rotation not in (0, 90)
+            or placement.rotation not in PACKING_ROTATIONS
         ):
-            raise ValueError("explicit placements require nonnegative plates and 0/90 rotations")
+            raise ValueError(
+                "explicit placements require nonnegative plates and 0/90/180/270 rotations"
+            )
         if not isfinite(placement.x) or not isfinite(placement.y):
             raise ValueError("explicit placement coordinates must be finite")
         for dimension in size:
             positive("part dimension", dimension)
-        width, depth = size[:2] if placement.rotation == 0 else size[1::-1]
+        width, depth = size[:2] if placement.rotation % 180 == 0 else size[1::-1]
         if not build.contains_box(placement.x, placement.y, width, depth, size[2]):
             raise ValueError(f"explicit placement {index} exceeds the build envelope")
         plate_build = plate_builds.get(placement.plate)
@@ -490,7 +517,7 @@ class _PreparedProject:
         self.job = deepcopy(job)
         self.job.validate_plate_builds()
         self.geometries: dict[int, PreparedShape] = {}
-        self.mesh_sources: dict[int, tuple[PreparedShape, float, float]] = {}
+        self.mesh_sources: dict[int, tuple[PreparedShape, float, float, float]] = {}
         self.project_geometry: dict[int, PreparedShape] = {}
         self.batches: list[tuple[Design, list[Volume], int]] = []
         for design in self.job.designs:
@@ -501,6 +528,7 @@ class _PreparedProject:
                 source,
                 (design.recommended_print_rotation_x or 0) if oriented else 0,
                 (design.recommended_print_rotation_y or 0) if oriented else 0,
+                (design.recommended_print_rotation_z or 0) if oriented else 0,
             )
             # Keep the posed object alive even when a stack uses separate volumes.
             self.project_geometry[id(design)] = self.geometry(posed)
@@ -583,7 +611,7 @@ class _PreparedProject:
             for placement, size in zip(self.placements, self.sizes):
                 if placement.plate != plate:
                     continue
-                width, depth = size[:2] if placement.rotation == 0 else size[1::-1]
+                width, depth = size[:2] if placement.rotation % 180 == 0 else size[1::-1]
                 # Planned models may touch the clearance edge; allow for rounding.
                 if (
                     k0 + 1e-6 < placement.x + width
@@ -620,14 +648,14 @@ class _PreparedProject:
         return result
 
     def mesh(self, shape, packing_rotation: int):
-        geometry, rx, ry = self.mesh_source(shape)
+        geometry, rx, ry, rz = self.mesh_source(shape)
         points, faces, _ = geometry.mesh
-        return rotated_points(points, rx, ry, packing_rotation), faces
+        return rotated_points(points, rx, ry, rz + packing_rotation), faces
 
-    def mesh_source(self, shape) -> tuple[PreparedShape, float, float]:
+    def mesh_source(self, shape) -> tuple[PreparedShape, float, float, float]:
         if id(shape) in self.mesh_sources:
             return self.mesh_sources[id(shape)]
-        return self.geometry(shape), 0, 0
+        return self.geometry(shape), 0, 0, 0
 
     def batch_geometries(self, design: Design, volumes: list[Volume]) -> list[PreparedShape]:
         return [
@@ -655,6 +683,12 @@ def write_3mf(
     prepared = _PreparedProject(job, bambu, stack, catalogue)
     with TemporaryFile() as mesh_buffer:
         return _write_3mf(prepared, path, mesh_buffer, bambu=bambu)
+
+
+def _write_archive_entry(archive: ZipFile, name: str, data: bytes) -> None:
+    """Streaming entries use the fixed ZIP epoch rather than the current wall-clock time."""
+    with archive.open(name, "w") as output:
+        output.write(data)
 
 
 def _write_3mf(
@@ -798,9 +832,11 @@ def _write_3mf(
                 for key in ("filament_maps", "filament_volume_maps"):
                     if key in settings:
                         _metadata(plate, key, settings[key])
-            if bambu and bambu.roof_support and bambu.roof_support.nozzle_map is not None:
+            if bambu and bambu.roof_support and bambu.roof_support.nozzle_slots is not None:
                 _metadata(
-                    plate, "filament_maps", " ".join(str(n) for n in bambu.roof_support.nozzle_map)
+                    plate,
+                    "filament_maps",
+                    " ".join(str(n) for n in bambu.roof_support.nozzle_slots),
                 )
                 _metadata(plate, "filament_volume_maps", "0 0")
             configured_plates[plate_index] = plate
@@ -837,13 +873,17 @@ def _write_3mf(
         if bambu and design.apply_orientation_to_bambu:
             angle_x = design.recommended_print_rotation_x or 0
             angle_y = design.recommended_print_rotation_y or 0
+            angle_z = design.recommended_print_rotation_z or 0
             # 3MF stores basis columns; this translation includes the displayed plate origin.
             transform = {
                 "packing_rotation_z_degrees": rotation,
                 "translation_mm": translation,
                 "packed_size_mm": tuple(rotated_bounds.size),
                 "plate_local_lower_corner_mm": (px, py, 0),
-                "matrix_3mf": (*rotation_matrix_3mf(angle_x, angle_y, rotation), *translation),
+                "matrix_3mf": (
+                    *rotation_matrix_3mf(angle_x, angle_y, angle_z + rotation),
+                    *translation,
+                ),
                 "applied_to_mesh": True,
             }
             if design.recommended_print_rotation_x is not None:
@@ -859,6 +899,13 @@ def _write_3mf(
                     configured,
                     "cargo_grid_source_rotation_y",
                     design.recommended_print_rotation_y,
+                )
+            if design.recommended_print_rotation_z is not None:
+                transform["rotation_z_degrees"] = design.recommended_print_rotation_z
+                _metadata(
+                    configured,
+                    "cargo_grid_source_rotation_z",
+                    design.recommended_print_rotation_z,
                 )
             record["items"][-1]["source_to_project_transform"] = transform
         record["volumes"].extend(
@@ -876,6 +923,9 @@ def _write_3mf(
             }
             for v in volumes
         )
+    for plate in configured_plates.values():
+        config.remove(plate)
+    config.extend(configured_plates[i] for i in sorted(configured_plates))
     plates = [plate_records[i] for i in sorted(plate_records)]
     types = ET.Element("Types", xmlns=CONTENT)
     for extension, content_type in (
@@ -893,8 +943,8 @@ def _write_3mf(
         Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel",
     )
     with ZipFile(path, "x", ZIP_DEFLATED) as archive:
-        archive.writestr("[Content_Types].xml", _bytes(types))
-        archive.writestr("_rels/.rels", _bytes(rels))
+        _write_archive_entry(archive, "[Content_Types].xml", _bytes(types))
+        _write_archive_entry(archive, "_rels/.rels", _bytes(rels))
         with archive.open("3D/3dmodel.model", "w", force_zip64=True) as output:
             output.write(
                 f'<?xml version="1.0" encoding="utf-8"?>'
@@ -912,11 +962,13 @@ def _write_3mf(
                     output.write(ET.tostring(child, encoding="utf-8"))
             output.write(b"</model>")
         if bambu:
-            archive.writestr("Metadata/model_settings.config", _bytes(config))
-            archive.writestr(
+            _write_archive_entry(archive, "Metadata/model_settings.config", _bytes(config))
+            _write_archive_entry(
+                archive,
                 "Metadata/project_settings.config",
-                json.dumps(_bambu_project_settings(job, bambu, plate_count), indent=2),
+                json.dumps(_bambu_project_settings(job, bambu, plate_count), indent=2).encode(),
             )
+    tower_printer = bambu.printer.name if bambu and bambu.printer else "H2D"
     return {
         "format": "bambu-project" if bambu else "core-geometry",
         "plates": plates,
@@ -935,8 +987,8 @@ def _write_3mf(
             {
                 "mode": _filament_mode(bambu),
                 "physical_map_requested": (
-                    list(bambu.roof_support.nozzle_map)
-                    if bambu.roof_support and bambu.roof_support.nozzle_map is not None
+                    list(bambu.roof_support.nozzle_slots)
+                    if bambu.roof_support and bambu.roof_support.nozzle_slots is not None
                     else None
                 ),
             }
@@ -949,7 +1001,23 @@ def _write_3mf(
             if job.prime_tower is None
             else {
                 "prime_tower": {
-                    "tower": "Bambu default (no tower settings written)",
+                    "tower": (
+                        "Bambu default (no tower settings written)"
+                        if job.prime_tower_width_mm is None
+                        else "X2D catalogue rectangular tower"
+                    ),
+                    **(
+                        {
+                            "process_settings": {
+                                "prime_tower_width": f"{job.prime_tower_width_mm:g}",
+                                "prime_tower_rib_wall": "0",
+                            },
+                            "settings_scope": "project",
+                            "physical_stability_verified": False,
+                        }
+                        if job.prime_tower_width_mm is not None
+                        else {}
+                    ),
                     "reserved_reach_from_origin_mm": {
                         "left": job.prime_tower.left,
                         "front": job.prime_tower.front,
@@ -966,7 +1034,11 @@ def _write_3mf(
                         }
                         for plate, (x, y) in sorted(job.prime_tower_positions.items())
                     ],
-                    "note": "Each plate sets only the tower origin. On the H2D it is where Bambu Studio 02.08.02.61 places the tower when it opens the project, and the reserved bounds cover its estimated tower, automatic brim and the extra depth seen in local slices. They are not a guarantee for other profiles or materials.",
+                    "note": (
+                        f"Each plate sets only the tower origin. On the {tower_printer} it is where Bambu Studio 02.08.02.61 places the tower when it opens the project, and the reserved bounds cover its estimated tower, automatic brim and the extra depth seen in local slices. They are not a guarantee for other profiles or materials."
+                        if job.prime_tower_width_mm is None
+                        else "X2D catalogue width and rib-wall settings are project-wide; measured four-cell groups use a front-left origin and ordinary groups use front-right. Prime volumes, automatic brim, support feet and process support thresholds are unchanged. Bounds reserve the tower body, brim and nozzle-change wipe lines. Tall-plate tower stability is physically untested."
+                    ),
                 }
             }
         ),
@@ -1113,6 +1185,7 @@ def export_job(
         for design in job.designs
         if design.recommended_print_rotation_x is not None
         or design.recommended_print_rotation_y is not None
+        or design.recommended_print_rotation_z is not None
     }
     output.mkdir(parents=True, exist_ok=True)
     entries = []
@@ -1225,6 +1298,7 @@ def export_job(
         if (
             design.recommended_print_rotation_x is not None
             or design.recommended_print_rotation_y is not None
+            or design.recommended_print_rotation_z is not None
         ):
             bounds = recommendations[id(design)]
             rotations = []
@@ -1232,6 +1306,8 @@ def export_job(
                 rotations.append({"axis": "X", "degrees": design.recommended_print_rotation_x})
             if design.recommended_print_rotation_y is not None:
                 rotations.append({"axis": "Y", "degrees": design.recommended_print_rotation_y})
+            if design.recommended_print_rotation_z is not None:
+                rotations.append({"axis": "Z", "degrees": design.recommended_print_rotation_z})
             recommendation = {
                 "rotations": rotations,
                 "translation_mm": tuple(-value for value in bounds.minimum),

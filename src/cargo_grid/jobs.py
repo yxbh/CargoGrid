@@ -28,6 +28,7 @@ class Design:
     recommended_print_rotation_y: float | None = None
     apply_orientation_to_bambu: bool = False
     bambu_object_settings: dict[str, str] = field(default_factory=dict)
+    recommended_print_rotation_z: float | None = None
 
     def __post_init__(self):
         count("design quantity", self.quantity)
@@ -41,12 +42,17 @@ class Design:
             self.recommended_print_rotation_y
         ):
             raise ValueError("recommended print rotation must be finite degrees")
+        if self.recommended_print_rotation_z is not None and not isfinite(
+            self.recommended_print_rotation_z
+        ):
+            raise ValueError("recommended print rotation must be finite degrees")
         if not isinstance(self.apply_orientation_to_bambu, bool):
             raise ValueError("apply_orientation_to_bambu must be a boolean")
         if (
             self.apply_orientation_to_bambu
             and self.recommended_print_rotation_x is None
             and self.recommended_print_rotation_y is None
+            and self.recommended_print_rotation_z is None
         ):
             raise ValueError("Bambu orientation requires an explicit recommended rotation")
         if self.bambu_object_settings not in (
@@ -68,12 +74,23 @@ class Design:
                 shape = shape.rotate(Axis.X, self.recommended_print_rotation_x)
             if self.recommended_print_rotation_y is not None:
                 shape = shape.rotate(Axis.Y, self.recommended_print_rotation_y)
+            if self.recommended_print_rotation_z is not None:
+                shape = shape.rotate(Axis.Z, self.recommended_print_rotation_z)
             return shape
         return self.shape
 
     @property
     def bambu_size(self) -> tuple[float, float, float]:
         return tuple(self.bambu_shape.bounding_box().size)
+
+
+def omitted_design(design: Design, size: tuple[float, float, float], reason: str) -> dict:
+    return {
+        "name": design.name,
+        "parameters": design.parameters,
+        "size_mm": size,
+        "reason": reason,
+    }
 
 
 @dataclass
@@ -98,11 +115,16 @@ class Job:
     prime_tower_reaches: dict[int, PrimeTower] = field(default_factory=dict)
     # Per-plate tower-to-model clearance, one value or per side; unlisted plates use the part gap.
     prime_tower_clearances: dict[int, float | TowerClearance] = field(default_factory=dict)
+    prime_tower_width_mm: float | None = None
 
     def __post_init__(self):
         if not self.designs:
             raise ValueError("a job needs at least one design")
         positive("part gap", self.part_gap, zero=True)
+        if self.prime_tower_width_mm is not None:
+            positive("prime tower width", self.prime_tower_width_mm)
+            if self.prime_tower_width_mm < 2 or self.kind != "catalogue":
+                raise ValueError("a rectangular prime tower requires a catalogue and width >= 2 mm")
         if self.print_placements is not None and len(self.print_placements) != len(self.designs):
             raise ValueError("explicit print placements must match the design count")
         self.validate_plate_builds()

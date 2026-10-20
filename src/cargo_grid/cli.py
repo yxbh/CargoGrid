@@ -3,7 +3,6 @@
 import argparse
 import json
 import sys
-from dataclasses import dataclass, replace
 from math import floor
 from pathlib import Path
 
@@ -15,15 +14,13 @@ from cargo_grid.accessories import (
     Accessory,
 )
 from cargo_grid.catalogue import (
-    H2D_DEFAULT_PART_CLEARANCE_MM,
     accessory_design,
     catalogue_job,
-    h2d_dual_safe_catalogue_job,
+    dual_safe_catalogue_job,
 )
 from cargo_grid.export import BambuSettings, Material, export_job
 from cargo_grid.jobs import Job, layout_job, tile_design
 from cargo_grid.layout import exact_layout
-from cargo_grid.packing import h2d_common_build
 from cargo_grid.parameters import (
     DEFAULT_HOLE_DIAMETER_MM,
     BuildVolume,
@@ -33,6 +30,11 @@ from cargo_grid.parameters import (
     count,
     positive,
 )
+from cargo_grid.printers import (
+    DEFAULT_PART_CLEARANCE_MM,
+    PRINTERS,
+    DualNozzlePrinter,
+)
 from cargo_grid.pull_handle_set import extras_job as pull_handle_extras_job
 from cargo_grid.rods import ROD_FAMILIES, Rod, RodBrace
 from cargo_grid.roof_support import RoofSupportSettings, check_roof_job_kind
@@ -40,6 +42,17 @@ from cargo_grid.stacking import StackSettings
 from cargo_grid.vehicles import zeekr_7x
 
 EXTRAS_RECIPES = ("zeekr-7x", "pull-handle", "adjustable-stop")
+PRINTER_FIXED_DEFAULTS = {
+    "build_margin_mm": 0,
+    "build_reserve_width_mm": 0,
+    "build_reserve_depth_mm": 0,
+    "build_reserve_height_mm": 0,
+    "exclude_rectangle_mm": (),
+    "unit_size_mm": 60,
+    "tile_thickness_mm": 13,
+    "joint_style": "original",
+    "fit_offset_mm": 0,
+}
 
 
 def _positive_mm(value: str) -> float:
@@ -64,78 +77,8 @@ def _nonnegative_mm(value: str) -> float:
     return millimeters
 
 
-@dataclass(frozen=True)
-class H2DProfiles:
-    """Bambu system profile names written for one H2D nozzle size."""
-
-    layer_height_mm: float
-    printer: str
-    process: str
-    petg: str
-    pla: str
-
-
-# Bambu names the H2D 0.4 nozzle PLA Basic profile without a nozzle suffix.
-H2D_PROFILES = {
-    0.8: H2DProfiles(
-        0.32,
-        "Bambu Lab H2D 0.8 nozzle",
-        "0.32mm Balanced Strength @BBL H2D 0.8 nozzle",
-        "Bambu PETG Basic @BBL H2D 0.8 nozzle",
-        "Bambu PLA Basic @BBL H2D 0.8 nozzle",
-    ),
-    # 0.24 mm layers keep Bambu's tower estimate small enough for the five-cell tiles beside it.
-    0.4: H2DProfiles(
-        0.24,
-        "Bambu Lab H2D 0.4 nozzle",
-        "0.24mm Standard @BBL H2D",
-        "Bambu PETG Basic @BBL H2D 0.4 nozzle",
-        "Bambu PLA Basic @BBL H2D",
-    ),
-}
-
-LEGACY_OPTION_REPLACEMENTS = {
-    "--build": "--build-width-mm MM --build-depth-mm MM --build-height-mm MM",
-    "--margin": "--build-margin-mm MM",
-    "--part-gap": "--packing-gap-mm MM",
-    "--reserve": "--build-reserve-width-mm MM --build-reserve-depth-mm MM --build-reserve-height-mm MM",
-    "--exclude": "--exclude-rectangle-mm X_MM Y_MM WIDTH_MM DEPTH_MM",
-    "--pitch": "--unit-size-mm MM",
-    "--height": "--tile-thickness-mm MM",
-    "--grid-pitch-mm": "--unit-size-mm MM",
-    "--tile-height-mm": "--tile-thickness-mm MM",
-    "--fit-offset": "--fit-offset-mm MM",
-    "--hole-diameter": "--hole-diameter-mm MM",
-    "--nozzle": "--nozzle-diameter-mm MM",
-    "--layer-height": "--layer-height-mm MM",
-    "--roof-top-gap": "--roof-top-gap-mm MM",
-    "--roof-interface-layers": "--roof-interface-layer-count COUNT",
-    "--roof-interface-spacing": "--roof-interface-spacing-mm MM",
-    "--roof-nozzles": "--roof-nozzle-slots PETG_SLOT PLA_SLOT",
-    "--roof-foot-expansion": "--roof-foot-expansion-mm MM",
-    "--stack-gap": "--stack-gap-mm MM",
-    "--interface-thickness": "--stack-interface-thickness-mm MM",
-    "--material-roles": "--stack-material-slots MODEL_SLOT SUPPORT_BASE_SLOT RELEASE_INTERFACE_SLOT",
-    "--cells": "--width-cells COUNT --depth-cells COUNT",
-    "--variant": "--variant-number NUMBER",
-    "--length": "--connector-length-mm MM",
-    "--accessory-height": "--stop-height-mm MM",
-    "--quantity": "--copy-count COUNT",
-    "--footprint": "--layout-width-mm MM --layout-depth-mm MM",
-    "--filler": "--filler-placement balanced|positive|negative",
-}
-
-
-class _ArgumentParser(argparse.ArgumentParser):
-    def parse_known_args(self, args=None, namespace=None):
-        arguments = list(sys.argv[1:] if args is None else args)
-        for argument in arguments:
-            option = argument.split("=", 1)[0]
-            if option in LEGACY_OPTION_REPLACEMENTS:
-                self.error(
-                    f"unrecognized option {option}; use {LEGACY_OPTION_REPLACEMENTS[option]}"
-                )
-        return super().parse_known_args(arguments, namespace)
+def _printer(args) -> DualNozzlePrinter | None:
+    return PRINTERS.get(getattr(args, "printer", None))
 
 
 def _part_dimensions(args) -> tuple[int, int]:
@@ -193,6 +136,25 @@ def _part_option(args, name: str, supported: set[str], default):
         option = "--" + name.replace("_", "-")
         raise ValueError(f"{option} does not apply to {args.family}")
     return default if value is None else value
+
+
+def _resolve_build_options(args, argument_parser: argparse.ArgumentParser) -> argparse.Namespace:
+    printer = _printer(args)
+    dimensions = ("build_width_mm", "build_depth_mm", "build_height_mm")
+    resolved = {**PRINTER_FIXED_DEFAULTS, **vars(args)}
+    if printer:
+        supplied = [name for name in (*dimensions, *PRINTER_FIXED_DEFAULTS) if hasattr(args, name)]
+        if supplied:
+            options = ", ".join("--" + name.replace("_", "-") for name in supplied)
+            argument_parser.error(f"--printer {args.printer} cannot be combined with {options}")
+        for name, value in zip(dimensions, (printer.build.x, printer.build.y, printer.build.z)):
+            resolved[name] = float(value)
+    else:
+        missing = [name for name in dimensions if not hasattr(args, name)]
+        if missing:
+            options = ", ".join("--" + name.replace("_", "-") for name in missing)
+            argument_parser.error(f"the following arguments are required: {options}")
+    return argparse.Namespace(**resolved)
 
 
 def _build_volume(args) -> BuildVolume:
@@ -297,15 +259,17 @@ def _bambu_settings(args, roof_support: RoofSupportSettings | None) -> BambuSett
         if args.nozzle_diameter_mm is None or args.layer_height_mm is None:
             raise ValueError("Bambu export requires --nozzle-diameter-mm and --layer-height-mm")
         materials = tuple(Material(*material) for material in args.material)
-        if getattr(args, "h2d_dual_safe", False):
-            profiles = H2D_PROFILES.get(args.nozzle_diameter_mm)
+        printer = _printer(args)
+        if printer is not None:
+            option = f"--printer {args.printer}"
+            profiles = printer.profiles.get(args.nozzle_diameter_mm)
             if profiles is None or args.layer_height_mm != profiles.layer_height_mm:
                 supported = " or ".join(
                     f"--nozzle-diameter-mm {nozzle:g} with --layer-height-mm "
                     f"{choice.layer_height_mm:g}"
-                    for nozzle, choice in H2D_PROFILES.items()
+                    for nozzle, choice in printer.profiles.items()
                 )
-                raise ValueError(f"--h2d-dual-safe requires {supported}")
+                raise ValueError(f"{option} requires {supported}")
             if roof_support is not None and roof_support.mode == "auto":
                 if (
                     len(materials) != 2
@@ -314,7 +278,7 @@ def _bambu_settings(args, roof_support: RoofSupportSettings | None) -> BambuSett
                     or materials[1].name != profiles.pla
                 ):
                     raise ValueError(
-                        "--h2d-dual-safe with auto roof support requires two official material "
+                        f"{option} with auto roof support requires two official material "
                         f'declarations: --material "{profiles.petg}" PETG "#RRGGBB" '
                         f'--material "{profiles.pla}" PLA "#RRGGBB"'
                     )
@@ -324,7 +288,7 @@ def _bambu_settings(args, roof_support: RoofSupportSettings | None) -> BambuSett
                 or materials[0].name != profiles.petg
             ):
                 raise ValueError(
-                    "--h2d-dual-safe requires one official material declaration: "
+                    f"{option} requires one official material declaration: "
                     f'--material "{profiles.petg}" PETG "#RRGGBB"'
                 )
             return BambuSettings(
@@ -336,7 +300,7 @@ def _bambu_settings(args, roof_support: RoofSupportSettings | None) -> BambuSett
                 print_settings_id=profiles.process,
                 bed_type="Textured PEI Plate",
                 machine_nozzle_count=2,
-                printer_model="Bambu Lab H2D",
+                printer=printer,
             )
         return BambuSettings(
             materials,
@@ -385,7 +349,8 @@ def _stack_settings(args, bambu, build: BuildVolume, interface: Interface):
 
 
 def parser() -> argparse.ArgumentParser:
-    root = _ArgumentParser(
+    defaults = PRINTER_FIXED_DEFAULTS
+    root = argparse.ArgumentParser(
         description="Make parametric cargo-mat parts and unsliced print projects.",
         epilog="Original roofed joints and full 10 mm round-hole tiles are the defaults; roof support remains off. No slicing or printer control.",
         allow_abbrev=False,
@@ -414,7 +379,7 @@ def parser() -> argparse.ArgumentParser:
                     "zeekr-7x: Zeekr 7X expansion set of 40 mm straight edges plus the measured "
                     "rear-panel contour caps and ramps; pull-handle: two-unit X-plug pull "
                     "handle with and without a strap bar; adjustable-stop: adjustable four-object "
-                    "H2D print kit"
+                    "dual-nozzle print kit"
                 ),
             )
         for axis, meaning in (
@@ -425,17 +390,16 @@ def parser() -> argparse.ArgumentParser:
             p.add_argument(
                 f"--build-{axis}-mm",
                 type=_positive_mm,
-                required=True,
                 default=argparse.SUPPRESS,
                 metavar="MM",
-                help=f"required build {axis} in millimeters ({meaning}); no default",
+                help=f"{meaning}; build {axis} in millimeters; required without --printer, forbidden with it; no default",
             )
         p.add_argument(
             "--build-margin-mm",
             type=float,
-            default=0,
+            default=argparse.SUPPRESS,
             metavar="MM",
-            help="inset on each X/Y side of the build plate, in mm",
+            help=f"inset on each X/Y side of the build plate, in mm; default {defaults['build_margin_mm']:g}; unavailable with --printer",
         )
         p.add_argument(
             "--packing-gap-mm",
@@ -444,8 +408,7 @@ def parser() -> argparse.ArgumentParser:
             metavar="MM",
             help=(
                 "minimum packed-part separation in mm; default 2, or "
-                f"{H2D_DEFAULT_PART_CLEARANCE_MM:g} with --h2d-dual-safe; "
-                f"Zeekr contour plates default to {zeekr_7x.CONTOUR_GAP_MM:g}"
+                f"{DEFAULT_PART_CLEARANCE_MM:g} with --printer"
             ),
         )
         for axis, meaning in (
@@ -456,45 +419,45 @@ def parser() -> argparse.ArgumentParser:
             p.add_argument(
                 f"--build-reserve-{axis}-mm",
                 type=float,
-                default=0,
+                default=argparse.SUPPRESS,
                 metavar="MM",
-                help=f"additional build space withheld at the {meaning}, in mm",
+                help=f"additional build space withheld at the {meaning}, in mm; default {defaults[f'build_reserve_{axis}_mm']:g}; unavailable with --printer",
             )
         p.add_argument(
             "--exclude-rectangle-mm",
             type=float,
             nargs=4,
             action="append",
-            default=[],
+            default=argparse.SUPPRESS,
             metavar=("X_MM", "Y_MM", "WIDTH_MM", "DEPTH_MM"),
-            help="repeatable build exclusion: lower-left X, lower-left Y, width, depth; e.g. --exclude-rectangle-mm 0 0 20 30",
+            help="repeatable build exclusion: lower-left X, lower-left Y, width, depth; e.g. --exclude-rectangle-mm 0 0 20 30; unavailable with --printer",
         )
         p.add_argument(
             "--unit-size-mm",
             type=float,
-            default=60,
+            default=argparse.SUPPRESS,
             metavar="MM",
-            help="cell size and matching local-plane interface scale in mm",
+            help=f"cell size and matching local-plane interface scale in mm; default {defaults['unit_size_mm']:g}; fixed by --printer",
         )
         p.add_argument(
             "--tile-thickness-mm",
             type=float,
-            default=13,
+            default=argparse.SUPPRESS,
             metavar="MM",
-            help="tile thickness and matching connector insertion depth in mm",
+            help=f"tile thickness and matching connector insertion depth in mm; default {defaults['tile_thickness_mm']:g}; fixed by --printer",
         )
         p.add_argument(
             "--joint-style",
             choices=("original", "full-height"),
-            default="original",
-            help="original roofed joints, or experimental open-through full-height edge joints",
+            default=argparse.SUPPRESS,
+            help=f"original roofed joints or experimental open-through full-height edge joints; default {defaults['joint_style']}; fixed by --printer",
         )
         p.add_argument(
             "--fit-offset-mm",
             type=float,
-            default=0,
+            default=argparse.SUPPRESS,
             metavar="MM",
-            help="socket offset in mm; nonzero changes the compatibility preset",
+            help=f"socket offset in mm; default {defaults['fit_offset_mm']:g}; nonzero changes the compatibility preset; fixed by --printer",
         )
         p.add_argument(
             "--solid-bottom-thickness-mm",
@@ -601,7 +564,17 @@ def parser() -> argparse.ArgumentParser:
             type=int,
             nargs=2,
             metavar=("PETG_SLOT", "PLA_SLOT"),
-            help="optional Custom nozzle assignment; omit to keep automatic matching",
+            help=(
+                "optional PETG/PLA nozzle slots 1/2 for Custom matching ("
+                + "; ".join(
+                    f"{printer.name}: "
+                    + ", ".join(
+                        f"{slot}={nozzle.name}" for slot, nozzle in enumerate(printer.nozzles, 1)
+                    )
+                    for printer in PRINTERS.values()
+                )
+                + "); omit to keep automatic matching"
+            ),
         )
         p.add_argument(
             "--roof-foot-expansion-mm",
@@ -759,14 +732,15 @@ def parser() -> argparse.ArgumentParser:
             )
         if command in ("catalogue", "extras"):
             p.add_argument(
-                "--h2d-dual-safe",
-                action="store_true",
+                "--printer",
+                choices=PRINTERS,
                 help=(
-                    "H2D family-grouped plan: 5 mm inset inside common "
-                    "X25..325/Y0..320/Z<=320 reach, "
-                    f"{H2D_DEFAULT_PART_CLEARANCE_MM:g} mm actual-part XY clearance "
-                    "and Bambu H2D profiles for a 0.8 mm nozzle with 0.32 mm layers or "
-                    "a 0.4 mm nozzle with 0.24 mm layers; the 306 mm 5x5 tile is omitted"
+                    f"set the build size, standard {defaults['unit_size_mm']:g}/"
+                    f"{defaults['tile_thickness_mm']:g} {defaults['joint_style']}-joint geometry, shared "
+                    "dual-nozzle reach, system profiles and family-grouped plates; requires "
+                    "--bambu; cannot be combined with build dimensions, margins, reserves, "
+                    "exclusions, unit size, tile thickness, joint style or fit offset; "
+                    "oversized designs are listed as omitted"
                 ),
             )
     compare = commands.add_parser(
@@ -830,6 +804,7 @@ def main(argv: list[str] | None = None) -> int:
                 f"reference comparison (joint-style original): {'PASS' if result['checked_pass'] else 'FAIL'}; {args.output}"
             )
             return 0 if result["checked_pass"] else 1
+        args = _resolve_build_options(args, p)
         hole_diameter = _resolved_hole_diameter(args)
         build = _build_volume(args)
         interface = _interface(args)
@@ -928,35 +903,20 @@ def main(argv: list[str] | None = None) -> int:
             )
             job = layout_job(layout, build)
         else:
+            printer = _printer(args)
             requested_gap = getattr(args, "packing_gap_mm", None)
-            default_gap = H2D_DEFAULT_PART_CLEARANCE_MM if args.h2d_dual_safe else 2
+            default_gap = DEFAULT_PART_CLEARANCE_MM if printer else 2
             packing_gap = default_gap if requested_gap is None else requested_gap
-            if args.h2d_dual_safe:
+            if printer:
+                option = f"--printer {args.printer}"
                 if not bambu:
-                    raise ValueError("--h2d-dual-safe requires --bambu")
-                if (
-                    (build.x, build.y, build.z) != (350, 320, 325)
-                    or args.build_margin_mm
-                    or args.build_reserve_width_mm
-                    or args.build_reserve_depth_mm
-                    or args.build_reserve_height_mm
-                    or args.exclude_rectangle_mm
-                ):
-                    raise ValueError(
-                        "--h2d-dual-safe requires the unmodified H2D build envelope: "
-                        "--build-width-mm 350 --build-depth-mm 320 --build-height-mm 325"
-                    )
-                if replace(interface, solid_bottom_mm=0.0) != Interface():
-                    raise ValueError(
-                        "--h2d-dual-safe requires original joints, --unit-size-mm 60, "
-                        "--tile-thickness-mm 13 and zero fit offset"
-                    )
-                positive("H2D packing gap", packing_gap)
+                    raise ValueError(f"{option} requires --bambu")
+                positive(f"{printer.name} packing gap", packing_gap)
             if args.command == "extras":
                 if args.recipe == "adjustable-stop":
-                    if not args.h2d_dual_safe or not bambu:
+                    if not printer or not bambu:
                         raise ValueError(
-                            "extras adjustable-stop requires --h2d-dual-safe and --bambu"
+                            "extras adjustable-stop requires --printer h2d/x2d and --bambu"
                         )
                     if roof_support is None or roof_support.mode != "auto":
                         raise ValueError(
@@ -970,6 +930,7 @@ def main(argv: list[str] | None = None) -> int:
                         args.output,
                         args.nozzle_diameter_mm,
                         stl=not args.no_stl,
+                        printer=printer,
                     )
                     print(manifest)
                     return 0
@@ -978,7 +939,7 @@ def main(argv: list[str] | None = None) -> int:
                     job = pull_handle_extras_job(
                         build,
                         interface=interface,
-                        placement_build=(h2d_common_build() if args.h2d_dual_safe else None),
+                        placement_build=(printer.common_build() if printer else None),
                         gap=packing_gap,
                         orient_for_bambu=bool(bambu),
                         auto_roof_support=bool(roof_support and roof_support.mode == "auto"),
@@ -990,30 +951,25 @@ def main(argv: list[str] | None = None) -> int:
                         interface=interface,
                         hole_diameter=hole_diameter,
                         hole_scope=args.hole_scope,
-                        placement_build=(h2d_common_build() if args.h2d_dual_safe else None),
-                        edge_gap=packing_gap,
-                        contour_gap=(
-                            zeekr_7x.CONTOUR_GAP_MM if requested_gap is None else requested_gap
-                        ),
+                        placement_build=(printer.common_build() if printer else None),
+                        gap=packing_gap,
                         auto_roof_support=bool(roof_support and roof_support.mode == "auto"),
                         **({"layer_height_mm": bambu.layer_height} if bambu else {}),
                     )
-                if args.h2d_dual_safe:
+                if printer:
                     job.placement_policy.update(
-                        name="H2D dual-nozzle safe",
-                        common_reach_mm={
-                            "min_x": 25,
-                            "max_x": 325,
-                            "min_y": 0,
-                            "max_y": 320,
-                            "max_z": 320,
-                        },
-                        common_model_inset_mm=5,
+                        **printer.placement_policy(),
                         minimum_actual_part_xy_clearance_mm=job.part_gap,
-                        clearance_measurement="model bounds on rectangle-packed plates",
+                        clearance_measurement=(
+                            "model bounds on rectangle-packed plates; all-height projected "
+                            "model footprints on marked shape-packed plates"
+                            if job.projected_footprint_clearances
+                            else "model bounds on rectangle-packed plates"
+                        ),
                     )
-            elif args.h2d_dual_safe:
-                job = h2d_dual_safe_catalogue_job(
+            elif printer:
+                job = dual_safe_catalogue_job(
+                    printer,
                     hole_diameter=hole_diameter,
                     hole_scope=args.hole_scope,
                     packing_gap=packing_gap,

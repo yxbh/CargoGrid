@@ -33,24 +33,24 @@ from cargo_grid.adjustable_stop_export import (
     _pusher_bed_proofs,
     _ratchet_proofs,
     _rounding_proofs,
-    adjustable_stop_h2d_settings,
     adjustable_stop_print_job,
+    adjustable_stop_settings,
     export_adjustable_stop,
     prepare_adjustable_stop_print_job,
     write_adjustable_stop_print_project,
 )
-from cargo_grid.cli import H2D_PROFILES
 from cargo_grid.export import BAMBU_PROCESS_DEFAULTS, write_3mf
 from cargo_grid.jobs import Design, Job
-from cargo_grid.packing import PrimeTower, PrintPlacement, TowerClearance, h2d_common_build
+from cargo_grid.packing import PrimeTower, PrintPlacement, TowerClearance
 from cargo_grid.plates import (
     AUTO_SUPPORT_TOWER_CLEARANCE_MM,
     BAMBU_TOWER_MARGIN_MM,
-    H2D_SHARED_REACH_X_MM,
-    H2D_TOWER_LEFT_CLEARANCE_MM,
     TOWER_BACK_ALLOWANCE_MM,
+    TOWER_LEFT_CLEARANCE_MM,
     BambuTowerEstimate,
+    dual_nozzle_tower_reservation,
 )
+from cargo_grid.printers import H2D, X2D
 
 
 def _overlap_volume(first, second) -> float:
@@ -67,7 +67,7 @@ def _symmetric_difference_volume(first, second) -> float:
     )
 
 
-@pytest.mark.parametrize("nozzle_diameter_mm", H2D_PROFILES)
+@pytest.mark.parametrize("nozzle_diameter_mm", H2D.profiles)
 @pytest.mark.parametrize("material_count", [1, 2])
 def test_print_job_uses_default_tower_only_for_multi_material_plates(
     tmp_path,
@@ -75,11 +75,11 @@ def test_print_job_uses_default_tower_only_for_multi_material_plates(
     nozzle_diameter_mm,
 ):
     tallest_part_mm = 120.2500001
-    bambu = adjustable_stop_h2d_settings(
+    bambu = adjustable_stop_settings(
         nozzle_diameter_mm,
         dual_material=material_count > 1,
     )
-    profile = H2D_PROFILES[nozzle_diameter_mm]
+    profile = H2D.profiles[nozzle_diameter_mm]
     assert bambu.nozzle == nozzle_diameter_mm
     assert bambu.layer_height == profile.layer_height_mm
     assert bambu.printer_settings_id == profile.printer
@@ -87,7 +87,7 @@ def test_print_job_uses_default_tower_only_for_multi_material_plates(
     assert tuple(material.name for material in bambu.materials) == (
         (profile.petg, profile.pla) if material_count > 1 else (profile.petg,)
     )
-    build = h2d_common_build()
+    build = H2D.common_build()
     job = prepare_adjustable_stop_print_job(
         Job(
             [Design("adjustable stop test box", Box(20, 20, tallest_part_mm), {})],
@@ -120,7 +120,7 @@ def test_print_job_uses_default_tower_only_for_multi_material_plates(
         estimate = BambuTowerEstimate(profile.layer_height_mm)
         side = estimate.side_mm(tallest_part_mm)
         brim = estimate.brim_mm(tallest_part_mm)
-        limit = H2D_SHARED_REACH_X_MM[1]
+        limit = H2D.shared_x_mm[1]
         expected_x = floor((limit - BAMBU_TOWER_MARGIN_MM - side) * 100) / 100
         expected_reach = PrimeTower(
             brim,
@@ -129,7 +129,7 @@ def test_print_job_uses_default_tower_only_for_multi_material_plates(
             side + brim + TOWER_BACK_ALLOWANCE_MM,
         )
         expected_clearance = TowerClearance(
-            H2D_TOWER_LEFT_CLEARANCE_MM,
+            TOWER_LEFT_CLEARANCE_MM,
             AUTO_SUPPORT_TOWER_CLEARANCE_MM,
             AUTO_SUPPORT_TOWER_CLEARANCE_MM,
             AUTO_SUPPORT_TOWER_CLEARANCE_MM,
@@ -141,7 +141,7 @@ def test_print_job_uses_default_tower_only_for_multi_material_plates(
         assert job.prime_tower_clearances == {0: expected_clearance}
         x, y = job.prime_tower_positions[0]
         x0, y0, x1, y1 = job.tower_bounds(0)
-        assert x0 >= H2D_SHARED_REACH_X_MM[0]
+        assert x0 >= H2D.shared_x_mm[0]
         assert y0 >= 0
         assert y1 <= build.y
         assert x1 == pytest.approx(limit)
@@ -159,21 +159,49 @@ def test_print_job_uses_default_tower_only_for_multi_material_plates(
             assert (x0, y0, x1, y1) == pytest.approx((273.42, 7.0, 325.0, 52.57693534037844))
 
 
-def test_adjustable_stop_h2d_settings_rejects_unlisted_nozzle():
+def test_adjustable_stop_settings_rejects_unlisted_nozzle():
     with pytest.raises(ValueError, match="must be one of: 0.8, 0.4 mm"):
-        adjustable_stop_h2d_settings(0.6, dual_material=True)
+        adjustable_stop_settings(0.6, dual_material=True)
 
 
-def test_adjustable_stop_h2d_settings_defaults_to_tested_0p8_profile():
-    settings = adjustable_stop_h2d_settings(dual_material=False)
-    profile = H2D_PROFILES[0.8]
+def test_adjustable_stop_settings_defaults_to_tested_0p8_profile():
+    settings = adjustable_stop_settings(dual_material=False)
+    profile = H2D.profiles[0.8]
     assert settings.nozzle == 0.8
     assert settings.layer_height == profile.layer_height_mm
     assert settings.printer_settings_id == profile.printer
     assert settings.print_settings_id == profile.process
 
 
-@pytest.mark.parametrize("nozzle_diameter_mm", H2D_PROFILES)
+@pytest.mark.parametrize("nozzle", [0.8, 0.4])
+def test_adjustable_stop_x2d_uses_the_shared_profiles_and_tower_reservation(nozzle):
+    settings = adjustable_stop_settings(nozzle, dual_material=True, printer=X2D)
+    profile = X2D.profiles[nozzle]
+    assert settings.printer_settings_id == profile.printer
+    assert settings.print_settings_id == profile.process
+    assert settings.printer is X2D
+    assert tuple(m.name for m in settings.materials) == (profile.petg, profile.pla)
+    build = X2D.common_build()
+    job = prepare_adjustable_stop_print_job(
+        Job(
+            [Design("stop tower witness", Box(20, 20, 120.25), {})],
+            build,
+            "adjustable-stop-test",
+            print_placements=[PrintPlacement(0, 25.5, 6, 0)],
+            plate_builds={0: build},
+        ),
+        material_counts_by_plate={0: 2},
+        nozzle_diameter_mm=nozzle,
+        printer=X2D,
+    )
+    tower = dual_nozzle_tower_reservation(X2D, profile.layer_height_mm, 120.25)
+    assert job.prime_tower_positions == {0: tower.origin}
+    assert job.prime_tower_reaches == {0: tower.reach}
+    assert job.prime_tower_clearances == {0: tower.clearance}
+    assert job.tower_bounds(0)[2] == 256
+
+
+@pytest.mark.parametrize("nozzle_diameter_mm", H2D.profiles)
 def test_complete_print_project_uses_shared_h2d_support_conventions(
     tmp_path,
     nozzle_diameter_mm,
@@ -189,7 +217,7 @@ def test_complete_print_project_uses_shared_h2d_support_conventions(
     assert {placement.plate for placement in job.print_placements} == {0}
     assert job.part_gap == 8
     assert set(job.prime_tower_positions) == {0}
-    assert job.tower_bounds(0)[2] == pytest.approx(H2D_SHARED_REACH_X_MM[1])
+    assert job.tower_bounds(0)[2] == pytest.approx(H2D.shared_x_mm[1])
 
     original_model = []
     apply_settings = adjustable_stop_export._apply_adjustable_stop_support_settings
@@ -209,14 +237,26 @@ def test_complete_print_project_uses_shared_h2d_support_conventions(
     monkeypatch.setattr(
         adjustable_stop_export, "_apply_adjustable_stop_support_settings", check_unpatched_objects
     )
+
+    def reuse_checked_job(nozzle, spec, *, printer):
+        assert nozzle == nozzle_diameter_mm
+        assert spec == AdjustableStopSpec()
+        assert printer == H2D
+        return job
+
+    monkeypatch.setattr(adjustable_stop_export, "adjustable_stop_print_job", reuse_checked_job)
     project = tmp_path / f"adjustable-stop-{nozzle_diameter_mm:g}.3mf"
     write_adjustable_stop_print_project(project, nozzle_diameter_mm)
+    first_export = project.read_bytes()
+    apply_settings(project)
+    assert project.read_bytes() == first_export
     with ZipFile(project) as archive:
+        assert {entry.date_time for entry in archive.infolist()} == {(1980, 1, 1, 0, 0, 0)}
         settings = json.loads(archive.read("Metadata/project_settings.config"))
         model_data = archive.read("Metadata/model_settings.config")
         assert original_model == [model_data]
         model = ET.fromstring(model_data)
-    profile = H2D_PROFILES[nozzle_diameter_mm]
+    profile = H2D.profiles[nozzle_diameter_mm]
     assert settings["printer_settings_id"] == profile.printer
     assert settings["print_settings_id"] == profile.process
     assert settings["filament_settings_id"] == [profile.petg, profile.pla]

@@ -70,9 +70,9 @@ def test_full_default_interior_override_and_terminated_fillers_are_preserved():
         {"interface_layers": 0},
         {"interface_layers": True},
         {"interface_spacing": float("inf")},
-        {"nozzle_map": (1, 1)},
-        {"nozzle_map": (1, 3)},
-        {"nozzle_map": (1,)},
+        {"nozzle_slots": (1, 1)},
+        {"nozzle_slots": (1, 3)},
+        {"nozzle_slots": (1,)},
         {"coverage": "unknown"},
         {"foot_expansion": -0.5},
         {"foot_expansion": float("inf")},
@@ -95,7 +95,7 @@ def test_material_roles_must_be_explicit_petg_and_pla(support):
 
 def test_automatic_support_defaults_omit_custom_assignments(tmp_path):
     support = RoofSupportSettings(0.2, 2, 0)
-    assert support.nozzle_map is None
+    assert support.nozzle_slots is None
     assert "support_on_build_plate_only" not in support.native_settings()
     assert "filament_map" not in support.native_settings()
     assert "filament_map_mode" not in support.native_settings()
@@ -110,7 +110,7 @@ def test_automatic_support_defaults_omit_custom_assignments(tmp_path):
     report = write_3mf(
         Job([tile_design(Tile())], BuildVolume(150, 150, 50), "part"), path, bambu=bambu
     )
-    assert report["roof_support"]["settings"]["nozzle_map"] is None
+    assert report["roof_support"]["settings"]["nozzle_slots"] is None
     with ZipFile(path) as archive:
         settings = json.loads(archive.read("Metadata/project_settings.config"))
         assert "support_filament" not in settings and settings["support_interface_filament"] == "2"
@@ -225,9 +225,9 @@ def test_native_modifier_types_rotation_and_dual_nozzle_settings(bambu, tmp_path
                 assert min(ys) > 14 and max(ys) < 46
 
 
-@pytest.mark.parametrize("nozzle_map", [None, (2, 1)])
-def test_original_only_and_stacking_rejected_before_export(bambu, tmp_path, nozzle_map):
-    bambu = replace(bambu, roof_support=replace(bambu.roof_support, nozzle_map=nozzle_map))
+@pytest.mark.parametrize("nozzle_slots", [None, (2, 1)])
+def test_original_only_and_stacking_rejected_before_export(bambu, tmp_path, nozzle_slots):
+    bambu = replace(bambu, roof_support=replace(bambu.roof_support, nozzle_slots=nozzle_slots))
     design = tile_design(Tile())
     job = Job([design], BuildVolume(150, 150, 50), "part")
     for function, path in ((write_3mf, tmp_path / "bad.3mf"), (export_job, tmp_path / "bad-job")):
@@ -238,6 +238,13 @@ def test_original_only_and_stacking_rejected_before_export(bambu, tmp_path, nozz
     with pytest.raises(ValueError, match="original"):
         write_3mf(Job([full], job.build, "part"), tmp_path / "full.3mf", bambu=bambu)
     assert not (tmp_path / "full.3mf").exists()
+
+
+def test_nozzle_slot_api_does_not_accept_the_removed_mapping_keyword():
+    with pytest.raises(TypeError, match="nozzle_map"):
+        RoofSupportSettings(**{"nozzle_map": (2, 1)})
+    settings = RoofSupportSettings(nozzle_slots=(2, 1)).native_settings()
+    assert settings["filament_map"] == ["2", "1"]
 
 
 def test_layout_skips_terminated_west_edge_and_reports_untargeted_tile(bambu, tmp_path):
@@ -317,13 +324,13 @@ def test_incomplete_cli_support_or_scope_fails_early(tmp_path, extra):
     assert caught.value.code == 2 and not output.exists()
 
 
-@pytest.mark.parametrize("nozzle_map", [None, (2, 1)])
+@pytest.mark.parametrize("nozzle_slots", [None, (2, 1)])
 @pytest.mark.native
-def test_native_bambu_roundtrip_keeps_nonprinting_roof_enforcers(bambu, tmp_path, nozzle_map):
+def test_native_bambu_roundtrip_keeps_nonprinting_roof_enforcers(bambu, tmp_path, nozzle_slots):
     executable = os.environ.get("CARGO_GRID_BAMBU")
     if not executable:
         pytest.skip("CARGO_GRID_BAMBU not supplied; actual native importer not run")
-    bambu = replace(bambu, roof_support=replace(bambu.roof_support, nozzle_map=nozzle_map))
+    bambu = replace(bambu, roof_support=replace(bambu.roof_support, nozzle_slots=nozzle_slots))
     design = tile_design(Tile(1, 1, hole_diameter=10, hole_scope="full"))
     write_3mf(Job([design], BuildVolume(150, 150, 50), "part"), tmp_path / "input.3mf", bambu=bambu)
     result = subprocess.run(
@@ -352,6 +359,6 @@ def test_native_bambu_roundtrip_keeps_nonprinting_roof_enforcers(bambu, tmp_path
         types = [p.get("subtype") for p in config.findall("./object/part")]
         assert types.count("normal_part") == 1 and types.count("support_enforcer") == 3
         metadata = {m.get("key"): m.get("value") for m in config.findall("./plate/metadata")}
-        assert metadata["filament_map_mode"] == ("Manual" if nozzle_map else "Auto For Match")
-        if nozzle_map:
+        assert metadata["filament_map_mode"] == ("Manual" if nozzle_slots else "Auto For Match")
+        if nozzle_slots:
             assert metadata["filament_maps"] == "2 1"

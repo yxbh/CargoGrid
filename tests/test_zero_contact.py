@@ -10,9 +10,10 @@ from zipfile import ZipFile
 import pytest
 
 from cargo_grid import BuildVolume, Tile
-from cargo_grid.cli import H2D_PROFILES, main
+from cargo_grid.cli import main
 from cargo_grid.export import BambuSettings, Material, write_3mf
 from cargo_grid.jobs import Job, tile_design
+from cargo_grid.printers import PRINTERS
 from cargo_grid.roof_support import (
     BAMBU_SUPPORT_DEFAULT_PROCESSES,
     BAMBU_SUPPORT_DEFAULTS,
@@ -104,8 +105,10 @@ def test_default_filtering_preserves_requested_nondefault_values(mode, changes, 
     assert "support_filament" not in native
 
 
-def test_audited_support_processes_match_the_supported_h2d_pairs():
-    assert BAMBU_SUPPORT_DEFAULT_PROCESSES == {profile.process for profile in H2D_PROFILES.values()}
+def test_audited_support_processes_match_all_supported_printer_pairs():
+    assert BAMBU_SUPPORT_DEFAULT_PROCESSES == {
+        profile.process for printer in PRINTERS.values() for profile in printer.profiles.values()
+    }
 
 
 @pytest.mark.parametrize("mode", ["painted", "auto"])
@@ -140,7 +143,15 @@ def profile_test_tile():
 
 @pytest.mark.parametrize(
     "process_profile",
-    [None, *(profile.process for profile in H2D_PROFILES.values()), "0.16mm Optimal @BBL X1C"],
+    [
+        None,
+        *(
+            profile.process
+            for printer in PRINTERS.values()
+            for profile in printer.profiles.values()
+        ),
+        "0.16mm Optimal @BBL X1C",
+    ],
 )
 def test_export_filters_only_audited_process_defaults(process_profile, profile_test_tile, tmp_path):
     support = RoofSupportSettings(top_gap=0.2, interface_spacing=0.5)

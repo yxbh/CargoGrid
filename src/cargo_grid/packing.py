@@ -2,20 +2,23 @@
 
 from dataclasses import dataclass
 
-from cargo_grid.parameters import BuildVolume, Exclusion, positive
+from cargo_grid.parameters import BuildVolume, positive
+
+PACKING_ROTATIONS = (0, 90, 180, 270)
 
 
 @dataclass(frozen=True)
 class PrimeTower:
-    """Space kept free for Bambu's default prime tower; no tower settings are written.
+    """Space kept free for native prime-tower extrusion, including its brim and wipe lines.
 
-    Each plate only chooses the tower origin (``wipe_tower_x``/``wipe_tower_y``). The fields
+    Each plate chooses the tower origin (``wipe_tower_x``/``wipe_tower_y``). The fields
     are how far tower extrusion may reach from that origin. The defaults are used for generic
     builds: Bambu Studio 02.08.02.61 sliced the default H2D rib-wall tower on 0.32 mm PETG/PLA
     plates as a 25.5 to 28.3 mm square whose walls, wipe lines and automatic first-layer brim
     reached up to 7.05 mm left, 6.39 mm in front, 34.05 mm right and 30.83 mm behind the
     origin; the defaults add a little to each. H2D plans size each plate's reach from Bambu's
-    own tower estimate instead (``plates.BambuTowerEstimate``).
+    own tower estimate instead (``plates.BambuTowerEstimate``). X2D catalogue rectangles
+    also reserve the nozzle-change wipe lines beyond both X ends.
     """
 
     left: float = 7.5
@@ -60,23 +63,30 @@ class TowerClearance:
         return (x0 - self.left, y0 - self.front, x1 + self.right, y1 + self.back)
 
 
-def h2d_common_build() -> BuildVolume:
-    """H2D shared nozzle reach with a further 5 mm model inset."""
-    return BuildVolume(
-        350,
-        320,
-        320,
-        margin=5,
-        exclusions=(Exclusion(0, 0, 30, 320), Exclusion(320, 0, 30, 320)),
-    )
-
-
 @dataclass(frozen=True)
 class PrintPlacement:
     plate: int
     x: float
     y: float
     rotation: int
+
+
+def packing_score(
+    placements: list[PrintPlacement], sizes: list[tuple[float, float, float]]
+) -> tuple[int, float]:
+    """Prefer fewer plates, then the smallest occupied bounding rectangle on the last."""
+    if not placements:
+        return 0, 0.0
+    last = max(p.plate for p in placements)
+    bounds = []
+    for placement, size in zip(placements, sizes):
+        if placement.plate == last:
+            width, depth = size[:2] if placement.rotation % 180 == 0 else size[1::-1]
+            bounds.append((placement.x, placement.y, placement.x + width, placement.y + depth))
+    area = (max(b[2] for b in bounds) - min(b[0] for b in bounds)) * (
+        max(b[3] for b in bounds) - min(b[1] for b in bounds)
+    )
+    return last + 1, round(area, 6)
 
 
 def pack_sizes(

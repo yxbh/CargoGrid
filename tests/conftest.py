@@ -3,13 +3,18 @@ from build123d import Box
 
 from cargo_grid import catalogue
 
+pytest_plugins = ["slow_shards"]
+
 # Tests using these expensive module fixtures are collected first, so their long chains start
 # at the beginning of a run instead of becoming its tail. A group name keeps the tests on one
 # worker under `--dist loadgroup`, so the fixture is built once. Without one, each test is
 # long enough that building a copy per worker finishes sooner than one chain.
 EARLY_FIXTURES = {
     "h2d_plan": "h2d-plan",
+    "x2d_plan": "x2d-plan",
+    "wide_perimeter_designs": "wide-perimeter",
     "expansion_set_job": "zeekr-expansion-set",
+    # A run-local snapshot lets these long checks run in parallel without rebuilding CAD.
     "review_job": None,
 }
 

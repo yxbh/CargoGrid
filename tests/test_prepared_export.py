@@ -223,7 +223,7 @@ def test_export_snapshot_is_independent_and_next_request_observes_mutation(tmp_p
     assert_serialized_closed(stl_triangles(tmp_path / "second/block.stl"), 2400)
 
 
-@pytest.mark.parametrize("rotation", [0, 90])
+@pytest.mark.parametrize("rotation", [0, 90, 180, 270])
 def test_prepared_packing_bounds_match_independent_cad_with_displaced_origin(rotation):
     shape = Box(20, 30, 4).moved(Location((7, 11, -13)))
     measured = prepared.Bounds.measure(shape).rotated_z(rotation)
@@ -232,9 +232,11 @@ def test_prepared_packing_bounds_match_independent_cad_with_displaced_origin(rot
     assert measured.maximum == pytest.approx(tuple(actual.max), abs=1e-7)
 
 
-def test_combined_xy_and_packing_rotation_share_one_exact_transform(tmp_path):
+@pytest.mark.parametrize("pose_z", [None, 45])
+@pytest.mark.parametrize("rotation_z", [90, 180, 270])
+def test_combined_xy_and_packing_rotation_share_one_exact_transform(tmp_path, pose_z, rotation_z):
     source = Box(20, 30, 4).moved(Location((7, 11, -13)))
-    rotation_x, rotation_y, rotation_z = 31, -17, 90
+    rotation_x, rotation_y = 31, -17
     design = Design(
         "combined",
         source,
@@ -242,6 +244,7 @@ def test_combined_xy_and_packing_rotation_share_one_exact_transform(tmp_path):
         recommended_print_rotation_x=rotation_x,
         recommended_print_rotation_y=rotation_y,
         apply_orientation_to_bambu=True,
+        recommended_print_rotation_z=pose_z,
     )
     placement = PrintPlacement(0, 7, 9, rotation_z)
     path = tmp_path / "combined.3mf"
@@ -260,13 +263,19 @@ def test_combined_xy_and_packing_rotation_share_one_exact_transform(tmp_path):
         Vector(*coordinates)
         .rotate(Axis.X, rotation_x)
         .rotate(Axis.Y, rotation_y)
-        .rotate(Axis.Z, rotation_z)
+        .rotate(Axis.Z, (pose_z or 0) + rotation_z)
         for coordinates in ((1, 0, 0), (0, 1, 0), (0, 0, 1))
     ]
     expected_matrix = tuple(float(value) for vector in basis for value in vector)
     assert transform["matrix_3mf"][:9] == pytest.approx(expected_matrix, abs=1e-12)
     assert all(type(value) is float for value in transform["matrix_3mf"])
-    posed = source.rotate(Axis.X, rotation_x).rotate(Axis.Y, rotation_y).rotate(Axis.Z, rotation_z)
+    posed = (
+        source.rotate(Axis.X, rotation_x)
+        .rotate(Axis.Y, rotation_y)
+        .rotate(Axis.Z, (pose_z or 0) + rotation_z)
+    )
+    if pose_z is not None:
+        assert transform["rotation_z_degrees"] == pose_z
     expected_translation = (
         placement.x - posed.bounding_box().min.X,
         placement.y - posed.bounding_box().min.Y,

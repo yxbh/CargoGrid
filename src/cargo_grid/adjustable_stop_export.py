@@ -5,7 +5,7 @@ import json
 from collections import Counter
 from dataclasses import replace
 from itertools import permutations
-from math import atan2, degrees, floor
+from math import atan2, degrees
 from pathlib import Path
 from tempfile import TemporaryDirectory, TemporaryFile
 from xml.etree import ElementTree as ET
@@ -65,7 +65,6 @@ from cargo_grid.adjustable_stop import (
     make_adjustable_stop_parts,
     make_adjustable_stop_prong_lock_clip,
 )
-from cargo_grid.cli import H2D_PROFILES, H2DProfiles
 from cargo_grid.export import (
     BAMBU_PROCESS_DEFAULTS,
     BambuSettings,
@@ -80,20 +79,16 @@ from cargo_grid.footprints import (
 )
 from cargo_grid.jobs import Design, Job
 from cargo_grid.meshes import checked_mesh, write_stl
-from cargo_grid.packing import PrimeTower, TowerClearance, h2d_common_build
+from cargo_grid.packing import PrimeTower
 from cargo_grid.parameters import Tile
 from cargo_grid.plates import (
     AUTO_SUPPORT_FOOT_ALLOWANCE_MM,
     AUTO_SUPPORT_PLATE_MARGIN_MM,
-    AUTO_SUPPORT_TOWER_CLEARANCE_MM,
-    BAMBU_TOWER_MARGIN_MM,
-    H2D_FOOTPRINT_SEARCH_ALLOWANCE_MM,
-    H2D_SHARED_REACH_X_MM,
-    H2D_TOWER_LEFT_CLEARANCE_MM,
-    TOWER_BACK_ALLOWANCE_MM,
-    BambuTowerEstimate,
+    FOOTPRINT_SEARCH_ALLOWANCE_MM,
+    dual_nozzle_tower_reservation,
 )
 from cargo_grid.prepared import PreparedShape
+from cargo_grid.printers import H2D, DualNozzlePrinter, NozzleProfiles
 from cargo_grid.roof_support import GLOBAL_AUTO_SUPPORT_SETTINGS, RoofSupportSettings
 from cargo_grid.tiles import make_tile
 
@@ -111,21 +106,24 @@ ADJUSTABLE_STOP_SUPPORT_CLEARANCE_MM = (
 ADJUSTABLE_STOP_PLATE_NAME = "ADJUSTABLE STOP - PETG WITH PLA INTERFACE"
 
 
-def _adjustable_stop_h2d_profile(nozzle_diameter_mm: float) -> H2DProfiles:
-    profile = H2D_PROFILES.get(nozzle_diameter_mm)
+def _adjustable_stop_profile(
+    nozzle_diameter_mm: float, printer: DualNozzlePrinter
+) -> NozzleProfiles:
+    profile = printer.profiles.get(nozzle_diameter_mm)
     if profile is None:
-        choices = ", ".join(f"{nozzle:g}" for nozzle in H2D_PROFILES)
-        raise ValueError(f"adjustable-stop H2D nozzle must be one of: {choices} mm")
+        choices = ", ".join(f"{nozzle:g}" for nozzle in printer.profiles)
+        raise ValueError(f"adjustable-stop {printer.name} nozzle must be one of: {choices} mm")
     return profile
 
 
-def adjustable_stop_h2d_settings(
+def adjustable_stop_settings(
     nozzle_diameter_mm: float = 0.8,
     *,
     dual_material: bool,
+    printer: DualNozzlePrinter = H2D,
 ) -> BambuSettings:
-    """Use one of the official H2D profile pairs for an adjustable-stop project."""
-    profile = _adjustable_stop_h2d_profile(nozzle_diameter_mm)
+    """Use the selected printer's official profiles without changing the stop geometry."""
+    profile = _adjustable_stop_profile(nozzle_diameter_mm, printer)
     materials = (Material(profile.petg, "PETG", "#637B70"),)
     if dual_material:
         materials += (Material(profile.pla, "PLA", "#DDDDDD"),)
@@ -137,16 +135,18 @@ def adjustable_stop_h2d_settings(
         print_settings_id=profile.process,
         bed_type="Textured PEI Plate",
         machine_nozzle_count=2,
-        printer_model="Bambu Lab H2D",
+        printer=printer,
     )
 
 
 def adjustable_stop_print_job(
     nozzle_diameter_mm: float = 0.8,
     spec: AdjustableStopSpec = AdjustableStopSpec(),
+    *,
+    printer: DualNozzlePrinter = H2D,
 ) -> Job:
-    """Pack one adjustable stop and its prong lock clip on one supported H2D plate."""
-    profile = _adjustable_stop_h2d_profile(nozzle_diameter_mm)
+    """Pack one complete kit on one supported plate; the default remains the H2D."""
+    profile = _adjustable_stop_profile(nozzle_diameter_mm, printer)
     base, pusher, keeper = make_adjustable_stop_parts(spec)
     designs = [
         Design(
@@ -181,15 +181,12 @@ def adjustable_stop_print_job(
         vertices, faces, _ = checked_mesh(design.bambu_shape)
         footprints.append(projected_mesh_footprint(vertices, faces))
 
-    build = h2d_common_build()
+    build = printer.common_build()
     tallest = max(design.bambu_size[2] for design in designs)
-    position, reach, clearance = _h2d_tower_reservation(
-        tallest,
-        profile.layer_height_mm,
-    )
-    tower_left = reach.footprint(*position)[0] - clearance.left
+    tower = dual_nozzle_tower_reservation(printer, profile.layer_height_mm, tallest)
+    tower_left = tower.bounds[0] - tower.clearance.left
     bounds = (
-        30.0,
+        printer.shared_x_mm[0] + build.margin,
         AUTO_SUPPORT_PLATE_MARGIN_MM,
         tower_left,
         build.y - AUTO_SUPPORT_PLATE_MARGIN_MM,
@@ -198,10 +195,10 @@ def adjustable_stop_print_job(
         footprints,
         bounds,
         gap=ADJUSTABLE_STOP_SUPPORT_CLEARANCE_MM,
-        search_gap=(ADJUSTABLE_STOP_SUPPORT_CLEARANCE_MM - H2D_FOOTPRINT_SEARCH_ALLOWANCE_MM),
+        search_gap=(ADJUSTABLE_STOP_SUPPORT_CLEARANCE_MM - FOOTPRINT_SEARCH_ALLOWANCE_MM),
     )
     if {placement.plate for placement in placements} != {0}:
-        raise ValueError("complete adjustable-stop kit must fit one H2D plate")
+        raise ValueError(f"complete adjustable-stop kit must fit one {printer.name} plate")
     if (
         minimum_projected_clearance(footprints, placements, plate=0)
         < ADJUSTABLE_STOP_SUPPORT_CLEARANCE_MM - 1e-6
@@ -260,6 +257,7 @@ def adjustable_stop_print_job(
         ),
         material_counts_by_plate={0: 2},
         nozzle_diameter_mm=nozzle_diameter_mm,
+        printer=printer,
     )
 
 
@@ -309,7 +307,8 @@ def _apply_adjustable_stop_support_settings(path: Path) -> None:
     patched = path.with_suffix(".patched")
     with ZipFile(patched, "w", ZIP_DEFLATED) as target:
         for name, data in entries.items():
-            target.writestr(name, data)
+            with target.open(name, "w") as output:
+                output.write(data)
     patched.replace(path)
 
 
@@ -317,19 +316,22 @@ def write_adjustable_stop_print_project(
     path: Path,
     nozzle_diameter_mm: float = 0.8,
     spec: AdjustableStopSpec = AdjustableStopSpec(),
+    *,
+    printer: DualNozzlePrinter = H2D,
 ) -> dict:
-    """Write one complete PETG/PLA H2D adjustable-stop project without partial output."""
+    """Write one complete PETG/PLA adjustable-stop project without partial output."""
     if path.exists():
         raise ValueError(f"output file already exists: {path}; choose a new path")
     path.parent.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(dir=path.parent, prefix=f".{path.stem}-") as temporary:
         target = Path(temporary) / path.name
         result = write_3mf(
-            adjustable_stop_print_job(nozzle_diameter_mm, spec),
+            adjustable_stop_print_job(nozzle_diameter_mm, spec, printer=printer),
             target,
-            bambu=adjustable_stop_h2d_settings(
+            bambu=adjustable_stop_settings(
                 nozzle_diameter_mm,
                 dual_material=True,
+                printer=printer,
             ),
         )
         _apply_adjustable_stop_support_settings(target)
@@ -346,13 +348,14 @@ def export_adjustable_stop_print_project(
     spec: AdjustableStopSpec = AdjustableStopSpec(),
     *,
     stl: bool = True,
+    printer: DualNozzlePrinter = H2D,
 ) -> Path:
-    """Export the complete H2D adjustable-stop kit through the ordinary job manifest path."""
+    """Export the complete adjustable-stop kit through the ordinary job manifest path."""
     manifest = export_job(
-        adjustable_stop_print_job(nozzle_diameter_mm, spec),
+        adjustable_stop_print_job(nozzle_diameter_mm, spec, printer=printer),
         output,
         stl=stl,
-        bambu=adjustable_stop_h2d_settings(nozzle_diameter_mm, dual_material=True),
+        bambu=adjustable_stop_settings(nozzle_diameter_mm, dual_material=True, printer=printer),
     )
     _apply_adjustable_stop_support_settings(output / "job.3mf")
     return manifest
@@ -363,9 +366,10 @@ def prepare_adjustable_stop_print_job(
     *,
     material_counts_by_plate: dict[int, int],
     nozzle_diameter_mm: float = 0.8,
+    printer: DualNozzlePrinter = H2D,
 ) -> Job:
-    """Reserve Bambu's default H2D tower only on plates using multiple materials."""
-    profile = _adjustable_stop_h2d_profile(nozzle_diameter_mm)
+    """Reserve the selected printer's default tower only on multi-material plates."""
+    profile = _adjustable_stop_profile(nozzle_diameter_mm, printer)
     if job.print_placements is None:
         raise ValueError("adjustable-stop print jobs need explicit placements")
     plates = {placement.plate for placement in job.print_placements}
@@ -393,20 +397,19 @@ def prepare_adjustable_stop_print_job(
     clearances = {}
     for plate in sorted(tower_plates):
         build = job.plate_builds.get(plate, job.build)
-        if build != h2d_common_build():
-            raise ValueError("multi-material adjustable-stop plates require the H2D common build")
+        if build != printer.common_build():
+            raise ValueError(
+                f"multi-material adjustable-stop plates require the {printer.name} common build"
+            )
         height = max(
             design.bambu_size[2]
             for design, placement in zip(job.designs, job.print_placements, strict=True)
             if placement.plate == plate
         )
-        position, reach, clearance = _h2d_tower_reservation(
-            height,
-            profile.layer_height_mm,
-        )
-        positions[plate] = position
-        reaches[plate] = reach
-        clearances[plate] = clearance
+        tower = dual_nozzle_tower_reservation(printer, profile.layer_height_mm, height)
+        positions[plate] = tower.origin
+        reaches[plate] = tower.reach
+        clearances[plate] = tower.clearance
 
     return replace(
         job,
@@ -420,30 +423,6 @@ def prepare_adjustable_stop_print_job(
         prime_tower_reaches=reaches,
         prime_tower_clearances=clearances,
     )
-
-
-def _h2d_tower_reservation(
-    height_mm: float,
-    layer_height_mm: float,
-) -> tuple[tuple[float, float], PrimeTower, TowerClearance]:
-    estimate = BambuTowerEstimate(layer_height_mm)
-    side = estimate.side_mm(height_mm)
-    brim = estimate.brim_mm(height_mm)
-    limit = H2D_SHARED_REACH_X_MM[1]
-    x = floor((limit - BAMBU_TOWER_MARGIN_MM - side) * 100) / 100
-    reach = PrimeTower(
-        brim,
-        brim,
-        limit - x,
-        side + brim + TOWER_BACK_ALLOWANCE_MM,
-    )
-    clearance = TowerClearance(
-        H2D_TOWER_LEFT_CLEARANCE_MM,
-        AUTO_SUPPORT_TOWER_CLEARANCE_MM,
-        AUTO_SUPPORT_TOWER_CLEARANCE_MM,
-        AUTO_SUPPORT_TOWER_CLEARANCE_MM,
-    )
-    return (x, BAMBU_TOWER_MARGIN_MM), reach, clearance
 
 
 def _sha256(path: Path) -> str:

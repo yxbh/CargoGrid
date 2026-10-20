@@ -1,7 +1,7 @@
-"""Rebuild the H2D project files published on MakerWorld.
+"""Rebuild the H2D and X2D project files for MakerWorld.
 
 Each variant is one ordinary ``cargo-grid`` command for every nozzle in
-``cargo_grid.cli.H2D_PROFILES``: the H2D catalogue and the Zeekr 7X expansion set, with and
+the selected printer's profiles: the catalogue and the Zeekr 7X expansion set, with and
 without the 1.92 mm solid bottom and with auto roof support (PETG and a PLA interface), and
 the pull-handle set and the adjustable-stop kit with PETG and a PLA support interface. The
 handles have no tile-edge roofs or floor; both inherit the global Auto support and PLA interface.
@@ -15,18 +15,25 @@ With ``--bambu-studio PATH`` every plate is also sliced by that Bambu Studio exe
 with PETG on each nozzle, before anything is written. The check copy gets the full printer,
 process and filament profiles from that installation and a fixed filament-to-nozzle map; the
 written project is unchanged. Any G-code path conflict or unprintable plate stops the run.
+Generated extrusion must stay inside the bed; only support features have a small XY
+allowance beyond common nozzle reach. Rectangular towers must also stay inside the
+manifest's reserved footprint.
 MakerWorld re-slices uploads and rejects the same conflicts, which the Bambu Studio GUI only
 shows as a warning on the plate being previewed.
 
 ``--set NAME`` builds only that set, for every nozzle; repeat it for more than one set.
+``--printer x2d`` selects the 256 mm printer instead of the default H2D; repeat the option
+with ``--printer h2d --printer x2d`` to build both.
 
     uv run python tools/makerworld_exports.py --output FOLDER [--replace] [--jobs N]
+        [--printer h2d|x2d ...]
         [--set Full-Catalogue|Zeekr-7X-Expansion-Set|Pull-Handle-Set|Adjustable-Stop ...]
         [--bambu-studio /Applications/BambuStudio.app/Contents/MacOS/BambuStudio]
 """
 
 import argparse
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -37,7 +44,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
-from cargo_grid.cli import H2D_PROFILES
+from cargo_grid.footprints import PACKING_WORKERS_ENV
+from cargo_grid.printers import PRINTERS, DualNozzlePrinter, NozzleProfiles, bambu_flush_settings
+from cargo_grid.sliced_extrusion import reach_problem
 
 PETG_COLOUR = "#688197"
 PLA_COLOUR = "#0A2989"
@@ -47,6 +56,55 @@ HANDLE_SET = (("extras", "pull-handle"), "Pull-Handle-Set")
 ADJUSTABLE_STOP_SET = (("extras", "adjustable-stop"), "Adjustable-Stop")
 SET_NAMES = tuple(title for _, title in (*SETS, HANDLE_SET, ADJUSTABLE_STOP_SET))
 SUFFIXES = {"job.3mf": ".3mf", "manifest.json": ".manifest.json"}
+PROCESS_MEMORY_BYTES = 3 * 1024**3
+
+
+def _available_memory_bytes() -> int:
+    if sys.platform == "darwin":
+        stats = subprocess.check_output(["vm_stat"], text=True)
+        page_size = int(re.search(r"page size of (\d+) bytes", stats)[1])
+        pages = sum(
+            int(value)
+            for value in re.findall(r"Pages (?:free|inactive|speculative):\s+(\d+)", stats)
+        )
+        return page_size * pages
+    if sys.platform == "win32":
+        import ctypes
+        from ctypes import wintypes
+
+        class MemoryStatus(ctypes.Structure):
+            _fields_ = [
+                ("length", wintypes.DWORD),
+                ("load", wintypes.DWORD),
+                *(
+                    (name, ctypes.c_ulonglong)
+                    for name in (
+                        "total",
+                        "available",
+                        "page_total",
+                        "page_available",
+                        "virtual_total",
+                        "virtual_available",
+                        "extended",
+                    )
+                ),
+            ]
+
+        status = MemoryStatus()
+        status.length = ctypes.sizeof(status)
+        if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+            raise ctypes.WinError()
+        return status.available
+    values = dict(line.split(":", 1) for line in Path("/proc/meminfo").read_text().splitlines())
+    return int(values["MemAvailable"].split()[0]) * 1024
+
+
+def _process_capacity() -> tuple[int, int]:
+    cores = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count()
+    cores = max(1, (cores or 1) - 2)
+    memory = _available_memory_bytes()
+    usable = max(0, memory - max(2 * 1024**3, memory // 4))
+    return cores, max(1, usable // PROCESS_MEMORY_BYTES)
 
 
 @dataclass(frozen=True)
@@ -56,15 +114,10 @@ class Variant:
     set_name: str
 
 
-def _h2d_arguments(profiles) -> list[str]:
+def _printer_arguments(printer: DualNozzlePrinter, profiles: NozzleProfiles) -> list[str]:
     return [
-        "--h2d-dual-safe",
-        "--build-width-mm",
-        "350",
-        "--build-depth-mm",
-        "320",
-        "--build-height-mm",
-        "325",
+        "--printer",
+        printer.name.lower(),
         "--bambu",
         "--material",
         profiles.petg,
@@ -73,7 +126,7 @@ def _h2d_arguments(profiles) -> list[str]:
     ]
 
 
-def _layer_arguments(nozzle: float, profiles) -> list[str]:
+def _layer_arguments(nozzle: float, profiles: NozzleProfiles) -> list[str]:
     return [
         "--nozzle-diameter-mm",
         f"{nozzle:g}",
@@ -82,41 +135,19 @@ def _layer_arguments(nozzle: float, profiles) -> list[str]:
     ]
 
 
-def variants() -> list[Variant]:
+def variants(printers: tuple[str, ...] = ("h2d",)) -> list[Variant]:
     result = []
-    for nozzle, profiles in sorted(H2D_PROFILES.items(), reverse=True):
-        for command, title in SETS:
-            for bottom in (0.0, SOLID_BOTTOM_MM):
-                floor = f"_Solid-Bottom-{bottom:g}mm" if bottom else ""
-                arguments = [
-                    *command,
-                    *_h2d_arguments(profiles),
-                    "--material",
-                    profiles.pla,
-                    "PLA",
-                    PLA_COLOUR,
-                    *_layer_arguments(nozzle, profiles),
-                    "--roof-support",
-                    "--roof-support-mode",
-                    "auto",
-                    "--no-stl",
-                ]
-                if bottom:
-                    arguments += ["--solid-bottom-thickness-mm", f"{bottom:g}"]
-                result.append(
-                    Variant(
-                        f"CargoGrid_H2D_{title}{floor}_Auto-Support_{nozzle:g}mm-Nozzle",
-                        tuple(arguments),
-                        title,
-                    )
-                )
-        for command, title in (HANDLE_SET, ADJUSTABLE_STOP_SET):
-            result.append(
-                Variant(
-                    f"CargoGrid_H2D_{title}_{nozzle:g}mm-Nozzle",
-                    (
+    for key in dict.fromkeys(printers):
+        printer = PRINTERS[key]
+        for nozzle, profiles in sorted(printer.profiles.items(), reverse=True):
+            for command, title in (*SETS, HANDLE_SET, ADJUSTABLE_STOP_SET):
+                tiled_set = (command, title) in SETS
+                for bottom in (0.0, SOLID_BOTTOM_MM) if tiled_set else (0.0,):
+                    floor = f"_Solid-Bottom-{bottom:g}mm" if bottom else ""
+                    support = "_Auto-Support" if tiled_set else ""
+                    arguments = [
                         *command,
-                        *_h2d_arguments(profiles),
+                        *_printer_arguments(printer, profiles),
                         "--material",
                         profiles.pla,
                         "PLA",
@@ -126,10 +157,16 @@ def variants() -> list[Variant]:
                         "--roof-support-mode",
                         "auto",
                         "--no-stl",
-                    ),
-                    title,
-                )
-            )
+                    ]
+                    if bottom:
+                        arguments += ["--solid-bottom-thickness-mm", f"{bottom:g}"]
+                    result.append(
+                        Variant(
+                            f"CargoGrid_{printer.name}_{title}{floor}{support}_{nozzle:g}mm-Nozzle",
+                            tuple(arguments),
+                            title,
+                        )
+                    )
     return result
 
 
@@ -137,7 +174,7 @@ def destinations(output: Path, variant: Variant) -> dict[str, Path]:
     return {source: output / f"{variant.name}{suffix}" for source, suffix in SUFFIXES.items()}
 
 
-def generate(variant: Variant, scratch: Path) -> Path:
+def generate(variant: Variant, scratch: Path, *, packing_workers: int = 1) -> Path:
     folder = scratch / variant.name
     log = scratch / f"{variant.name}.log"
     with log.open("w") as handle:
@@ -146,6 +183,7 @@ def generate(variant: Variant, scratch: Path) -> Path:
             stdout=handle,
             stderr=subprocess.STDOUT,
             check=False,
+            env={**os.environ, PACKING_WORKERS_ENV: str(packing_workers)},
         )
     if result.returncode:
         tail = "".join(log.read_text().splitlines(keepends=True)[-20:])
@@ -155,7 +193,7 @@ def generate(variant: Variant, scratch: Path) -> Path:
 
 # Bambu stores resolved filament-to-nozzle maps in the project; the check sets its own.
 PROFILE_CACHES = {"filament_map", "filament_map_2", "filament_nozzle_map", "filament_volume_map"}
-# PETG then PLA: on the left (1) and right (2) nozzle, then the other way round.
+# PETG then PLA in slicer slots 1/2, then swapped; display names are printer-specific.
 NOZZLE_MAPS = (("1", "2"), ("2", "1"))
 # Messages the CLI logs as errors on plates it slices successfully.
 PROBLEMS = re.compile(
@@ -233,17 +271,8 @@ def check_copy(project: Path, effective: dict, mapping: tuple[str, ...], target:
         filament_nozzle_map=list(mapping),
         filament_volume_map=["0"] * count,
         extruder_nozzle_stats=["Standard#1"] * extruders,
-        # The CLI needs a purge table sized for these filaments on every nozzle.
-        flush_volumes_matrix=[
-            "0" if row == column else "280"
-            for _ in range(extruders)
-            for row in range(count)
-            for column in range(count)
-        ],
-        flush_volumes_vector=["140"] * (2 * count),
-        flush_multiplier=["1"] * extruders,
-        flush_multiplier_fast=["1.2"] * extruders,
     )
+    settings.update(bambu_flush_settings(count, extruders))
     plates = 0
     with ZipFile(project) as original, ZipFile(target, "w", ZIP_DEFLATED) as copy:
         for entry in original.infolist():
@@ -263,24 +292,50 @@ def check_copy(project: Path, effective: dict, mapping: tuple[str, ...], target:
     return plates
 
 
-def slice_plate(bambu: Path, project: Path, plate: int, work: Path) -> str | None:
+def extrusion_problem(sliced: Path, reserved_tower: tuple[float, ...] | None = None) -> str | None:
+    with ZipFile(sliced) as archive:
+        settings = json.loads(archive.read("Metadata/project_settings.config"))
+        printer = next(p for p in PRINTERS.values() if p.model == settings["printer_model"])
+        names = [name for name in archive.namelist() if name.endswith(".gcode")]
+        if len(names) != 1:
+            return f"expected one sliced plate, found {len(names)} G-code files"
+        gcode = archive.read(names[0]).decode()
+    return reach_problem(gcode, printer, reserved_tower)
+
+
+def slice_plate(
+    bambu: Path,
+    project: Path,
+    plate: int,
+    work: Path,
+    reserved_tower: tuple[float, ...] | None = None,
+) -> str | None:
     """Slice one plate; return Bambu's complaint, or None when it slices cleanly."""
     log = work / f"slice-{plate}.log"
     arguments = ["--datadir", str(work / f"datadir-{plate}"), "--debug", "1", "--arrange", "0"]
     arguments += ["--orient", "0", "--slice", str(plate)]
     arguments += ["--export-3mf", str(work / f"sliced-{plate}.3mf"), str(project)]
     code = _run(bambu, arguments, log)
-    (work / f"sliced-{plate}.3mf").unlink(missing_ok=True)
     if code == 0:
-        return None
+        problem = extrusion_problem(work / f"sliced-{plate}.3mf", reserved_tower)
+        (work / f"sliced-{plate}.3mf").unlink()
+        return problem
+    (work / f"sliced-{plate}.3mf").unlink(missing_ok=True)
     found = PROBLEMS.findall(log.read_text(errors="replace"))
     return found[0].strip() if found else f"Bambu Studio exited with code {code}"
 
 
-def bambu_problems(project: Path, bambu: Path, work: Path, jobs: int) -> list[str]:
+def bambu_problems(
+    project: Path,
+    bambu: Path,
+    work: Path,
+    jobs: int,
+    tower_bounds: dict[int, tuple[float, ...]] | None = None,
+) -> list[str]:
     """Slice every plate with PETG on each nozzle; list what Bambu Studio refuses."""
     work.mkdir(parents=True)
     effective = effective_settings(project, bambu, work)
+    printer = next(p for p in PRINTERS.values() if p.model == effective["printer_model"])
     tasks = []
     for mapping in NOZZLE_MAPS:
         folder = work / f"petg-nozzle-{mapping[0]}"
@@ -289,10 +344,18 @@ def bambu_problems(project: Path, bambu: Path, work: Path, jobs: int) -> list[st
         plates = check_copy(project, effective, mapping, copy)
         tasks += [(mapping, copy, plate, folder) for plate in range(1, plates + 1)]
     with ThreadPoolExecutor(jobs) as pool:
-        results = list(pool.map(lambda task: slice_plate(bambu, *task[1:]), tasks))
-    side = {"1": "left", "2": "right"}
+        reservations = tower_bounds or {}
+        results = list(
+            pool.map(
+                lambda task: slice_plate(
+                    bambu, *task[1:], reserved_tower=reservations.get(task[2])
+                ),
+                tasks,
+            )
+        )
     return [
-        f"plate {plate} with PETG on the {side[mapping[0]]} nozzle: {problem}"
+        f"plate {plate} with PETG on the {printer.nozzles[int(mapping[0]) - 1].name} nozzle: "
+        f"{problem}"
         for (mapping, _, plate, _), problem in zip(tasks, results)
         if problem
     ]
@@ -304,7 +367,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--replace", action="store_true", help="replace files with the same names in --output"
     )
-    parser.add_argument("--jobs", type=int, default=4, help="variants generated at once")
+    parser.add_argument(
+        "--jobs",
+        type=int,
+        help="variants at once; default uses available cores and memory with headroom",
+    )
+    parser.add_argument(
+        "--printer",
+        dest="printers",
+        action="append",
+        choices=PRINTERS,
+        help="build this printer's sets; repeat for both; default h2d",
+    )
     parser.add_argument(
         "--set",
         dest="sets",
@@ -321,13 +395,20 @@ def main(argv: list[str] | None = None) -> int:
         help="Bambu Studio executable used to slice every plate before anything is written",
     )
     args = parser.parse_args(argv)
-    if args.jobs < 1:
+    if args.jobs is not None and args.jobs < 1:
         parser.error("--jobs must be at least 1")
-    selected = [variant for variant in variants() if not args.sets or variant.set_name in args.sets]
+    selected = [
+        variant
+        for variant in variants(tuple(args.printers or ("h2d",)))
+        if not args.sets or variant.set_name in args.sets
+    ]
     if args.dry_run:
         for variant in selected:
             print(f"{variant.name}: cargo-grid {' '.join(variant.arguments)}")
         return 0
+    cores, memory_slots = _process_capacity()
+    jobs = min(args.jobs if args.jobs is not None else min(cores, memory_slots), len(selected))
+    packing_workers = max(1, min(cores // jobs, memory_slots // jobs - 1))
     if not args.output.is_dir():
         parser.error(f"--output must be an existing folder: {args.output}")
     if args.bambu_studio is not None and not args.bambu_studio.is_file():
@@ -345,14 +426,38 @@ def main(argv: list[str] | None = None) -> int:
         )
     with tempfile.TemporaryDirectory(prefix="cargo-grid-makerworld-") as temporary:
         scratch = Path(temporary)
-        with ThreadPoolExecutor(args.jobs) as pool:
-            folders = list(pool.map(lambda variant: generate(variant, scratch), selected))
+        print(
+            f"Generating {len(selected)} variants with {jobs} jobs; "
+            f"at most {packing_workers} search workers per variant",
+            flush=True,
+        )
+        with ThreadPoolExecutor(jobs) as pool:
+            folders = list(
+                pool.map(
+                    lambda variant: generate(variant, scratch, packing_workers=packing_workers),
+                    selected,
+                )
+            )
         if args.bambu_studio is not None:
             bambu = args.bambu_studio.resolve()
             problems = []
             for variant, folder in zip(selected, folders):
+                manifest = json.loads((folder / "manifest.json").read_text())
+                tower = manifest["export"].get("prime_tower", {})
+                tower_bounds = (
+                    {
+                        plate["plate"]: tuple(plate["reserved_extrusion_bounds_mm"])
+                        for plate in tower["plates"]
+                    }
+                    if "prime_tower_width" in tower.get("process_settings", {})
+                    else None
+                )
                 found = bambu_problems(
-                    folder / "job.3mf", bambu, scratch / f"{variant.name}-check", args.jobs
+                    folder / "job.3mf",
+                    bambu,
+                    scratch / f"{variant.name}-check",
+                    jobs,
+                    tower_bounds,
                 )
                 result = f"{len(found)} plate slices refused" if found else "every plate sliced"
                 print(f"{variant.name}: Bambu Studio check, {result}")
@@ -369,6 +474,10 @@ def main(argv: list[str] | None = None) -> int:
             plates = export["export"]["plates"]
             parts = sum(item["quantity"] for plate in plates for item in plate["items"])
             print(f"{variant.name}: {len(plates)} plates, {parts} parts")
+            if export.get("omitted"):
+                print(
+                    f"  {len(export['omitted'])} designs omitted; see {variant.name}.manifest.json"
+                )
     return 0
 
 

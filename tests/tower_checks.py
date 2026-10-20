@@ -1,10 +1,11 @@
 """Checks shared by tests of planned prime-tower positions and their model-free areas."""
 
-from cargo_grid.plates import BambuTowerEstimate
+from cargo_grid.plates import BAMBU_TOWER_MARGIN_MM, BambuTowerEstimate
+from cargo_grid.printers import H2D
 
 
 def placed_bounds(design, placement, size):
-    width, depth = size[:2] if placement.rotation == 0 else size[1::-1]
+    width, depth = size[:2] if placement.rotation % 180 == 0 else size[1::-1]
     return placement.x, placement.y, placement.x + width, placement.y + depth
 
 
@@ -17,11 +18,12 @@ def assert_towers_stay_where_bambu_keeps_them(job, layer_height, size=lambda d: 
     for plate, (x, y) in job.prime_tower_positions.items():
         tallest = max(size(design)[2] for design, _ in plates[plate])
         side, brim = estimate.side_mm(tallest), estimate.brim_mm(tallest)
-        # Bambu Studio keeps a stored position when its estimate is 15 mm inside X 25..325.
-        assert y == 15 and 40 <= x and x + 15 + side <= 325 + 1e-9
+        left, right = H2D.shared_x_mm
+        margin = BAMBU_TOWER_MARGIN_MM
+        assert y == margin and left + margin <= x and x + margin + side <= right + 1e-9
         x0, y0, x1, y1 = job.tower_bounds(plate)
         assert x0 <= x - brim + 1e-9 and y0 <= y - brim + 1e-9
-        assert y1 >= y + side + brim - 1e-9 and x1 == 325
+        assert y1 >= y + side + brim - 1e-9 and x1 == right
         k0, l0, k1, l1 = job.tower_clearance(plate).grow((x0, y0, x1, y1))
         for design, placement in plates[plate]:
             a0, b0, a1, b1 = placed_bounds(design, placement, size(design))

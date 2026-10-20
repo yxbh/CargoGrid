@@ -9,6 +9,7 @@ from build123d import Face, GeomType, Location, Part, Solid, Vector
 from cargo_grid.accessories import FAMILIES, Accessory, accessory_datums
 from cargo_grid.jobs import Design, Job
 from cargo_grid.parameters import DEFAULT_HOLE_DIAMETER_MM, Interface, Tile, count, positive
+from cargo_grid.printers import PRINTERS
 from cargo_grid.stacking import Volume
 from cargo_grid.tiles import hole_placements, tile_joins
 
@@ -17,7 +18,7 @@ RoofSupportMode = Literal["painted", "auto"]
 GLOBAL_AUTO_SUPPORT_SETTINGS = {"enable_support": "1", "support_type": "normal(auto)"}
 # Compatibility name for callers checking an accessory's support recommendation.
 OBJECT_AUTO_SUPPORT = GLOBAL_AUTO_SUPPORT_SETTINGS
-# Bambu Studio 02.08.02.61: fdm_process_common and the two cli.H2D_PROFILES processes.
+# Bambu Studio 02.08.02.61: fdm_process_common and the supported H2D/X2D processes.
 # Other BBL processes can override these values, particularly the top gap.
 BAMBU_SUPPORT_DEFAULTS = {
     "support_on_build_plate_only": "0",
@@ -28,10 +29,7 @@ BAMBU_SUPPORT_DEFAULTS = {
     "support_expansion": "0",
 }
 BAMBU_SUPPORT_DEFAULT_PROCESSES = frozenset(
-    (
-        "0.32mm Balanced Strength @BBL H2D 0.8 nozzle",
-        "0.24mm Standard @BBL H2D",
-    )
+    profile.process for printer in PRINTERS.values() for profile in printer.profiles.values()
 )
 CRITICAL_PAD_WIDTH_MM = 3.0
 MIN_ENFORCER_HALF_SPAN_MM = 1.0
@@ -44,7 +42,7 @@ class RoofSupportSettings:
     top_gap: float = 0.0
     interface_layers: int = 2
     interface_spacing: float = 0.0
-    nozzle_map: tuple[int, int] | None = None
+    nozzle_slots: tuple[int, int] | None = None
     coverage: RoofCoverage = "critical"
     foot_expansion: float | None = None
     mode: RoofSupportMode = "painted"
@@ -67,13 +65,13 @@ class RoofSupportSettings:
             )
         if self.foot_expansion is not None and self.foot_expansion != -1:
             positive("roof support-foot expansion", self.foot_expansion, zero=True)
-        if self.nozzle_map is not None:
-            if len(self.nozzle_map) != 2:
+        if self.nozzle_slots is not None:
+            if len(self.nozzle_slots) != 2:
                 raise ValueError("roof supports need a PETG/PLA two-nozzle mapping")
-            for nozzle in self.nozzle_map:
-                count("physical nozzle", nozzle)
-            if set(self.nozzle_map) != {1, 2}:
-                raise ValueError("PETG and PLA must use distinct physical nozzles 1 and 2")
+            for nozzle in self.nozzle_slots:
+                count("nozzle slot", nozzle)
+            if set(self.nozzle_slots) != {1, 2}:
+                raise ValueError("PETG and PLA must use distinct nozzle slots 1 and 2")
 
     @property
     def contact_mode(self) -> Literal["zero-contact", "gapped"]:
@@ -90,7 +88,7 @@ class RoofSupportSettings:
         }
 
     def native_settings(self, *, process_profile: str | None = None) -> dict[str, str | list[str]]:
-        """Inherit audited defaults only for the common base or supported H2D processes."""
+        """Inherit audited defaults only for the common base or supported printer processes."""
         inherit_defaults = (
             process_profile is None or process_profile in BAMBU_SUPPORT_DEFAULT_PROCESSES
         )
@@ -109,9 +107,9 @@ class RoofSupportSettings:
             settings["support_object_xy_distance"] = "0.4"
         elif not inherit_defaults:
             settings.update(support_expansion="0", support_object_xy_distance="0.35")
-        if self.nozzle_map is not None:
+        if self.nozzle_slots is not None:
             settings.update(
-                filament_map=[str(n) for n in self.nozzle_map],
+                filament_map=[str(n) for n in self.nozzle_slots],
                 filament_map_mode="Manual",
             )
         if self.foot_expansion is not None and self.foot_expansion != -1:

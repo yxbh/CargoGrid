@@ -7,8 +7,19 @@ from build123d import Box
 
 from cargo_grid import catalogue
 from cargo_grid.accessories import Accessory
-from cargo_grid.jobs import Design
+from cargo_grid.jobs import Design, omitted_design
 from cargo_grid.parameters import BuildVolume, Interface
+
+
+def test_omitted_design_record_keeps_the_measured_pose_and_reason():
+    design = Design("part", Box(20, 40, 10), {"family": "plate"})
+    record = omitted_design(design, (20, 10, 40), "posed bounds exceed usable envelope")
+    assert record == {
+        "name": "part",
+        "parameters": {"family": "plate"},
+        "size_mm": (20, 10, 40),
+        "reason": "posed bounds exceed usable envelope",
+    }
 
 
 @pytest.fixture

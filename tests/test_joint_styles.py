@@ -46,7 +46,7 @@ def test_default_contract_and_invalid_styles():
         ]
         if command == "layout":
             args += ["--layout-width-mm", "120", "--layout-depth-mm", "120"]
-        assert parser().parse_args(args).joint_style == "original"
+        assert not hasattr(parser().parse_args(args), "joint_style")
         assert (
             parser().parse_args(args + ["--joint-style", "full-height"]).joint_style
             == "full-height"
