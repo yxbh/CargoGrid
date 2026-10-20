@@ -8,6 +8,7 @@ import pytest
 from build123d import Axis, GeomType, Location, Solid
 from local_geometry import bounded_distance
 from OCP.BRepAdaptor import BRepAdaptor_Surface
+from shared_fixture import shared_fixture
 
 from cargo_grid.interfaces import make_plug
 from cargo_grid.meshes import checked_mesh
@@ -74,8 +75,11 @@ def _witness_intersection_volume(placed, bore):
 
 
 @pytest.fixture(scope="module")
-def review_job():
-    return rear_review_job()
+def review_job(tmp_path_factory, worker_id):
+    if worker_id == "master":
+        return rear_review_job()
+    path = tmp_path_factory.getbasetemp().parent / "rear-review-job.pickle"
+    return shared_fixture(path, rear_review_job)
 
 
 def test_measured_outline_uses_exact_mirrored_pchip_and_named_inset():
