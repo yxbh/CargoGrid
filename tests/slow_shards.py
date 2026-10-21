@@ -14,10 +14,9 @@ SLOW_SHARDS = (
         "tests/test_ramp.py",
         "tests/test_solid_bottom.py",
         "tests/test_zeekr_extras.py",
-        "tests/test_zeekr_rear_review.py",
+        "tests/test_zeekr_contours.py",
     ),
     (
-        "tests/test_00_zeekr_rear_export.py",
         "tests/test_adjustable_stop.py",
         "tests/test_h2d_catalogue.py",
         "tests/test_pull_handles.py",

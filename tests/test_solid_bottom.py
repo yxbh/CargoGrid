@@ -16,7 +16,7 @@ from cargo_grid.layout import exact_layout
 from cargo_grid.parameters import BuildVolume
 from cargo_grid.roof_support import female_roofs
 from cargo_grid.tiles import hole_placements, socket_centers
-from cargo_grid.vehicles import zeekr_7x, zeekr_7x_rear_review
+from cargo_grid.vehicles import zeekr_7x, zeekr_7x_contours
 
 T = 1.92  # six 0.32 mm layers
 H = 13.0
@@ -373,8 +373,8 @@ def test_plated_zeekr_straight_edge_keeps_its_plan_and_closes_its_floor():
 
 
 def test_plated_zeekr_side_cap_keeps_its_contour_and_closes_sockets_and_holes():
-    parameters = zeekr_7x_rear_review.RearReviewParameters(interface=PLATED)
-    design = zeekr_7x_rear_review._side_design("west", "south", parameters)
+    parameters = zeekr_7x_contours.ContourParameters(interface=PLATED)
+    design = zeekr_7x_contours._side_design("west", "south", parameters)
     shape = design.shape
     assert shape.is_valid and len(shape.solids()) == 1 and shape.volume > 0
     # Standard bounds are (68.565, 171.152, 13); the measured contour stays in plan.
@@ -399,9 +399,9 @@ def test_plated_zeekr_side_cap_keeps_its_contour_and_closes_sockets_and_holes():
 
 @pytest.mark.slow
 def test_plated_zeekr_south_ramp_rises_through_the_floor():
-    parameters = zeekr_7x_rear_review.RearReviewParameters(interface=PLATED)
+    parameters = zeekr_7x_contours.ContourParameters(interface=PLATED)
     x = parameters.field_x_min_mm + 8 * parameters.interface.pitch
-    design = zeekr_7x_rear_review._south_design(2, 2, x, parameters)
+    design = zeekr_7x_contours._south_design(2, 2, x, parameters)
     shape = design.shape
     assert shape.is_valid and len(shape.solids()) == 1 and shape.volume > 0
     assert tuple(shape.bounding_box().size) == pytest.approx((120, 101.0, H + T), abs=1e-3)
@@ -411,10 +411,10 @@ def test_plated_zeekr_south_ramp_rises_through_the_floor():
 
 
 def test_zeekr_extras_accept_the_standard_interface_with_a_solid_bottom():
-    parameters = zeekr_7x_rear_review.RearReviewParameters(interface=PLATED)
+    parameters = zeekr_7x_contours.ContourParameters(interface=PLATED)
     assert parameters.interface.solid_bottom_mm == T
     with pytest.raises(ValueError, match="standard 60x13"):
-        zeekr_7x_rear_review.RearReviewParameters(interface=Interface(height=14, solid_bottom_mm=T))
+        zeekr_7x_contours.ContourParameters(interface=Interface(height=14, solid_bottom_mm=T))
     with pytest.raises(ValueError, match="standard 60 mm unit"):
         zeekr_7x.extras_job(
             BuildVolume(350, 320, 325), interface=Interface(30, 13, 0, "original", T)
