@@ -9,6 +9,7 @@ import pytest
 from build123d import Align, Box
 from shapely.geometry import Polygon, box
 
+from cargo_grid import catalogue
 from cargo_grid.export import (
     BambuSettings,
     Material,
@@ -27,6 +28,68 @@ from cargo_grid.footprints import (
 from cargo_grid.jobs import Design, Job
 from cargo_grid.packing import PrintPlacement, packing_score
 from cargo_grid.parameters import BuildVolume
+from cargo_grid.plates import PlateGroup, plan_plates
+from cargo_grid.printers import H2D, X2D
+
+
+@pytest.fixture(scope="module")
+def wide_perimeter_designs():
+    return [
+        catalogue.accessory_design(spec)
+        for spec in catalogue.accessory_variants(H2D.build)
+        if spec.family in {"edge-x", "edge-y", "corner-in", "corner-out"}
+        and spec.edge_outward == 30
+    ]
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    "printer,layer,max_cells,rectangle_plates",
+    [(X2D, 0.32, 4, 3), (X2D, 0.24, 4, 3), (H2D, 0.32, 5, 2)],
+    ids=["x2d-0.32", "x2d-0.24", "h2d-0.32"],
+)
+def test_real_wide_perimeter_family_uses_multi_plate_outline_packing(
+    wide_perimeter_designs, printer, layer, max_cells, rectangle_plates
+):
+    plan = plan_plates(
+        [
+            PlateGroup(
+                "30mm edges and corners - complete holes",
+                [
+                    design
+                    for design in wide_perimeter_designs
+                    if design.parameters["nx"] <= max_cells
+                ],
+                4,
+                projected=True,
+                max_layout_attempts=catalogue.WIDE_PERIMETER_PACKING_ATTEMPTS,
+            )
+        ],
+        printer.common_build(),
+        size=lambda design: design.bambu_size,
+        auto_roof_support=True,
+        layer_height_mm=layer,
+        tower_width_mm=(
+            printer.catalogue_support.tower_width_mm if printer.catalogue_support else None
+        ),
+    )
+    assert not plan.unfit and len(plan.designs) == 2 * max_cells + 10
+    record = plan.projected_packing["30mm edges and corners - complete holes"]
+    assert plan.plate_count == 2 and record["rectangle_plates"] == rectangle_plates
+    assert record["maximum_layout_attempts"] == (
+        catalogue.WIDE_PERIMETER_PACKING_ATTEMPTS if rectangle_plates > 2 else 32
+    )
+    assert set(plan.projected_clearances) <= set(range(plan.plate_count))
+    job = Job(
+        plan.designs,
+        printer.build,
+        "catalogue",
+        print_placements=plan.placements,
+        projected_footprints=plan.projected_footprints,
+        projected_footprint_clearances=plan.projected_clearances,
+        plate_builds=plan.plate_builds,
+    )
+    assert _PreparedProject(job, None, None).placements == plan.placements
 
 
 def test_projected_mesh_footprint_unions_all_height_triangles():
@@ -148,8 +211,6 @@ def test_process_workers_produce_identical_multi_plate_placements(adaptive):
 
 
 def test_repeated_nested_exports_are_byte_identical_including_zip_metadata(tmp_path, monkeypatch):
-    from cargo_grid.plates import PlateGroup, plan_plates
-
     def generate(folder, workers):
         monkeypatch.setenv("CARGO_GRID_PACKING_WORKERS", str(workers))
         aligned = (Align.MIN, Align.MIN, Align.MIN)

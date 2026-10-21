@@ -6,7 +6,7 @@
 |---|---|
 | Default contracts | `uv run pytest -q` |
 | Full portable, including slow | `uv run pytest -q tests -n 12 --dist worksteal -m "not native"` |
-| PR portable | `uv run pytest -q tests -n 2 --dist worksteal -m "not native and not slow"` |
+| PR portable | `uv run pytest -q tests -n 4 --dist worksteal -m "not native and not slow"` |
 | Complete slow selection | `uv run pytest -q tests -n 4 --dist loadgroup -m "slow and not native"` |
 | Optional native Bambu | Supply `CARGO_GRID_BAMBU`, then `uv run pytest -q tests -m native` serially |
 
