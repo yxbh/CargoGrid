@@ -164,7 +164,7 @@ def test_auto_job_cannot_bypass_required_accessory_settings(designs, tmp_path):
         write_3mf(job, tmp_path / "invalid.3mf", bambu=bambu())
 
 
-def test_one_plate_auto_job_writes_global_support_tower_and_no_enforcers(designs, tmp_path):
+def test_one_plate_auto_job_writes_global_support_and_tower(designs, tmp_path):
     female, existing, plain = designs
     chosen = [female["tile"], plain["edge-x"], plain["plate"], existing["vertical-stop"]]
     tower = PrimeTower()
@@ -208,7 +208,6 @@ def test_one_plate_auto_job_writes_global_support_tower_and_no_enforcers(designs
     export = manifest["export"]
     roof = export["roof_support"]
     assert roof["mode"] == "auto" and roof["global_enable_support"] is True
-    assert roof["enforcer_count"] == 0
     supported = {entry["design"]: entry for entry in roof["supported_objects"]}
     assert set(supported) == {design.name for design in chosen}
     assert supported[female["tile"].name]["support_may_occupy_openings"] == [

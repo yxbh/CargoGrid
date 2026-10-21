@@ -1034,14 +1034,12 @@ def _auto_roof_support_record(job: Job, bambu: BambuSettings, batches, plates) -
     supported = {entry["design"] for entry in objects}
     return {
         "mode": "auto",
-        "settings": asdict(settings),
         "contact_mode": settings.contact_mode,
         "contact_material_intent": "PETG model/base and distinct PLA interface; actual material compatibility and physical release must be checked",
         "global_enable_support": True,
         "object_support": "global normal(auto); all objects inherit support",
         "supported_objects": objects,
         "unsupported_designs": sorted({d.name for d, _, _ in batches} - supported),
-        "enforcer_count": 0,
         "coverage_note": "Auto support covers whole overhangs as the slicer detects them. All supports on these objects get the PLA interface, including accessory supports that were PETG-only before. Not physically tested.",
         "scope_caveat": "Support may occupy round holes next to pocket roofs while printing; remove it from the underside before assembly.",
         "physical_detachment_verified": False,
