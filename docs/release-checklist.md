@@ -22,7 +22,7 @@ uv build
 uv run python tools/check_distributions.py dist
 ```
 
-Use fewer workers on a smaller machine. This command includes the `slow` tier and the separately collected default contracts. CI uses four workers with `--dist worksteal`; source-keyed test inputs share construction across workers without sharing mutable shapes. Append `--input-cache=off` for fresh-construction qualification or use a new `--input-cache-dir` to measure a cold run. Do not use xdist for native Bambu tests.
+Use fewer workers on a smaller machine. This command includes the `slow` tier and the separately collected default contracts. Portable CI uses four workers with `--dist worksteal`; source-keyed test inputs share construction across workers without sharing mutable shapes. Append `--input-cache=off` for fresh-construction qualification or use a new `--input-cache-dir` to measure a cold run. Do not use xdist for native Bambu tests.
 
 Build into a fresh directory. The distribution checker expects one wheel and one source archive and rejects extra build output. It checks package metadata, entry points, the licence and the allowlist; it isn't a general secret or licence scanner.
 
@@ -36,7 +36,7 @@ The Linux job installs the CAD runtime libraries, runs Ruff, runs the portable t
 
 The portable test command includes pytest's built-in `--durations=0 --durations-min=0` report. It lists every test's setup, call and teardown durations, slowest first, without adding a timing plugin. Add the same flags to a local run when investigating slow tests. These are per-phase elapsed times: phases on parallel workers can overlap, so their sum is not the CI job's wall time. The same run writes a JUnit report, and `tools/check_test_durations.py` fails the job if any portable test takes longer than its per-test budget, unless the test is in the checker's reviewed allowlist with its own limit. It warns, without failing, when the pytest session runs past its target, because hosted runners differ in speed from run to run. `tests/README.md` describes how to keep new tests inside the budget.
 
-The slow tier holds exhaustive parameter sweeps, assembled geometry checks and complete exports. Geometry contracts have bounded owners; metadata and policy checks use stand-ins rather than repeating real construction. The weekly and manual slow selections use one runner and `--dist worksteal`.
+The slow tier holds exhaustive parameter sweeps, assembled geometry checks and complete exports. Geometry contracts have bounded owners; metadata and policy checks use stand-ins rather than repeating real construction. Weekly and manual slow selections use two cost-balanced runner partitions with four workers and `--dist loadgroup` each, keeping expensive shared plans on one worker. Scheduled runs build cold; manual dispatches can choose `cache_mode: cold` or restore source/dependency-keyed input snapshots shared with `main`. See `tests/README.md` for complete-selection and partition commands.
 
 Keep option propagation, design metadata, family geometry and whole-catalogue packing as separate test responsibilities. CLI option tests capture the resolved spec at the construction boundary; each distinct physical hole configuration also goes through real CLI export. Metadata-only accessory tests use a small real solid at `make_accessory`, while family geometry tests still construct the actual bodies. Neither parser results nor manifest hole counts prove that a bore was cut.
 

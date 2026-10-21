@@ -146,6 +146,86 @@ def test_copied_geometry_keeps_exact_mesh_but_edits_do_not_reuse_it(tmp_path):
     assert store.checked_mesh(edited_copy)[0][:, 0].min() == pytest.approx(9)
 
 
+def test_geometry_defers_mesh_work_and_corrupt_mesh_hits_still_fail(tmp_path, monkeypatch):
+    from hashlib import sha256
+
+    from cargo_grid import meshes
+
+    store = store_at(tmp_path / "cache")
+    calls = []
+    original = meshes.checked_mesh
+
+    def measured(shape):
+        calls.append(True)
+        return original(shape)
+
+    monkeypatch.setattr(meshes, "checked_mesh", measured)
+    shape = store.geometry("box", (), SOURCES, lambda: Box(2, 3, 4))
+    assert calls == []
+    store.checked_mesh(shape)
+    store.checked_mesh(deepcopy(shape))
+    assert calls == [True]
+    key = sha256(f"mesh:{shape._test_input_mesh[0]}".encode()).hexdigest()
+    (store.root / key / "vertices.npy").write_bytes(b"corrupt")
+    with pytest.raises(InputCacheError, match="checksum"):
+        store.checked_mesh(shape)
+    assert calls == [True]
+
+
+def test_deferred_mesh_reconstruction_checks_geometry_and_source_before_publication(tmp_path):
+    source = tmp_path / "geometry.py"
+    source.write_text("radius = 2\n")
+    store = store_at(tmp_path / "cache")
+    store.geometry("box", (), [source], lambda: Box(2, 3, 4))
+    wrong = store.geometry("box", (), [source], lambda: Box(2, 3, 5))
+    with pytest.raises(InputCacheError, match="invalid input cache geometry"):
+        store.checked_mesh(wrong)
+
+    def changed():
+        source.write_text("radius = 3\n")
+        return Box(2, 3, 4)
+
+    shape = store.geometry("box", (), [source], changed)
+    with pytest.raises(InputCacheError, match="mesh inputs changed"):
+        store.checked_mesh(shape)
+    assert len(list(store.root.glob("*/entry.json"))) == 1
+    assert not list(store.root.glob(".building-*"))
+    original = Box(2, 3, 4)
+    owned = store.geometry("mutable", (), SOURCES, lambda: original)
+    original.move(Location((10, 0, 0)))
+    with pytest.raises(InputCacheError, match="original geometry input changed"):
+        store.checked_mesh(owned)
+
+
+def _mesh_worker(arguments):
+    from unittest.mock import patch
+
+    from cargo_grid import meshes
+
+    cache, marker = map(Path, arguments)
+    store = store_at(cache)
+    original = meshes.checked_mesh
+
+    def build(shape):
+        with marker.open("x"):
+            pass
+        return original(shape)
+
+    shape = store.geometry("parallel mesh", (), SOURCES, lambda: Box(2, 3, 4))
+    with patch.object(meshes, "checked_mesh", side_effect=build):
+        points, faces, _ = store.checked_mesh(shape)
+    return points.tolist(), faces.tolist()
+
+
+def test_concurrent_first_mesh_request_publishes_once(tmp_path):
+    arguments = (str(tmp_path / "cache"), str(tmp_path / "meshed"))
+    with ProcessPoolExecutor(2, mp_context=get_context("spawn")) as pool:
+        values = list(pool.map(_mesh_worker, [arguments] * 4))
+    assert all(value == values[0] for value in values)
+    assert (tmp_path / "meshed").is_file()
+    assert not list((tmp_path / "cache").glob(".building-*"))
+
+
 def _cache_worker(arguments):
     cache, marker = map(Path, arguments)
     store = store_at(cache)
@@ -195,9 +275,9 @@ def test_corrupt_entries_fail_instead_of_silently_rebuilding(tmp_path, damage):
     shape = store.geometry("box", (), SOURCES, lambda: Box(2, 3, 4))
     entry = store.root / shape._test_input_mesh[0]
     if damage == "missing-file":
-        (entry / "faces.npy").unlink()
+        (entry / "shape.brep").unlink()
     elif damage == "bytes":
-        (entry / "vertices.npy").write_bytes(b"corrupt")
+        (entry / "shape.brep").write_bytes(b"corrupt")
     elif damage == "manifest":
         (entry / "entry.json").write_text("{}")
     else:

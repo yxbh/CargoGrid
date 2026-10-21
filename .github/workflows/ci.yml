@@ -17,6 +17,13 @@ on:
           - portable
           - slow
         default: portable
+      cache_mode:
+        description: Restore compatible inputs or measure cold construction
+        type: choice
+        options:
+          - restore
+          - cold
+        default: restore
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name }}-${{ inputs.tier }}
@@ -41,12 +48,23 @@ jobs:
           sudo apt-get install --no-install-recommends -y libgl1 libglu1-mesa
       - name: Install dependencies
         run: uv sync --group dev
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - name: Fingerprint test input store
+        id: inputs
+        run: |
+          uv run --no-sync python - <<'PY' >> "$GITHUB_OUTPUT"
+          import sys
+          sys.path.insert(0, "tests")
+          from input_cache import InputStore, ROOT
+          print("fingerprint=" + InputStore(ROOT / ".local/test-inputs").key("ci-snapshot", (), [ROOT / "tests/geometry_inputs.py"]))
+          PY
+      - name: Restore and save test inputs
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: .local/test-inputs
-          key: ${{ runner.os }}-py312-inputs-v1-portable-${{ github.sha }}
+          key: inputs-v2-${{ steps.inputs.outputs.fingerprint }}-portable-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            ${{ runner.os }}-py312-inputs-v1-portable-
+            ${{ inputs.cache_mode != 'cold' && format('inputs-v2-{0}-portable-', steps.inputs.outputs.fingerprint) || '' }}
+            ${{ inputs.cache_mode != 'cold' && format('inputs-v2-{0}-', steps.inputs.outputs.fingerprint) || '' }}
       - name: Lint and format
         run: |
           uv run --no-sync ruff check .
@@ -108,6 +126,10 @@ jobs:
 
   slow:
     if: github.event_name == 'schedule' || inputs.tier == 'slow'
+    strategy:
+      fail-fast: false
+      matrix:
+        partition: [0, 1]
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -121,12 +143,23 @@ jobs:
           sudo apt-get install --no-install-recommends -y libgl1 libglu1-mesa
       - name: Install dependencies
         run: uv sync --group dev
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - name: Fingerprint test input store
+        id: inputs
+        run: |
+          uv run --no-sync python - <<'PY' >> "$GITHUB_OUTPUT"
+          import sys
+          sys.path.insert(0, "tests")
+          from input_cache import InputStore, ROOT
+          print("fingerprint=" + InputStore(ROOT / ".local/test-inputs").key("ci-snapshot", (), [ROOT / "tests/geometry_inputs.py"]))
+          PY
+      - name: Restore and save test inputs
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: .local/test-inputs
-          key: ${{ runner.os }}-py312-inputs-v1-slow-${{ github.sha }}
+          key: inputs-v2-${{ steps.inputs.outputs.fingerprint }}-slow-${{ matrix.partition }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            ${{ runner.os }}-py312-inputs-v1-slow-
+            ${{ github.event_name != 'schedule' && inputs.cache_mode != 'cold' && format('inputs-v2-{0}-slow-{1}-', steps.inputs.outputs.fingerprint, matrix.partition) || '' }}
+            ${{ github.event_name != 'schedule' && inputs.cache_mode != 'cold' && format('inputs-v2-{0}-', steps.inputs.outputs.fingerprint) || '' }}
       - name: Record runner resources
         run: |
           uv run --no-sync python - <<'PY'
@@ -143,4 +176,4 @@ jobs:
               print(package, importlib.metadata.version(package))
           PY
       - name: Slow geometry and export tests
-        run: uv run --no-sync python tools/ci_memory_sampler.py -- /usr/bin/time -v uv run --no-sync pytest -q tests -n 4 --dist worksteal -m "slow and not native" --durations=0 --durations-min=0 --junitxml=.local/slow-junit.xml
+        run: uv run --no-sync python tools/ci_memory_sampler.py -- /usr/bin/time -v uv run --no-sync pytest -q tests -n 4 --dist loadgroup -m "slow and not native" --ci-partition=${{ matrix.partition }}/2 --durations=0 --durations-min=0 --junitxml=.local/slow-junit.xml

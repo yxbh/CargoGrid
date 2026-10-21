@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA = 1
-MESH_FILES = {"shape.brep", "vertices.npy", "faces.npy"}
+MESH_FILES = {"vertices.npy", "faces.npy"}
 
 
 class InputCacheError(ValueError):
@@ -128,6 +128,31 @@ def _toolchain() -> dict[str, str]:
     }
 
 
+def _verify_geometry(shape: Shape, record: dict, entry: Path) -> None:
+    import numpy as np
+    from OCP.Precision import Precision
+
+    bounds = shape.bounding_box()
+    volume = shape.volume
+    if (
+        not shape.is_valid
+        or len(shape.solids()) != record["solids"]
+        or len(shape.faces()) != record["faces"]
+        or len(shape.edges()) != record["edges"]
+        or not isfinite(volume)
+        or volume <= 0
+        or abs(volume - record["volume"]) > Precision.Confusion_s()
+        or not all(np.isfinite(tuple(bounds.min) + tuple(bounds.max)))
+        or not np.allclose(
+            [list(bounds.min), list(bounds.max)],
+            record["bounds"],
+            atol=Precision.Confusion_s(),
+            rtol=0,
+        )
+    ):
+        raise InputCacheError(f"invalid input cache geometry: {entry}")
+
+
 class InputStore:
     def __init__(
         self,
@@ -214,13 +239,12 @@ class InputStore:
             raise InputCacheError(f"unexpected input cache members: {entry}")
         return record
 
-    def _publish(self, key: str, build: Callable[[Path], dict]) -> Path:
+    def _publish(self, key: str, build: Callable[[Path], dict]) -> tuple[Path, dict]:
         self.root.mkdir(parents=True, exist_ok=True)
         entry = self.root / key
         with FileLock(str(self.root / f"{key}.lock")):
             if entry.exists() or entry.is_symlink():
-                self._manifest(entry)
-                return entry
+                return entry, self._manifest(entry)
             with TemporaryDirectory(prefix=".building-", dir=self.root) as temporary:
                 staging = Path(temporary) / key
                 staging.mkdir()
@@ -237,8 +261,7 @@ class InputStore:
                 (staging / "entry.json").write_bytes(data)
                 (staging / "entry.sha256").write_text(sha256(data).hexdigest())
                 staging.replace(entry)
-        self._manifest(entry)
-        return entry
+        return entry, self._manifest(entry)
 
     def geometry(
         self,
@@ -251,27 +274,20 @@ class InputStore:
     ) -> Shape:
         if not self.enabled:
             return create()
-        import numpy as np
         from build123d import Color, Shape
         from OCP.BinTools import BinTools
-        from OCP.Precision import Precision
         from OCP.TopoDS import TopoDS_Shape
 
-        from cargo_grid.meshes import checked_mesh
+        fresh = None
 
         def build(staging: Path) -> dict:
-            shape = create()
+            nonlocal fresh
+            shape = fresh = create()
             bounds = shape.bounding_box()
             volume = shape.volume
             if not shape.is_valid or not shape.solids() or not isfinite(volume) or volume <= 0:
                 raise ValueError("geometry input must contain valid positive-volume solids")
-            # Match the writer's fresh owned copy, including its native surface representation.
-            owned = deepcopy(shape)
-            owned.bounding_box()
-            points, faces, report = checked_mesh(owned)
             (staging / "shape.brep").write_bytes(_binary(shape))
-            np.save(staging / "vertices.npy", np.asarray(points, dtype="<f8"), allow_pickle=False)
-            np.save(staging / "faces.npy", np.asarray(faces, dtype="<i8"), allow_pickle=False)
             if self.key(f"geometry:{kind}", parameters, sources) != key:
                 raise InputCacheError("geometry inputs changed during construction")
             return {
@@ -283,14 +299,12 @@ class InputStore:
                 "edges": len(shape.edges()),
                 "volume": volume,
                 "bounds": [list(bounds.min), list(bounds.max)],
-                "mesh": report,
                 "data": _canonical(describe()) if describe is not None else None,
             }
 
         key = self.key(f"geometry:{kind}", parameters, sources)
-        entry = self._publish(key, build)
-        record = self._manifest(entry)
-        if record.get("type") != "geometry" or set(record["files"]) != MESH_FILES:
+        entry, record = self._publish(key, build)
+        if record.get("type") != "geometry" or set(record["files"]) != {"shape.brep"}:
             raise InputCacheError(f"not a geometry input: {entry}")
         wrapped = TopoDS_Shape()
         BinTools.Read_s(wrapped, BytesIO((entry / "shape.brep").read_bytes()))
@@ -299,27 +313,27 @@ class InputStore:
         shape = Shape.cast(wrapped)
         shape.label = record["label"]
         shape.color = Color(*record["color"]) if record["color"] is not None else None
-        bounds = shape.bounding_box()
-        volume = shape.volume
-        if (
-            not shape.is_valid
-            or len(shape.solids()) != record["solids"]
-            or len(shape.faces()) != record["faces"]
-            or len(shape.edges()) != record["edges"]
-            or not isfinite(volume)
-            or volume <= 0
-            or abs(volume - record["volume"]) > Precision.Confusion_s()
-            or not all(np.isfinite(tuple(bounds.min) + tuple(bounds.max)))
-            or not np.allclose(
-                [list(bounds.min), list(bounds.max)],
-                record["bounds"],
-                atol=Precision.Confusion_s(),
-                rtol=0,
-            )
-        ):
-            raise InputCacheError(f"invalid input cache geometry: {entry}")
+        _verify_geometry(shape, record, entry)
         shape._test_input_mesh = (key, sha256(_binary(shape)).hexdigest())
         shape._test_input_data = _restore(record["data"])
+
+        def create_mesh():
+            from cargo_grid.meshes import checked_mesh
+
+            # A BREP remesh can change bytes; use the original constructor's owned copy.
+            original = fresh if fresh is not None else create()
+            if fresh is None:
+                _verify_geometry(original, record, entry)
+            elif sha256(_binary(original)).hexdigest() != record["files"]["shape.brep"]:
+                raise InputCacheError(f"original geometry input changed before meshing: {entry}")
+            owned = deepcopy(original)
+            owned.bounding_box()
+            result = checked_mesh(owned)
+            if self.key(f"geometry:{kind}", parameters, sources) != key:
+                raise InputCacheError("mesh inputs changed during construction")
+            return result
+
+        shape._test_input_mesh_factory = create_mesh
         shape.__deepcopy__ = MethodType(_copy_input_shape, shape)
         return shape
 
@@ -353,8 +367,21 @@ class InputStore:
             return checked_mesh(shape)
         import numpy as np
 
-        entry = self.root / marker[0]
-        record = self._manifest(entry)
+        key = sha256(f"mesh:{marker[0]}".encode()).hexdigest()
+
+        def build(staging):
+            points, faces, report = shape._test_input_mesh_factory()
+            np.save(staging / "vertices.npy", np.asarray(points, dtype="<f8"), allow_pickle=False)
+            np.save(staging / "faces.npy", np.asarray(faces, dtype="<i8"), allow_pickle=False)
+            return {"type": "mesh", "geometry": marker[0], "mesh": report}
+
+        entry, record = self._publish(key, build)
+        if (
+            record.get("type") != "mesh"
+            or record.get("geometry") != marker[0]
+            or set(record["files"]) != MESH_FILES
+        ):
+            raise InputCacheError(f"not a checked mesh input: {entry}")
         points = np.load(entry / "vertices.npy", mmap_mode="r", allow_pickle=False)
         faces = np.load(entry / "faces.npy", mmap_mode="r", allow_pickle=False)
         if (
@@ -410,7 +437,7 @@ class InputStore:
             return {"type": "artifacts"}
 
         key = self.key(f"artifacts:{kind}", parameters, sources)
-        entry = self._publish(key, build)
-        if self._manifest(entry).get("type") != "artifacts":
+        entry, record = self._publish(key, build)
+        if record.get("type") != "artifacts":
             raise InputCacheError(f"not an artifact input: {entry}")
         return entry / "files"
