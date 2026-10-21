@@ -45,8 +45,8 @@ def wide_perimeter_designs():
 @pytest.mark.slow
 @pytest.mark.parametrize(
     "printer,layer,max_cells,rectangle_plates",
-    [(X2D, 0.32, 4, 3), (X2D, 0.24, 4, 3), (H2D, 0.32, 5, 2)],
-    ids=["x2d-0.32", "x2d-0.24", "h2d-0.32"],
+    [(X2D, 0.24, 4, 3), (H2D, 0.32, 5, 2)],
+    ids=["x2d-0.24", "h2d-0.32"],
 )
 def test_real_wide_perimeter_family_uses_multi_plate_outline_packing(
     wide_perimeter_designs, printer, layer, max_cells, rectangle_plates

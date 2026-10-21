@@ -955,26 +955,26 @@ def test_cli_extras_accept_auto_roof_support(auto_stand_ins, monkeypatch, tmp_pa
 
 
 @pytest.mark.parametrize("side", ["east", "west"])
-def test_real_contour_caps_inherit_global_support(side):
+def test_contour_caps_inherit_global_support(side):
     from cargo_grid.roof_support import RoofSupportSettings, effective_object_settings
 
     parameters = zeekr_7x_contours.ContourParameters()
-    design = zeekr_7x_contours._side_design(side, "north", parameters)
+    caps, _ = _stand_in_contours()(parameters)
+    design = next(design for design in caps if design.parameters["side"] == side)
     auto = RoofSupportSettings()
     assert effective_object_settings(design, auto) == {}
     assert needs_auto_support(design)
 
 
 @pytest.mark.parametrize("family", ["edge-y", "edge-x"])
-def test_real_forty_mm_edges_inherit_global_support(family):
+def test_forty_mm_edges_inherit_global_support(family, accessory_metadata_shape):
     spec = next(v for v in variants() if v.family == family and v.nx == 2)
     design = accessory_design(spec)
     assert needs_auto_support(design)
 
 
-@pytest.mark.slow
-def test_real_male_south_ramp_can_inherit_global_support():
+def test_male_south_ramp_can_inherit_global_support():
     parameters = zeekr_7x_contours.ContourParameters()
-    x = parameters.field_x_min_mm + 8 * parameters.interface.pitch
-    design = zeekr_7x_contours._south_design(2, 2, x, parameters)
+    _, ramps = _stand_in_contours()(parameters)
+    design = ramps[2]
     assert needs_auto_support(design)

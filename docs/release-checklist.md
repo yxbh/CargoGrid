@@ -16,7 +16,7 @@ On a 12-core workstation, run the full portable suite with 12 workers:
 ```sh
 uv run ruff check .
 uv run ruff format --check .
-uv run pytest -q tests -n 12 --dist worksteal -m "not native"
+uv run pytest -q tests -n 12 --dist loadgroup -m "not native"
 git diff --check
 uv build
 uv run python tools/check_distributions.py dist
@@ -40,7 +40,7 @@ The slow tier holds exhaustive parameter sweeps, assembled geometry checks and c
 
 Keep option propagation, design metadata, family geometry and whole-catalogue packing as separate test responsibilities. CLI option tests capture the resolved spec at the construction boundary; each distinct physical hole configuration also goes through real CLI export. Metadata-only accessory tests use a small real solid at `make_accessory`, while family geometry tests still construct the actual bodies. Neither parser results nor manifest hole counts prove that a bore was cut.
 
-The bracket catalogue-fit test limits enumeration to all maintained brackets, then makes independent source-pose and print-pose catalogue requests with real geometry. The H2D plan tests build the whole unpatched inventory once in a read-only module fixture, compare complete parameters against independent per-family contracts, and check actual posed solids for each plate group, reach, gaps, projected footprints, the export replan, support settings and family-grouped plates as separate tests. Add an independent inventory and grouping contract when introducing a family; don't replace those contracts with global design totals or incidental plate numbers. The native archive's plate limit remains a separate export contract.
+The bracket catalogue-fit test limits enumeration to all maintained brackets, then makes independent source-pose and print-pose catalogue requests with real geometry. Catalogue metadata tests compare complete parameters against independent per-family contracts using small inputs. Geometry integrations construct one real family group at a time, keeping actual posed solids, reach, gaps, projected footprints and independent export reconstruction. Auto group exports use real bodies and a real female tile for mixed-job context. Each group's plate count is checked separately, with a small composition check and the complete publish comparison covering their combined count. Add an independent inventory and grouping contract when introducing a family; don't replace those contracts with global design totals or incidental plate numbers. The native archive's plate limit remains a separate export contract.
 
 For a test refactor, collect test IDs before and after and map renamed, moved or split assertions to their new owners. Keep raw duration reports and measurements with the review, not in maintained documentation. Run the full portable suite after the focused checks. Keep geometry cases and tolerances intact. Share read-only inputs through ordinary fixtures within a run, copy before mutation, and keep constructor-operation tests on the real factory.
 

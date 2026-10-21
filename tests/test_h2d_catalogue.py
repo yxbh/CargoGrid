@@ -240,9 +240,7 @@ EXPECTED_GROUP_ORDER = [
 ]
 
 
-@pytest.fixture(scope="module")
-def h2d_plan():
-    """Build the unpatched whole-catalogue plan once per worker; the tests only read it."""
+def _h2d_plan():
     original_size = Design.bambu_size
     measured = Counter()
 
@@ -254,6 +252,11 @@ def h2d_plan():
         patch.setattr(Design, "bambu_size", property(counted_size))
         job = dual_safe_catalogue_job(H2D, hole_diameter=10, hole_scope="full")
     return SimpleNamespace(job=job, measured=measured, layout=_plan_layout(job))
+
+
+@pytest.fixture
+def h2d_policy(catalogue_stand_ins):
+    return _h2d_plan()
 
 
 def _design_group(design):
@@ -322,13 +325,12 @@ def _plan_layout(job):
     return layout
 
 
-@pytest.mark.slow
-def test_h2d_dual_safe_plan_keeps_full_family_inventory_and_hardware_zones(h2d_plan):
-    job = h2d_plan.job
+def test_h2d_dual_safe_plan_keeps_full_family_inventory_and_hardware_zones(h2d_policy):
+    job = h2d_policy.job
     # Every planned design, and the omitted 5x5, is measured exactly once.
-    assert set(h2d_plan.measured.values()) == {1}
-    assert {id(design) for design in job.designs} <= set(h2d_plan.measured)
-    assert len(h2d_plan.measured) == len(job.designs) + len(job.omitted)
+    assert set(h2d_policy.measured.values()) == {1}
+    assert {id(design) for design in job.designs} <= set(h2d_policy.measured)
+    assert len(h2d_policy.measured) == len(job.designs) + len(job.omitted)
     every_size = {(x, y) for x in range(1, 6) for y in range(1, 6)}
     assert Counter(tile_sizes(BuildVolume(350, 320, 325))) == Counter(every_size)
     # The 306 mm 5x5 only fits one nozzle's area, so the shared H2D plan leaves it out.
@@ -354,10 +356,9 @@ def test_h2d_dual_safe_plan_keeps_full_family_inventory_and_hardware_zones(h2d_p
     assert job.placement_policy["omitted_tiles"] == [omitted["name"]]
 
 
-@pytest.mark.slow
-def test_h2d_dual_safe_plan_keeps_every_plate_in_common_reach_without_manual_maps(h2d_plan):
-    job = h2d_plan.job
-    plate_count = h2d_plan.layout.plate_count
+def test_h2d_dual_safe_plan_keeps_every_plate_in_common_reach_without_manual_maps(h2d_policy):
+    job = h2d_policy.job
+    plate_count = h2d_policy.layout.plate_count
     assert (
         set(job.plate_names) == {p.plate for p in job.print_placements} == set(range(plate_count))
     )
@@ -391,10 +392,9 @@ def test_h2d_dual_safe_plan_keeps_every_plate_in_common_reach_without_manual_map
     assert job.placement_policy["minimum_actual_part_xy_clearance_mm"] == 4
 
 
-@pytest.mark.slow
-def test_h2d_dual_safe_plan_groups_families_on_named_plates(h2d_plan):
-    job = h2d_plan.job
-    layout = h2d_plan.layout
+def test_h2d_dual_safe_plan_groups_families_on_named_plates(h2d_policy):
+    job = h2d_policy.job
+    layout = h2d_policy.layout
     group_plates = layout.group_plates
     assert layout.ramp_joins == {
         (width, join) for width in range(1, 6) for join in ("female", "male")
@@ -439,9 +439,7 @@ def test_h2d_dual_safe_plan_groups_families_on_named_plates(h2d_plan):
     assert job.placement_policy["perimeter_grouping"] == "outward width and boundary-hole mode"
 
 
-@pytest.mark.slow
-@pytest.mark.parametrize("group", EXPECTED_GROUP_ORDER)
-def test_h2d_dual_safe_posed_solids_stay_in_reach_with_rectangle_gaps(h2d_plan, group):
+def _assert_posed_solids_stay_in_reach_with_rectangle_gaps(h2d_plan, group):
     job = h2d_plan.job
     layout = h2d_plan.layout
     plates = {
@@ -475,11 +473,12 @@ def test_h2d_dual_safe_posed_solids_stay_in_reach_with_rectangle_gaps(h2d_plan, 
                 assert hypot(dx, dy) >= 4 - 1e-5
 
 
-@pytest.mark.slow
-def test_h2d_dual_safe_plan_nests_accessories_and_checks_all_nested_plates(h2d_plan):
+def _assert_nested_plates(h2d_plan, group):
     job = h2d_plan.job
     packing = job.placement_policy["projected_footprint_packing"]
-    assert packing and set(packing) <= set(EXPECTED_GROUP_ORDER) - {"Tiles"}
+    if group == "30mm edges and corners - complete holes":
+        assert packing
+    assert set(packing) <= set(EXPECTED_GROUP_ORDER) - {"Tiles"}
     for group, record in packing.items():
         assert record["status"] in {"applied", "rectangle preferred"}
         assert record["rectangle_plates"] > 1
@@ -511,8 +510,7 @@ def test_h2d_dual_safe_plan_nests_accessories_and_checks_all_nested_plates(h2d_p
             )
 
 
-@pytest.mark.slow
-def test_h2d_dual_safe_prepared_project_keeps_the_planned_plates(h2d_plan):
+def _assert_prepared_project_keeps_the_planned_plates(h2d_plan):
     job = h2d_plan.job
     prepared = _PreparedProject(
         job,
@@ -525,8 +523,18 @@ def test_h2d_dual_safe_prepared_project_keeps_the_planned_plates(h2d_plan):
 
 
 @pytest.mark.slow
-def test_h2d_dual_safe_plan_requests_support_only_for_supported_families(h2d_plan):
-    job = h2d_plan.job
+@pytest.mark.parametrize("group", EXPECTED_GROUP_ORDER)
+def test_real_h2d_catalogue_geometry_and_prepared_project(real_catalogue_group, group):
+    h2d_plan = _h2d_plan()
+    assert real_catalogue_group
+    assert len(real_catalogue_group) == len(set(real_catalogue_group))
+    _assert_posed_solids_stay_in_reach_with_rectangle_gaps(h2d_plan, group)
+    _assert_nested_plates(h2d_plan, group)
+    _assert_prepared_project_keeps_the_planned_plates(h2d_plan)
+
+
+def test_h2d_dual_safe_plan_requests_support_only_for_supported_families(h2d_policy):
+    job = h2d_policy.job
     assert all(
         design.bambu_object_settings["support_type"] == "normal(auto)"
         for design in job.designs

@@ -4,7 +4,7 @@ import json
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from functools import cached_property
-from math import ceil, isfinite, sqrt
+from math import ceil, sqrt
 from pathlib import Path
 from shutil import copyfileobj
 from tempfile import TemporaryFile
@@ -26,20 +26,28 @@ from cargo_grid.accessories import (
     required_bambu_print_rotation,
     required_bambu_print_rotation_y,
 )
+from cargo_grid.bambu import (
+    BAMBU_PROCESS_DEFAULTS as BAMBU_PROCESS_DEFAULTS,
+)
+from cargo_grid.bambu import (
+    BambuSettings,
+    _bambu_project_settings,
+)
+from cargo_grid.bambu import (
+    Material as Material,
+)
 from cargo_grid.footprints import (
     ProjectedFootprint,
-    placed_footprint,
     projected_meshes_footprint,
 )
 from cargo_grid.jobs import Design, Job
 from cargo_grid.meshes import write_stl
-from cargo_grid.packing import PACKING_ROTATIONS, PrintPlacement, TowerClearance, pack_sizes
-from cargo_grid.parameters import DEFAULT_HOLE_DIAMETER_MM, BuildVolume, Interface, count, positive
+from cargo_grid.packing import PrintPlacement, TowerClearance, pack_sizes
+from cargo_grid.parameters import DEFAULT_HOLE_DIAMETER_MM, Interface, count, positive
+from cargo_grid.placements import _explicit_placements
 from cargo_grid.prepared import Bounds, PreparedShape, rotated_points, rotation_matrix_3mf
-from cargo_grid.printers import DualNozzlePrinter, bambu_flush_settings
 from cargo_grid.rods import ROD_FAMILIES, Rod, RodBrace, fit_evidence
 from cargo_grid.roof_support import (
-    RoofSupportSettings,
     effective_object_settings,
     female_roofs,
     global_auto_support_reason,
@@ -51,71 +59,10 @@ CORE = "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"
 REL = "http://schemas.openxmlformats.org/package/2006/relationships"
 CONTENT = "http://schemas.openxmlformats.org/package/2006/content-types"
 MANIFEST_SCHEMA_VERSION = 1
-BAMBU_PROCESS_DEFAULTS = {
-    "resolution": "0.003",
-    "slice_closing_radius": "0.01",
-}
 UNSUPPORTED_COMBINATIONS = {
     "roof_support_with_stacking": "Roof supports and stacked separator jobs cannot be combined.",
     "stacked_catalogues": "Stack repeated part/layout tile quantities, not mixed catalogue samples.",
 }
-
-
-@dataclass(frozen=True)
-class Material:
-    name: str
-    kind: str
-    color: str
-
-    def __post_init__(self) -> None:
-        if not self.name.strip() or not self.kind.strip():
-            raise ValueError("material name and type must be explicit")
-        if len(self.color) != 7 or self.color[0] != "#":
-            raise ValueError("material color must be #RRGGBB")
-        try:
-            int(self.color[1:], 16)
-        except ValueError as error:
-            raise ValueError("material color must be #RRGGBB") from error
-
-
-@dataclass(frozen=True)
-class BambuSettings:
-    materials: tuple[Material, ...]
-    nozzle: float
-    layer_height: float
-    roof_support: RoofSupportSettings | None = None
-    printer_settings_id: str | None = None
-    print_settings_id: str | None = None
-    bed_type: str | None = None
-    machine_nozzle_count: int = 1
-    printer: DualNozzlePrinter | None = None
-
-    def __post_init__(self) -> None:
-        from cargo_grid.parameters import positive
-
-        positive("nozzle diameter", self.nozzle)
-        positive("layer height", self.layer_height)
-        count("machine nozzle count", self.machine_nozzle_count)
-        if not self.materials:
-            raise ValueError("Bambu project requires explicit filament slots")
-        if (self.printer_settings_id is None) != (self.print_settings_id is None):
-            raise ValueError("printer and process profile IDs must be supplied together")
-        if self.printer_settings_id is not None and (
-            not self.printer_settings_id.strip() or not self.print_settings_id.strip()
-        ):
-            raise ValueError("printer and process profile IDs must not be empty")
-        if self.printer is not None and not isinstance(self.printer, DualNozzlePrinter):
-            raise ValueError("printer must be DualNozzlePrinter")
-        if self.roof_support is not None:
-            if not isinstance(self.roof_support, RoofSupportSettings):
-                raise ValueError("roof_support must be RoofSupportSettings")
-            if len(self.materials) != 2 or [m.kind.upper() for m in self.materials] != [
-                "PETG",
-                "PLA",
-            ]:
-                raise ValueError(
-                    "roof supports require exactly PETG slot 1 (model/base) and PLA slot 2 (interface)"
-                )
 
 
 def _xml(parent, tag, **attributes):
@@ -132,78 +79,6 @@ def _bytes(root) -> bytes:
 
 def _sides(clearance: TowerClearance) -> str:
     return "/".join(f"{getattr(clearance, side):g}" for side in ("left", "front", "right", "back"))
-
-
-def _bambu_project_settings(job: Job, bambu: BambuSettings, plate_count: int = 1) -> dict:
-    nozzle_count = (
-        len(bambu.printer.nozzles)
-        if bambu.printer is not None
-        else max(bambu.machine_nozzle_count, 2 if bambu.roof_support else 1)
-    )
-    settings = {
-        "version": "2.8.2.61",
-        "printer_settings_id": bambu.printer_settings_id
-        or "Cargo-Grid explicit envelope (not calibrated)",
-        "print_settings_id": bambu.print_settings_id
-        or "Cargo-Grid diagnostic layout (not a print preset)",
-        "printable_area": [
-            "0x0",
-            f"{job.build.x:g}x0",
-            f"{job.build.x:g}x{job.build.y:g}",
-            f"0x{job.build.y:g}",
-        ],
-        "printable_height": f"{job.build.z:g}",
-        "nozzle_diameter": [f"{bambu.nozzle:g}"] * nozzle_count,
-        "layer_height": f"{bambu.layer_height:g}",
-        "filament_diameter": ["1.75"] * len(bambu.materials),
-        "filament_type": [material.kind for material in bambu.materials],
-        "filament_colour": [material.color for material in bambu.materials],
-        "filament_settings_id": [material.name for material in bambu.materials],
-        "filament_is_support": ["0"] * len(bambu.materials),
-        "filament_map_mode": "Auto For Match",
-    }
-    settings.update(BAMBU_PROCESS_DEFAULTS)
-    if bambu.printer is not None:
-        settings["printer_model"] = bambu.printer.model
-    if nozzle_count > 1:
-        settings.update(bambu_flush_settings(len(bambu.materials), nozzle_count))
-        settings["extruder_type"] = (
-            [nozzle.extruder_type for nozzle in bambu.printer.nozzles]
-            if bambu.printer
-            else ["Direct Drive"] * nozzle_count
-        )
-        settings["default_nozzle_volume_type"] = ["Standard"] * nozzle_count
-        settings["nozzle_volume_type"] = ["Standard"] * nozzle_count
-    if bambu.bed_type is not None:
-        settings["curr_bed_type"] = bambu.bed_type
-    overrides = set(BAMBU_PROCESS_DEFAULTS)
-    if job.prime_tower_width_mm is not None:
-        tower_shape = {
-            "prime_tower_width": f"{job.prime_tower_width_mm:g}",
-            "prime_tower_rib_wall": "0",
-        }
-        settings.update(tower_shape)
-        overrides.update(tower_shape)
-    if bambu.roof_support:
-        settings.update(bambu.roof_support.native_settings(process_profile=bambu.print_settings_id))
-        overrides.update(
-            bambu.roof_support.native_process_override_keys(process_profile=bambu.print_settings_id)
-        )
-    default = next(iter(job.prime_tower_positions.values()), None)
-    if job.prime_tower is not None and default is not None:
-        # Positions remain per plate; a catalogue's rectangular shape is project-wide.
-        positions = [job.prime_tower_positions.get(plate, default) for plate in range(plate_count)]
-        tower = {
-            "wipe_tower_x": [f"{x:g}" for x, _ in positions],
-            "wipe_tower_y": [f"{y:g}" for _, y in positions],
-        }
-        settings.update(tower)
-        overrides.update(tower)
-    settings["different_settings_to_system"] = [
-        ";".join(sorted(overrides)),
-        *[""] * (len(bambu.materials) + 1),
-    ]
-    return settings
 
 
 def _adaptive_volume(shape) -> float:
@@ -388,99 +263,6 @@ def _validate_request(job: Job, bambu: BambuSettings | None, stack: StackSetting
         if stack:
             raise ValueError("roof supports and stacked separator jobs cannot be combined")
         validate_roof_job(job, bambu.roof_support, bambu.layer_height)
-
-
-def _explicit_placements(
-    placements: list[PrintPlacement],
-    sizes: list[tuple[float, float, float]],
-    build,
-    gap: float,
-    projected_footprints: list[ProjectedFootprint | None] | None = None,
-    projected_clearances: dict[int, float] | None = None,
-    plate_builds: dict[int, BuildVolume] | None = None,
-) -> list[PrintPlacement]:
-    if len(placements) != len(sizes):
-        raise ValueError("explicit print placements must match packed batches")
-    projected_clearances = projected_clearances or {}
-    plate_builds = plate_builds or {}
-    placement_plates = {
-        placement.plate for placement in placements if isinstance(placement, PrintPlacement)
-    }
-    if set(plate_builds) - placement_plates:
-        raise ValueError("plate_builds entry has no placed batch")
-    occupied = {}
-    projected = {}
-    for index, (placement, size) in enumerate(zip(placements, sizes)):
-        if not isinstance(placement, PrintPlacement):
-            raise ValueError("explicit placements must be PrintPlacement instances")
-        if (
-            isinstance(placement.plate, bool)
-            or not isinstance(placement.plate, int)
-            or placement.plate < 0
-            or isinstance(placement.rotation, bool)
-            or not isinstance(placement.rotation, int)
-            or placement.rotation not in PACKING_ROTATIONS
-        ):
-            raise ValueError(
-                "explicit placements require nonnegative plates and 0/90/180/270 rotations"
-            )
-        if not isfinite(placement.x) or not isfinite(placement.y):
-            raise ValueError("explicit placement coordinates must be finite")
-        for dimension in size:
-            positive("part dimension", dimension)
-        width, depth = size[:2] if placement.rotation % 180 == 0 else size[1::-1]
-        if not build.contains_box(placement.x, placement.y, width, depth, size[2]):
-            raise ValueError(f"explicit placement {index} exceeds the build envelope")
-        plate_build = plate_builds.get(placement.plate)
-        if plate_build is not None and not plate_build.contains_box(
-            placement.x, placement.y, width, depth, size[2]
-        ):
-            raise ValueError(f"explicit placement {index} exceeds its plate build envelope")
-        rectangles = occupied.setdefault(placement.plate, [])
-        if placement.plate in projected_clearances:
-            if projected_footprints is None or projected_footprints[index] is None:
-                raise ValueError(f"explicit placement {index} lacks its projected footprint")
-            geometry = placed_footprint(projected_footprints[index], placement)
-            minimum_x, minimum_y, maximum_x, maximum_y = geometry.bounds
-            footprint_width = maximum_x - minimum_x
-            footprint_depth = maximum_y - minimum_y
-            if not build.contains_box(
-                placement.x,
-                placement.y,
-                footprint_width,
-                footprint_depth,
-                size[2],
-            ):
-                raise ValueError(
-                    f"explicit placement {index} projected footprint exceeds the build envelope"
-                )
-            if plate_build is not None and not plate_build.contains_box(
-                placement.x,
-                placement.y,
-                footprint_width,
-                footprint_depth,
-                size[2],
-            ):
-                raise ValueError(
-                    f"explicit placement {index} projected footprint exceeds its plate build envelope"
-                )
-            clearance = projected_clearances[placement.plate]
-            plate_footprints = projected.setdefault(placement.plate, [])
-            if any(geometry.distance(other) < clearance - 1e-6 for other in plate_footprints):
-                raise ValueError(
-                    f"explicit placement {index} violates projected-footprint clearance"
-                )
-            plate_footprints.append(geometry)
-        elif any(
-            placement.x < x + w + gap - 1e-6
-            and placement.x + width + gap > x + 1e-6
-            and placement.y < y + d + gap - 1e-6
-            and placement.y + depth + gap > y + 1e-6
-            for x, y, w, d in rectangles
-        ):
-            raise ValueError(f"explicit placement {index} overlaps another packed part")
-        rectangles.append((placement.x, placement.y, width, depth))
-    return placements
 
 
 class _PreparedProject:
