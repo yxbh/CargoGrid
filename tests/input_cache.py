@@ -280,8 +280,11 @@ class InputStore:
         from OCP.BinTools import BinTools
         from OCP.TopoDS import TopoDS_Shape
 
+        fresh = None
+
         def build(staging: Path) -> dict:
-            shape = create()
+            nonlocal fresh
+            shape = fresh = create()
             bounds = shape.bounding_box()
             volume = shape.volume
             if not shape.is_valid or not shape.solids() or not isfinite(volume) or volume <= 0:
@@ -317,10 +320,17 @@ class InputStore:
         shape._test_input_data = _restore(record["data"])
 
         def create_mesh():
+            nonlocal fresh
+
             from cargo_grid.meshes import checked_mesh
 
             # A BREP remesh can change bytes; use the original constructor's owned copy.
-            original = create()
+            original, fresh = fresh, None
+            if (
+                original is None
+                or sha256(_binary(original)).hexdigest() != record["files"]["shape.brep"]
+            ):
+                original = create()
             _verify_geometry(original, record, entry)
             owned = deepcopy(original)
             owned.bounding_box()

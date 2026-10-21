@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 from geometry_inputs import FAMILIES
-from input_cache import ROOT, InputStore
+from input_cache import ROOT, InputStore, _binary
 
 from cargo_grid import BuildVolume, Rod, Tile, make_rod, make_tile
 from cargo_grid.catalogue import accessory_design
@@ -52,8 +52,9 @@ def test_project_bytes_are_identical_fresh_cold_and_warm(tmp_path, family):
         store.geometry(family, spec, sources, create),
     ]
     if family == "contour-sequence":
-        for side, segment in (("west", "south"), ("east", "north"), ("east", "south")):
-            _side_design(side, segment, spec)
+        before = _binary(fresh)
+        _side_design("east", "north", spec)
+        assert _binary(fresh) != before
     for kind, bambu in (
         ("core", None),
         ("bambu", BambuSettings((Material("PETG", "PETG", "#637B70"),), 0.8, 0.32)),
