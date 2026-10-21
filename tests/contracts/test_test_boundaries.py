@@ -1,5 +1,6 @@
 """The default collection is small; the full command retains all portable contracts."""
 
+import json
 import os
 import subprocess
 import sys
@@ -8,9 +9,38 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def _collect(*arguments):
+def _collect(*selections):
     result = subprocess.run(
-        [sys.executable, "-m", "pytest", "--collect-only", "-q", *arguments],
+        [
+            sys.executable,
+            "-c",
+            """
+import contextlib
+import io
+import json
+import sys
+
+import pytest
+
+
+class Collection:
+    def pytest_collection_finish(self, session):
+        self.nodes = [item.nodeid for item in session.items]
+
+
+collections = []
+for arguments in json.loads(sys.argv[1]):
+    collector = Collection()
+    with contextlib.redirect_stdout(io.StringIO()) as output:
+        result = pytest.main(["--collect-only", "-q", *arguments], plugins=[collector])
+    if result:
+        sys.stderr.write(output.getvalue())
+        sys.exit(result)
+    collections.append(collector.nodes)
+print(json.dumps(collections))
+""",
+            json.dumps(selections),
+        ],
         cwd=ROOT,
         env={**os.environ, "PYTEST_ADDOPTS": ""},
         text=True,
@@ -18,12 +48,11 @@ def _collect(*arguments):
         check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    return [line for line in result.stdout.splitlines() if line.startswith("tests/")]
+    return json.loads(result.stdout)
 
 
 def test_default_and_full_portable_collections_have_distinct_complete_boundaries():
-    default = _collect()
-    complete = _collect("tests", "-m", "not native")
+    default, complete = _collect((), ("tests", "-m", "not native"))
     assert default and complete
     assert len(default) == len(set(default))
     assert len(complete) == len(set(complete))
@@ -38,8 +67,10 @@ def test_slow_runner_partitions_cover_every_collected_test_once():
     from ci_partition import partition_files
 
     arguments = ("tests", "-m", "slow and not native")
-    complete = set(_collect(*arguments))
-    parts = [set(_collect(*arguments, f"--ci-partition={index}/3")) for index in range(3)]
+    complete, *parts = map(
+        set,
+        _collect(arguments, *(arguments + (f"--ci-partition={index}/3",) for index in range(3))),
+    )
     assert all(parts)
     assert sum(map(len, parts)) == len(set.union(*parts))
     assert set.union(*parts) == complete
