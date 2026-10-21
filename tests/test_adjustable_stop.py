@@ -87,8 +87,6 @@ from cargo_grid.plates import (
 from cargo_grid.printers import H2D, X2D
 from cargo_grid.tiles import make_tile
 
-pytestmark = pytest.mark.geometry_inputs
-
 
 def _overlap_volume(first, second) -> float:
     common = first.intersect(second)

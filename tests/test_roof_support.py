@@ -10,8 +10,6 @@ from cargo_grid.roof_support import RoofSupportSettings
 from cargo_grid.stacking import StackSettings
 from cargo_grid.tiles import hole_placements
 
-pytestmark = pytest.mark.geometry_inputs
-
 
 @pytest.mark.parametrize("nx,ny,expected", [(2, 3, 29), (4, 4, 65)])
 def test_full_scope_exact_lattice_and_bores(nx, ny, expected):

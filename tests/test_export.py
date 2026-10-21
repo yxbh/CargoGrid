@@ -27,8 +27,6 @@ from cargo_grid.parameters import BuildVolume, Exclusion, Tile
 from cargo_grid.printers import H2D
 from cargo_grid.stacking import StackSettings
 
-pytestmark = pytest.mark.geometry_inputs
-
 CORE = "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"
 PRODUCTION = "http://schemas.microsoft.com/3dmanufacturing/production/2015/06"
 PROCESS_PRECISION = {

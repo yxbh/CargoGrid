@@ -27,8 +27,6 @@ from cargo_grid.parameters import BuildVolume, Interface, Tile
 from cargo_grid.rods import BRACE_BORES_MM, BRACE_SPACINGS_MM, ROD_HEIGHTS_MM, fit_evidence
 from cargo_grid.tiles import hole_placements, make_tile
 
-pytestmark = pytest.mark.geometry_inputs
-
 BAMBU = BambuSettings((Material("PETG", "PETG", "#637B70"),), nozzle=0.8, layer_height=0.32)
 FOUR = [*(Rod(h) for h in ROD_HEIGHTS_MM), *(RodBrace(s) for s in BRACE_SPACINGS_MM)]
 

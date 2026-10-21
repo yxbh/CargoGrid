@@ -32,8 +32,6 @@ from cargo_grid.vehicles.zeekr_7x_contours import (
     tail_y_mm,
 )
 
-pytestmark = pytest.mark.geometry_inputs
-
 
 def _placed(design):
     assert len(design.assembly_frames) == 1

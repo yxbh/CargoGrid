@@ -20,8 +20,6 @@ from cargo_grid.export import _checked_step_roundtrip
 from cargo_grid.meshes import checked_mesh
 from cargo_grid.tiles import hole_placements
 
-pytestmark = pytest.mark.geometry_inputs
-
 _POINT_CLASSIFIER_TOLERANCE = 1e-6
 # Hole checks sample radii up to 5.01 mm; the clip keeps every sample well inside its box.
 _LOCAL_CLIP_HALF_WIDTH = 8
@@ -1024,7 +1022,7 @@ def test_prepared_queries_match_legacy_inside_outside_and_boundary(family, trans
 
 
 @pytest.mark.parametrize("diameter", [None, 8, 12])
-def test_prepared_circle_check_still_rejects_filled_or_wrong_radius_holes(diameter, fresh_geometry):
+def test_prepared_circle_check_still_rejects_filled_or_wrong_radius_holes(diameter):
     spec = Accessory(
         "edge-x",
         edge_outward=40,

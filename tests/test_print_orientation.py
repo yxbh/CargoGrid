@@ -29,8 +29,6 @@ from cargo_grid.jobs import Job
 from cargo_grid.meshes import checked_mesh
 from cargo_grid.parameters import Exclusion
 
-pytestmark = pytest.mark.geometry_inputs
-
 BAMBU = BambuSettings((Material("Diagnostic PETG", "PETG", "#789784"),), 0.4, 0.2)
 
 

@@ -32,7 +32,6 @@ def test_default_and_full_portable_collections_have_distinct_complete_boundaries
     assert any(node.startswith("tests/test_geometry.py::") for node in complete)
     assert any(node.startswith("tests/test_adjustable_stop.py::") for node in complete)
     assert any(node.startswith("tests/test_zeekr_contours.py::") for node in complete)
-    assert any(node.startswith("tests/test_cached_geometry.py::") for node in complete)
 
 
 def test_slow_runner_partitions_cover_every_collected_test_once():
@@ -52,3 +51,54 @@ def test_slow_runner_partitions_cover_every_collected_test_once():
     assert allocations == partition_files(
         set(reversed(sorted(paths))) | {"tests/test_new_slow_family.py"}, 2
     )
+
+
+def test_grouped_workers_construct_a_shared_plan_once(tmp_path):
+    module = tmp_path / "test_shared_plan.py"
+    module.write_text(
+        """
+import os
+from pathlib import Path
+
+import pytest
+
+
+@pytest.fixture(scope="module")
+def h2d_plan():
+    Path(__file__).with_name(f"built-{os.getpid()}").touch()
+    return "shared"
+
+
+@pytest.mark.parametrize("case", range(6))
+def test_plan(h2d_plan, case):
+    assert h2d_plan == "shared"
+"""
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "conftest",
+            str(module),
+            "-n",
+            "2",
+            "--dist",
+            "loadgroup",
+        ],
+        cwd=ROOT,
+        env={
+            **os.environ,
+            "PYTEST_ADDOPTS": "",
+            "PYTHONPATH": os.pathsep.join((str(ROOT / "tests"), os.environ.get("PYTHONPATH", ""))),
+        },
+        text=True,
+        capture_output=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "6 passed" in result.stdout
+    assert len(list(tmp_path.glob("built-*"))) == 1, result.stdout + result.stderr

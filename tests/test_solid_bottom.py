@@ -18,8 +18,6 @@ from cargo_grid.roof_support import female_roofs
 from cargo_grid.tiles import hole_placements, socket_centers
 from cargo_grid.vehicles import zeekr_7x, zeekr_7x_contours
 
-pytestmark = pytest.mark.geometry_inputs
-
 T = 1.92  # six 0.32 mm layers
 H = 13.0
 PLATED = Interface(solid_bottom_mm=T)

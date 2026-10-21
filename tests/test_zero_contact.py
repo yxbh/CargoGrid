@@ -18,8 +18,6 @@ from cargo_grid.roof_support import (
     RoofSupportSettings,
 )
 
-pytestmark = pytest.mark.geometry_inputs
-
 CONTACT = {
     "support_top_z_distance": "0",
     "independent_support_layer_height": "0",

@@ -35,8 +35,6 @@ from cargo_grid.pull_handles import (
 )
 from cargo_grid.roof_support import OBJECT_AUTO_SUPPORT, RoofSupportSettings, validate_roof_job
 
-pytestmark = pytest.mark.geometry_inputs
-
 H2D = BuildVolume(350, 320, 325)
 H2D_OPTIONS = [
     "--printer",

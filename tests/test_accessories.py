@@ -10,8 +10,6 @@ from cargo_grid.accessories import Accessory, accessory_datums, make_accessory
 from cargo_grid.interfaces import make_plug
 from cargo_grid.parameters import Interface
 
-pytestmark = pytest.mark.geometry_inputs
-
 STANDARD = [
     *(Accessory(family, nx=n) for family in ("edge-x", "edge-y", "support") for n in range(1, 5)),
     *(Accessory("corner-in", variant=v) for v in range(1, 5)),
