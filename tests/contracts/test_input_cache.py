@@ -9,7 +9,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from build123d import Box, Color, Location
+from build123d import Box, Color, Location, Plane
 from input_cache import InputCacheError, InputStore
 
 from cargo_grid.jobs import Design
@@ -132,13 +132,18 @@ def test_geometry_hits_restore_independent_shapes_and_immutable_export_meshes(tm
 
 def test_copied_geometry_keeps_exact_mesh_but_edits_do_not_reuse_it(tmp_path):
     store = store_at(tmp_path / "cache")
-    source = store.geometry("box", (), SOURCES, lambda: Box(2, 3, 4))
+    source = store.geometry("box", (), SOURCES, lambda: Box(2, 3, 4).mirror(Plane.XY))
     expected = store.checked_mesh(source)
     copied = deepcopy(source)
-    assert np.array_equal(store.checked_mesh(copied)[0], expected[0])
+    actual = store.checked_mesh(copied)
+    assert isinstance(actual[0], np.memmap)
+    assert np.array_equal(actual[0], expected[0])
     copied.move(Location((0, 10, 0)))
     assert store.checked_mesh(copied)[0][:, 1].min() == pytest.approx(8.5)
     assert expected[0][:, 1].max() == pytest.approx(1.5)
+    source.move(Location((10, 0, 0)))
+    edited_copy = deepcopy(source)
+    assert store.checked_mesh(edited_copy)[0][:, 0].min() == pytest.approx(9)
 
 
 def _cache_worker(arguments):

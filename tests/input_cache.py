@@ -97,15 +97,21 @@ def _copy_input_shape(shape: Shape, memo: dict) -> Shape:
 
     # The ordinary kernel copy rewrites some surfaces, invalidating retained mesh bytes.
     # Binary cloning keeps test-owned geometry independent without that conversion.
+    data = _binary(shape)
+    marker = getattr(shape, "_test_input_mesh", None)
+    unchanged = marker is not None and marker[1] == sha256(data).hexdigest()
     wrapped = TopoDS_Shape()
-    BinTools.Read_s(wrapped, BytesIO(_binary(shape)))
+    BinTools.Read_s(wrapped, BytesIO(data))
     if wrapped.IsNull():
         raise InputCacheError("cannot clone an empty geometry input")
     copied = Shape.cast(wrapped)
     memo[id(shape)] = copied
     for name, value in vars(shape).items():
-        if name not in {"_wrapped", "_history", "__deepcopy__"}:
+        if name not in {"_wrapped", "_history", "__deepcopy__", "_test_input_mesh"}:
             setattr(copied, name, deepcopy(value, memo))
+    if unchanged:
+        # BREP reads can normalize signed zero; only an unchanged source may retain its arrays.
+        copied._test_input_mesh = (marker[0], sha256(_binary(copied)).hexdigest())
     copied.__deepcopy__ = MethodType(_copy_input_shape, copied)
     return copied
 
