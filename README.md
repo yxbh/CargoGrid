@@ -437,15 +437,16 @@ from cargo_grid.catalogue import accessory_design
 bracket = accessory_design(Accessory("vertical-tile-bracket", nx=1, ny=1, panel_height_cells=2))
 ```
 
-Native-CAD adjustable-stop example:
+Adjustable-stop print-project example:
 
 ```python
 from pathlib import Path
-from cargo_grid import AdjustableStopSpec, export_adjustable_stop
+from cargo_grid import AdjustableStopSpec
+from cargo_grid.adjustable_stop_export import export_adjustable_stop_print_project
 
-export_adjustable_stop(
+export_adjustable_stop_print_project(
     Path("outputs/adjustable-stop"),
-    AdjustableStopSpec(extension_mm=24),
+    spec=AdjustableStopSpec(extension_mm=24),
 )
 ```
 
