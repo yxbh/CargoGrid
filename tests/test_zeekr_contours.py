@@ -1,29 +1,25 @@
-"""Measured rear-panel review recipe and local artifact checks."""
-
-from math import hypot
+"""Selected contour geometry and assembled mating checks."""
 
 import pytest
-from build123d import Axis, GeomType, Location, Solid
+from build123d import Axis, Edge, GeomType, Location, Solid, Wire
 from local_geometry import bounded_distance
 from OCP.BRepAdaptor import BRepAdaptor_Surface
 from shared_fixture import shared_fixture
+from zeekr_assembly import assemble_rear_panel
 
 from cargo_grid.interfaces import make_plug
 from cargo_grid.meshes import checked_mesh
 from cargo_grid.parameters import Tile
 from cargo_grid.tiles import make_tile
-from cargo_grid.vehicles.zeekr_7x_rear_review import (
+from cargo_grid.vehicles.zeekr_7x_contours import (
     CORRECTED_TAPER_JUNCTION_SLOPE_DS_DU,
     DEFAULT_EAST_EDGE_X_MM,
     DEFAULT_PEN_OFFSET_MM,
-    H2D_REVIEW_GAP_MM,
-    ORIGINAL_RIGHT_WALL_STATIONS_MM,
-    SCAN_ALIGNMENT,
-    SOUTH_CONTOUR_ANALYSIS,
-    TEST_TILE_MODULES,
+    TILE_MODULES,
     TRACED_NORTH_CORNER_RADIUS_MM,
-    RearReviewParameters,
-    _corrected_north_edge_stations,
+    ContourOutline,
+    ContourParameters,
+    _corrected_north_edge_station_arrays,
     _crown_coefficients,
     _merged_taper_stations,
     _north_corner_geometry,
@@ -31,8 +27,8 @@ from cargo_grid.vehicles.zeekr_7x_rear_review import (
     _south_design,
     _tail_slope_dy_dx,
     _taper_interpolators,
-    rear_review_job,
-    right_review_outline_x_mm,
+    rear_panel_designs,
+    right_outline_x_mm,
     right_wall_x_mm,
     tail_y_mm,
 )
@@ -51,8 +47,7 @@ def _intersection_volume(first, second):
 def _witness_intersection_volume(placed, bore):
     witness = bore.bounding_box()
     candidates = []
-    for shape in placed:
-        bounds = shape.bounding_box()
+    for shape, bounds in placed:
         if (
             bounds.min.X <= witness.max.X
             and bounds.max.X >= witness.min.X
@@ -72,15 +67,114 @@ def _witness_intersection_volume(placed, bore):
 
 
 @pytest.fixture(scope="module")
-def review_job(tmp_path_factory, worker_id):
+def assembled_parts(tmp_path_factory, worker_id):
     if worker_id == "master":
-        return rear_review_job()
-    path = tmp_path_factory.getbasetemp().parent / "rear-review-job.pickle"
-    return shared_fixture(path, rear_review_job)
+        return assemble_rear_panel()
+    path = tmp_path_factory.getbasetemp().parent / "zeekr-assembled-parts.pickle"
+    return shared_fixture(path, assemble_rear_panel)
+
+
+@pytest.fixture(scope="module")
+def assembled_witnesses(assembled_parts):
+    placed = [_placed(design) for design in assembled_parts]
+    return [(shape, shape.bounding_box()) for shape in placed]
+
+
+def test_outline_curve_is_owned_and_uses_vehicle_coordinates():
+    curve = Wire.make_polygon(
+        [(-605, 620, 0), (615, 620, 0), (615, 990, 0), (-605, 990, 0)], close=True
+    )
+    outline = ContourOutline(curve)
+    same = ContourOutline(curve)
+    assert outline.digest == same.digest
+    assert len(outline.digest) == 64
+    curve.move(Location((100, 200, 0)))
+    assert outline.north_y(0) == pytest.approx(620, abs=1e-7)
+    assert outline.south_y(0) == pytest.approx(990, abs=1e-7)
+    assert outline.side_x("west", 800) == pytest.approx(-605, abs=1e-7)
+    assert outline.side_x("east", 800) == pytest.approx(615, abs=1e-7)
+    assert outline.south_slope(0) == pytest.approx(0, abs=1e-12)
+    parameters = ContourParameters(outline=outline)
+    assert tail_y_mm(0, parameters) == pytest.approx(990, abs=1e-7)
+    assert _tail_slope_dy_dx(0, parameters) == pytest.approx(0, abs=1e-12)
+    with pytest.raises(ValueError, match="construction ray"):
+        outline.south_y(700)
+    with pytest.raises(ValueError, match="preset outline adjustments"):
+        ContourParameters(outline=outline, outline_inset_mm=1)
+
+
+def test_outline_stations_interpolate_one_closed_curve():
+    from math import cos, pi, sin
+
+    stations = [(620 * cos(index * pi / 6), 800 + 190 * sin(index * pi / 6)) for index in range(12)]
+    outline = ContourOutline.from_stations(stations)
+    assert outline.north_y(0) == pytest.approx(610, abs=1e-7)
+    assert outline.south_y(0) == pytest.approx(990, abs=1e-7)
+    assert outline.side_x("west", 800) == pytest.approx(-620, abs=1e-7)
+    assert outline.side_x("east", 800) == pytest.approx(620, abs=1e-7)
+    measured_slope = (outline.south_y(0.01) - outline.south_y(-0.01)) / 0.02
+    assert outline.south_slope(0) == pytest.approx(measured_slope, abs=1e-8, rel=0)
+    closed = ContourOutline.from_stations([*stations, stations[0]])
+    assert closed.digest == outline.digest
+    for invalid in (stations[:3], [*stations[:3], (float("nan"), 0)]):
+        with pytest.raises(ValueError, match="distinct finite"):
+            ContourOutline.from_stations(invalid)
+    with pytest.raises(ValueError, match="closed wire"):
+        ContourOutline(Edge.make_line((0, 0, 0), (1, 1, 0)))
+    with pytest.raises(ValueError, match="Z=0"):
+        ContourOutline(Wire.make_polygon([(0, 0, 1), (1, 0, 1), (1, 1, 1), (0, 1, 1)], close=True))
+
+
+@pytest.mark.slow
+def test_supplied_outline_drives_all_nine_real_contour_parts_and_identity():
+    outline = ContourOutline(
+        Wire.make_polygon(
+            [(-605, 620, 0), (615, 620, 0), (615, 990, 0), (-605, 990, 0)], close=True
+        )
+    )
+    parameters = ContourParameters(outline=outline)
+    caps, ramps = rear_panel_designs(parameters)
+    assert len(caps) == 4
+    assert len(ramps) == 5
+    for design in caps + ramps:
+        _assert_valid_single_solid(design)
+        assert design.size[2] == pytest.approx(13, abs=1e-6)
+        assert design.name.endswith(f"_outline-{outline.digest[:16]}")
+        assert design.parameters["outline"]["sha256"] == outline.digest
+    west = next(design for design in caps if design.parameters["side"] == "west")
+    east = next(design for design in caps if design.parameters["side"] == "east")
+    assert west.shape.bounding_box().min.X == pytest.approx(-65, abs=1e-6)
+    assert east.shape.bounding_box().max.X == pytest.approx(75, abs=1e-6)
+    for ramp in ramps:
+        assert ramp.parameters["finished_run_range_mm"] == pytest.approx((100, 100), abs=1e-7)
+        assert "south_contour_source" not in ramp.parameters
+        for _, y, slope in ramp.mating_datums["global_contour_samples_x_y_slope"]:
+            assert y == pytest.approx(990, abs=1e-7)
+            assert slope == pytest.approx(0, abs=1e-12)
+    _, _, mesh = checked_mesh(ramps[0].shape)
+    assert mesh["closed_oriented_manifold"]
+
+
+@pytest.mark.slow
+def test_assembled_panel_has_selected_frames_and_complementary_perimeter_joins(assembled_parts):
+    assert len(assembled_parts) == 19
+    assert [design.assembly_frames[0] for design in assembled_parts[:5]] == [
+        (-540, 60, 0),
+        (-300, 60, 0),
+        (-60, 60, 0),
+        (60, 60, 0),
+        (300, 60, 0),
+    ]
+    assert [design.parameters["nx"] for design in assembled_parts[:5]] == list(TILE_MODULES)
+    north, south = assembled_parts[5:10], assembled_parts[10:15]
+    assert {design.assembly_frames[0][1] for design in north} == {300}
+    assert {design.assembly_frames[0][1] for design in south} == {60}
+    assert {join["sex"] for design in north for join in design.mating_datums["joins"]} == {"female"}
+    assert {join["sex"] for design in south for join in design.mating_datums["joins"]} == {"male"}
 
 
 def test_measured_outline_uses_exact_mirrored_pchip_and_named_inset():
-    parameters = RearReviewParameters()
+    parameters = ContourParameters()
     stations = _merged_taper_stations(
         parameters.pen_offset_mm,
         parameters.se_along_edge_shift_mm,
@@ -90,9 +184,6 @@ def test_measured_outline_uses_exact_mirrored_pchip_and_named_inset():
         x = parameters.east_edge_x_mm - u
         assert right_wall_x_mm(y) == pytest.approx(x)
         assert -right_wall_x_mm(y) == pytest.approx(-x)
-    assert ORIGINAL_RIGHT_WALL_STATIONS_MM[-1] != pytest.approx(
-        (620 + stations[-1][1], parameters.east_edge_x_mm - stations[-1][0])
-    )
     assert stations[0] == pytest.approx((0, 219))
     assert stations[-1] == pytest.approx((155.571, 342.132711096))
     expected_north_stations = (
@@ -103,7 +194,9 @@ def test_measured_outline_uses_exact_mirrored_pchip_and_named_inset():
         (15.3739497412, 6.1859965494),
     )
     for actual, expected in zip(
-        _corrected_north_edge_stations(parameters.pen_offset_mm),
+        list(zip(*_corrected_north_edge_station_arrays(parameters.pen_offset_mm), strict=True))[
+            ::-1
+        ],
         expected_north_stations,
         strict=True,
     ):
@@ -111,7 +204,7 @@ def test_measured_outline_uses_exact_mirrored_pchip_and_named_inset():
     corner = _north_corner_geometry(parameters)
     assert corner["center"] == pytest.approx((596.1, 633.277017506))
     assert corner["north_tangent"] == pytest.approx((596.578655647, 626.894941921))
-    assert right_review_outline_x_mm(
+    assert right_outline_x_mm(
         corner["east_tangent"][1],
         traced_north_corner_radius_mm=TRACED_NORTH_CORNER_RADIUS_MM,
         pen_offset_mm=DEFAULT_PEN_OFFSET_MM,
@@ -161,108 +254,6 @@ def test_measured_outline_uses_exact_mirrored_pchip_and_named_inset():
         CORRECTED_TAPER_JUNCTION_SLOPE_DS_DU,
         abs=2e-8,
     )
-    assert "concave quartic" in SOUTH_CONTOUR_ANALYSIS["curve_family"]
-    assert SCAN_ALIGNMENT["lateral_residuals_mm"] == {
-        "median_absolute": 1.881,
-        "rms": 4.120,
-        "p95_absolute": 9.537,
-        "maximum_absolute": 12.483,
-        "signed_mean": 0.066,
-        "signed_median": -0.388,
-    }
-
-
-@pytest.mark.slow
-def test_review_inventory_frames_connector_sexes_and_actual_h2d_packing(review_job):
-    job = review_job
-    assert len(job.designs) == 19
-    assert job.kind == "zeekr-7x-rear-review"
-    assert job.part_gap == H2D_REVIEW_GAP_MM
-    assert job.footprint == pytest.approx((1205, 365))
-    assert job.manifest_metadata["outline"]["nominal_contour_gap_mm"] == 0
-    assert job.manifest_metadata["outline"]["prior_full_boot_inset_convention_mm"] == 5
-    assert job.manifest_metadata["selected_test_placement"]["tile_modules_west_to_east_cells"] == (
-        4,
-        4,
-        2,
-        4,
-        4,
-    )
-
-    expected_frames = [
-        (-540, 60, 0),
-        (-300, 60, 0),
-        (-60, 60, 0),
-        (60, 60, 0),
-        (300, 60, 0),
-    ]
-    assert [design.assembly_frames[0] for design in job.designs[:5]] == expected_frames
-    assert [design.parameters["nx"] for design in job.designs[:5]] == list(TEST_TILE_MODULES)
-    tile_sides = {
-        side: {
-            join["sex"] for join in job.designs[0].mating_datums["joins"] if join["side"] == side
-        }
-        for side in ("north", "east", "south", "west")
-    }
-    assert tile_sides == {
-        "north": {"male"},
-        "east": {"male"},
-        "south": {"female"},
-        "west": {"female"},
-    }
-
-    north = job.designs[5:10]
-    south = job.designs[10:15]
-    west = [design for design in job.designs if "_west_" in design.name]
-    east = [design for design in job.designs if "_east_" in design.name]
-    assert {join["sex"] for design in north for join in design.mating_datums["joins"]} == {"female"}
-    assert {join["sex"] for design in south for join in design.mating_datums["joins"]} == {"male"}
-    assert {join["sex"] for design in west for join in design.mating_datums["joins"]} == {"male"}
-    assert {join["sex"] for design in east for join in design.mating_datums["joins"]} == {"female"}
-    assert {design.assembly_frames[0][1] for design in north} == {300}
-    assert {design.assembly_frames[0][1] for design in south} == {60}
-    assert {design.parameters["connector_sex"] for design in south} == {"male"}
-    assert all(
-        design.parameters["south_contour_bow_mm"] == pytest.approx(22.867288904) for design in south
-    )
-    west_south = next(design for design in west if design.parameters["segment"] == "south")
-    east_south = next(design for design in east if design.parameters["segment"] == "south")
-    assert west_south.shape.bounding_box().min.X < -62.5
-    assert west_south.shape.bounding_box().max.X == pytest.approx(6)
-    assert east_south.shape.bounding_box().min.X == pytest.approx(0, abs=1e-6)
-    assert east_south.shape.bounding_box().max.X > 62.5
-    assert west_south.assembly_frames == [(-540, 0, 0)]
-    assert east_south.assembly_frames == [(540, 0, 0)]
-    west_samples = west_south.mating_datums["corner_ramp_samples_local_x_run_mm"]
-    east_samples = east_south.mating_datums["corner_ramp_samples_local_x_run_mm"]
-    assert len(west_samples) == len(east_samples)
-    for (west_x, west_run), (east_x, east_run) in zip(
-        reversed(west_samples),
-        east_samples,
-    ):
-        assert -west_x == pytest.approx(east_x)
-        assert west_run == pytest.approx(east_run)
-
-    rectangles = {}
-    for design, placement in zip(job.designs, job.print_placements):
-        width, depth, height = design.size
-        if placement.rotation == 90:
-            width, depth = depth, width
-        assert placement.rotation in (0, 90)
-        assert 30 <= placement.x
-        assert placement.x + width <= 320 + 1e-6
-        assert 5 <= placement.y
-        assert placement.y + depth <= 315 + 1e-6
-        assert height == pytest.approx(13)
-        rectangles.setdefault(placement.plate, []).append(
-            (placement.x, placement.x + width, placement.y, placement.y + depth)
-        )
-    for bounds in rectangles.values():
-        for index, first in enumerate(bounds):
-            for second in bounds[index + 1 :]:
-                dx = max(0, first[0] - second[1], second[0] - first[1])
-                dy = max(0, first[2] - second[3], second[2] - first[3])
-                assert hypot(dx, dy) >= H2D_REVIEW_GAP_MM - 1e-5
 
 
 def _assert_valid_single_solid(design):
@@ -287,7 +278,7 @@ def _representative_tile(x):
 
 
 def test_representative_real_contour_west_side_caps_holes_sockets_and_contacts():
-    parameters = RearReviewParameters()
+    parameters = ContourParameters()
     west_north = _side_design("west", "north", parameters)
     west_south = _side_design("west", "south", parameters)
     for design in (west_north, west_south):
@@ -312,14 +303,14 @@ def test_representative_real_contour_west_side_caps_holes_sockets_and_contacts()
 
 
 def test_representative_real_contour_east_side_cap_is_female_and_meets_its_tile():
-    east_north = _side_design("east", "north", RearReviewParameters())
+    east_north = _side_design("east", "north", ContourParameters())
     _assert_valid_single_solid(east_north)
     assert {join["sex"] for join in east_north.mating_datums["joins"]} == {"female"}
     _assert_contact_without_overlap(_representative_tile(300), _placed(east_north))
 
 
 def test_representative_real_contour_west_ramp_holes_joins_mesh_and_contact():
-    west_ramp = _south_design(4, 0, -540, RearReviewParameters())
+    west_ramp = _south_design(4, 0, -540, ContourParameters())
     _assert_valid_single_solid(west_ramp)
     _, _, report = checked_mesh(west_ramp.shape)
     assert report["closed_oriented_manifold"]
@@ -329,18 +320,18 @@ def test_representative_real_contour_west_ramp_holes_joins_mesh_and_contact():
 
 
 def test_representative_real_contour_east_ramp_keeps_its_boundary_hole():
-    east_ramp = _south_design(4, 4, 300, RearReviewParameters())
+    east_ramp = _south_design(4, 4, 300, ContourParameters())
     _assert_valid_single_solid(east_ramp)
     _assert_bores_clear(east_ramp, ((240, 0),))
 
 
 @pytest.mark.slow
-def test_side_caps_have_grid_sockets_and_completed_boundary_holes(review_job):
-    job = review_job
+def test_side_caps_have_grid_sockets_and_completed_boundary_holes(
+    assembled_parts, assembled_witnesses
+):
+    job = assembled_parts
     caps = [
-        design
-        for design in job.designs
-        if design.parameters.get("family") == "zeekr-rear-contour-side"
+        design for design in job if design.parameters.get("family") == "zeekr-rear-contour-side"
     ]
     expected_sockets = {
         "west": {(-570, y, 13) for y in (150, 210, 270)},
@@ -478,24 +469,27 @@ def test_side_caps_have_grid_sockets_and_completed_boundary_holes(review_job):
         assert (signed_x, 300) in segment_holes["north"]
         assert (signed_x, 300) not in segment_holes["south"]
 
-    placed = [design.shape.moved(Location(design.assembly_frames[0])) for design in job.designs]
     for side_x in (-540, 540):
         for y in range(60, 301, 30):
             bore = Solid.make_cylinder(4.99, 13).moved(Location((side_x, y, 0)))
-            assert _witness_intersection_volume(placed, bore) == pytest.approx(0, abs=1e-8)
+            assert _witness_intersection_volume(assembled_witnesses, bore) == pytest.approx(
+                0, abs=1e-8
+            )
     for side_x in (-570, 570):
         for y in range(60, 301, 60):
             bore = Solid.make_cylinder(4.99, 13).moved(Location((side_x, y, 0)))
-            assert _witness_intersection_volume(placed, bore) == pytest.approx(0, abs=1e-8)
+            assert _witness_intersection_volume(assembled_witnesses, bore) == pytest.approx(
+                0, abs=1e-8
+            )
 
 
 @pytest.mark.slow
 def test_side_caps_have_exact_mirrored_pen_corrected_r6_4_north_corners(
-    review_job,
+    assembled_parts,
 ):
     caps = [
         design
-        for design in review_job.designs
+        for design in assembled_parts
         if design.parameters.get("family") == "zeekr-rear-contour-side"
         and design.parameters["segment"] == "north"
     ]
@@ -520,13 +514,11 @@ def test_side_caps_have_exact_mirrored_pen_corrected_r6_4_north_corners(
 
 @pytest.mark.slow
 def test_south_ramps_complete_every_tile_boundary_hole_through_tabs_and_shelf(
-    review_job,
+    assembled_parts, assembled_witnesses
 ):
-    job = review_job
+    job = assembled_parts
     ramps = [
-        design
-        for design in job.designs
-        if design.parameters.get("family") == "zeekr-rear-contour-ramp"
+        design for design in job if design.parameters.get("family") == "zeekr-rear-contour-ramp"
     ]
     expected_global = {(float(x), 60.0) for x in range(-540, 541, 30)}
     actual_global = {
@@ -564,31 +556,30 @@ def test_south_ramps_complete_every_tile_boundary_hole_through_tabs_and_shelf(
         if report["ownership"] == "outer side-corner quarter"
     } == {-540, 540}
 
-    placed = [design.shape.moved(Location(design.assembly_frames[0])) for design in job.designs]
     for x, y in expected_global:
         bore = Solid.make_cylinder(4.99, 13).moved(Location((x, y, 0)))
-        assert _witness_intersection_volume(placed, bore) == pytest.approx(0, abs=1e-8)
+        assert _witness_intersection_volume(assembled_witnesses, bore) == pytest.approx(0, abs=1e-8)
 
     north_centers = {
         (
             design.assembly_frames[0][0] + hole["x"],
             design.assembly_frames[0][1] + hole["y"],
         )
-        for design in job.designs[5:10]
+        for design in job[5:10]
         for hole in design.holes
         if hole["accepted"]
     }
     assert north_centers == {(float(x), 300.0) for x in range(-540, 541, 30)}
     for x, y in north_centers:
         bore = Solid.make_cylinder(4.99, 13).moved(Location((x, y, 0)))
-        assert _witness_intersection_volume(placed, bore) == pytest.approx(0, abs=1e-8)
+        assert _witness_intersection_volume(assembled_witnesses, bore) == pytest.approx(0, abs=1e-8)
 
 
 @pytest.mark.slow
-def test_south_modules_share_reviewed_endpoints_and_plan_tangents(review_job):
-    job = review_job
-    parameters = RearReviewParameters()
-    south = job.designs[10:15]
+def test_south_modules_share_endpoints_and_plan_tangents(assembled_parts):
+    job = assembled_parts
+    parameters = ContourParameters()
+    south = job[10:15]
     seams = (-300, -60, 60, 300)
     for first, second, seam in zip(south, south[1:], seams):
         first_samples = first.mating_datums["nose_samples_local_x_run_mm"]
@@ -607,11 +598,11 @@ def test_south_modules_share_reviewed_endpoints_and_plan_tangents(review_job):
 
 @pytest.mark.slow
 def test_custom_solids_mesh_and_assembly_contacts_have_no_nominal_gap_or_overlap(
-    review_job,
+    assembled_parts,
 ):
-    job = review_job
-    designs = {design.name: design for design in job.designs}
-    for design in job.designs[10:]:
+    job = assembled_parts
+    designs = {design.name: design for design in job}
+    for design in job[10:]:
         assert design.shape.is_valid
         assert len(design.shape.solids()) == 1
         assert design.shape.volume > 0
@@ -659,5 +650,5 @@ def test_custom_solids_mesh_and_assembly_contacts_have_no_nominal_gap_or_overlap
     for first_name, second_name in contacts:
         first = _placed(designs[first_name])
         second = _placed(designs[second_name])
-        assert first.distance_to(second) < 1e-6
+        assert bounded_distance(first, second) < 1e-6
         assert _intersection_volume(first, second) < 1e-7

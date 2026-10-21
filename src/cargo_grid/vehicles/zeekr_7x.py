@@ -20,7 +20,7 @@ from cargo_grid.plates import (
     PlatePlan,
     plan_plates,
 )
-from cargo_grid.vehicles import zeekr_7x_rear_review as rear_panel
+from cargo_grid.vehicles import zeekr_7x_contours as rear_panel
 
 OUTWARD_MM = 40.0
 NORTH_EDGE_OUTWARD_MM = 30.0
@@ -56,8 +56,8 @@ def variants(
 
 def standard_rear_panel_parts(solid_bottom_mm: float = 0.0) -> list[dict]:
     """Ordinary catalogue parts that complete the rear panel; not part of this set."""
-    rows = round(rear_panel.TEST_FIELD_DEPTH_MM / Interface().pitch)
-    lengths = sorted(Counter(rear_panel.TEST_TILE_MODULES).items(), reverse=True)
+    rows = round(rear_panel.FIELD_DEPTH_MM / Interface().pitch)
+    lengths = sorted(Counter(rear_panel.TILE_MODULES).items(), reverse=True)
     parts = [
         *(
             {"family": "tile", "width_cells": cells, "depth_cells": rows, "quantity": quantity}
@@ -134,7 +134,7 @@ def extras_job(
         edges.append(design)
         sizes[id(design)] = size
 
-    parameters = rear_panel.RearReviewParameters(interface=interface)
+    parameters = rear_panel.ContourParameters(interface=interface)
     side_caps, south_ramps = rear_panel.rear_panel_designs(parameters)
     for design in side_caps + south_ramps:
         size = design.size
@@ -245,7 +245,7 @@ def extras_job(
                 ),
             },
             "assembly": {
-                "tile_modules_west_to_east_cells": rear_panel.TEST_TILE_MODULES,
+                "tile_modules_west_to_east_cells": rear_panel.TILE_MODULES,
                 "tile_field_cells": (18, 4),
                 "tile_male_directions": "NORTH and EAST",
                 "west_cap": "male",

@@ -64,7 +64,7 @@ testpaths = ["tests"]
 pythonpath = ["src"]
 markers = [
     "native: requires an explicitly supplied local Bambu Studio executable",
-    "slow: exhaustive CAD or review-package validation run explicitly outside portable CI",
+    "slow: exhaustive CAD and assembled geometry checks run outside portable CI",
 ]
 
 [tool.ruff]

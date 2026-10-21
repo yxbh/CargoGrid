@@ -27,7 +27,7 @@ from cargo_grid.parameters import BuildVolume, Exclusion, Interface, interface_p
 from cargo_grid.plates import PlateGroup, needs_auto_support, plan_plates
 from cargo_grid.printers import DEFAULT_PART_CLEARANCE_MM, PRINTERS, X2D
 from cargo_grid.rods import Rod, RodBrace
-from cargo_grid.vehicles import zeekr_7x, zeekr_7x_rear_review
+from cargo_grid.vehicles import zeekr_7x, zeekr_7x_contours
 from cargo_grid.vehicles.zeekr_7x import extras_job, variants
 
 COLLECTION = "zeekr-7x"
@@ -121,7 +121,7 @@ def _stand_in_contours(side_sizes=SIDE_CAP_SIZES, ramp_sizes=SOUTH_RAMP_SIZES):
                 {"family": "zeekr-rear-contour-ramp", "width_cells": cells, "interface": interface},
                 display_name=f"South male contour ramp {index + 1} - {cells} cells",
             )
-            for index, cells in enumerate(zeekr_7x_rear_review.TEST_TILE_MODULES)
+            for index, cells in enumerate(zeekr_7x_contours.TILE_MODULES)
         ]
         return caps, ramps
 
@@ -130,14 +130,14 @@ def _stand_in_contours(side_sizes=SIDE_CAP_SIZES, ramp_sizes=SOUTH_RAMP_SIZES):
 
 @pytest.fixture
 def contour_stand_ins(monkeypatch):
-    monkeypatch.setattr(zeekr_7x_rear_review, "rear_panel_designs", _stand_in_contours())
+    monkeypatch.setattr(zeekr_7x_contours, "rear_panel_designs", _stand_in_contours())
 
 
 @pytest.fixture(scope="module")
 def expansion_plan():
     """Real 40 mm edges with contour stand-ins, planned once for read-only checks."""
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(zeekr_7x_rear_review, "rear_panel_designs", _stand_in_contours())
+        patch.setattr(zeekr_7x_contours, "rear_panel_designs", _stand_in_contours())
         job = extras_job(
             H2D,
             placement_build=PRINTERS["h2d"].common_build(),
@@ -254,7 +254,7 @@ def test_required_contours_refuse_common_reach_and_support_reservation_failures(
         ("west", "north"): (500, 147.673, 13),
         ("west", "south"): (186, 246, 13),
     }
-    monkeypatch.setattr(zeekr_7x_rear_review, "rear_panel_designs", _stand_in_contours(sizes))
+    monkeypatch.setattr(zeekr_7x_contours, "rear_panel_designs", _stand_in_contours(sizes))
     options = {
         "placement_build": X2D.common_build(),
         "auto_roof_support": True,
@@ -263,7 +263,7 @@ def test_required_contours_refuse_common_reach_and_support_reservation_failures(
     with pytest.raises(ValueError, match="west_north_cap.*exceed"):
         extras_job(X2D.build, **options)
     sizes["west", "north"] = SIDE_CAP_SIZES["west", "north"]
-    monkeypatch.setattr(zeekr_7x_rear_review, "rear_panel_designs", _stand_in_contours(sizes))
+    monkeypatch.setattr(zeekr_7x_contours, "rear_panel_designs", _stand_in_contours(sizes))
     with pytest.raises(ValueError, match="west_south_cap.*does not fit its plate area"):
         extras_job(X2D.build, **options)
 
@@ -348,7 +348,7 @@ def test_expansion_set_rejects_nonstandard_settings_before_building(
         raise AssertionError("geometry was built before the settings were checked")
 
     monkeypatch.setattr(zeekr_7x, "accessory_design", unexpected)
-    monkeypatch.setattr(zeekr_7x_rear_review, "rear_panel_designs", unexpected)
+    monkeypatch.setattr(zeekr_7x_contours, "rear_panel_designs", unexpected)
     with pytest.raises(ValueError, match=message):
         extras_job(H2D, **settings)
 
@@ -382,7 +382,7 @@ def test_grouping_never_adds_a_plate_when_the_combined_edges_fit_one(
 ):
     small = {key: (50, 50, 13) for key in SIDE_CAP_SIZES}
     monkeypatch.setattr(
-        zeekr_7x_rear_review,
+        zeekr_7x_contours,
         "rear_panel_designs",
         _stand_in_contours(small, [(50, 50, 13)] * 5),
     )
@@ -958,8 +958,8 @@ def test_cli_extras_accept_auto_roof_support(auto_stand_ins, monkeypatch, tmp_pa
 def test_real_contour_caps_inherit_global_support(side):
     from cargo_grid.roof_support import RoofSupportSettings, effective_object_settings
 
-    parameters = zeekr_7x_rear_review.RearReviewParameters()
-    design = zeekr_7x_rear_review._side_design(side, "north", parameters)
+    parameters = zeekr_7x_contours.ContourParameters()
+    design = zeekr_7x_contours._side_design(side, "north", parameters)
     auto = RoofSupportSettings()
     assert effective_object_settings(design, auto) == {}
     assert needs_auto_support(design)
@@ -974,7 +974,7 @@ def test_real_forty_mm_edges_inherit_global_support(family):
 
 @pytest.mark.slow
 def test_real_male_south_ramp_can_inherit_global_support():
-    parameters = zeekr_7x_rear_review.RearReviewParameters()
+    parameters = zeekr_7x_contours.ContourParameters()
     x = parameters.field_x_min_mm + 8 * parameters.interface.pitch
-    design = zeekr_7x_rear_review._south_design(2, 2, x, parameters)
+    design = zeekr_7x_contours._south_design(2, 2, x, parameters)
     assert needs_auto_support(design)

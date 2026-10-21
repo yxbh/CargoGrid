@@ -6,7 +6,7 @@ on:
       - main
   pull_request:
   schedule:
-    # Weekly slow tier (Saturday 17:23 UTC): exhaustive sweeps and review-package exports left out of portable CI.
+    # Weekly slow tier (Saturday 17:23 UTC): exhaustive CAD sweeps left out of portable CI.
     - cron: "23 17 * * 6"
   workflow_dispatch:
     inputs:
