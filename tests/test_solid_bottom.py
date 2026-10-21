@@ -14,7 +14,7 @@ from cargo_grid.cli import main
 from cargo_grid.jobs import Job, tile_design, tile_identity
 from cargo_grid.layout import exact_layout
 from cargo_grid.parameters import BuildVolume
-from cargo_grid.roof_support import roof_enforcers
+from cargo_grid.roof_support import female_roofs
 from cargo_grid.tiles import hole_placements, socket_centers
 from cargo_grid.vehicles import zeekr_7x, zeekr_7x_rear_review
 
@@ -79,11 +79,6 @@ def test_interface_heights_and_compatibility_follow_the_floor():
 def test_solid_bottom_rejects_invalid_thickness(value):
     with pytest.raises(ValueError, match="solid bottom thickness"):
         Interface(solid_bottom_mm=value)
-
-
-def test_solid_bottom_rejects_full_height_joints():
-    with pytest.raises(ValueError, match="full-height"):
-        Interface(joint_style="full-height", solid_bottom_mm=T)
 
 
 def test_plated_tile_is_one_valid_solid_with_the_floor_below_the_standard_body(plated_tile):
@@ -199,17 +194,17 @@ def test_layout_fillers_take_the_floor_and_check_body_height():
         exact_layout(120, 60, BuildVolume(150, 150, 14), interface=PLATED)
 
 
-def test_roof_enforcers_follow_the_raised_female_roofs():
+def test_retained_female_roofs_follow_the_raised_ceiling():
     design = tile_design(Tile(2, 1, PLATED))
-    volumes = roof_enforcers(design, 0.32)
-    assert len(volumes) == len(roof_enforcers(tile_design(Tile(2, 1)), 0.32)) == 6
+    roofs = female_roofs(design)
+    assert len(roofs) == len(female_roofs(tile_design(Tile(2, 1)))) == 3
     ceiling = PLATED.female_opening_height
-    for item in volumes:
-        bounds = item.shape.bounding_box()
-        assert item.shape.is_valid and item.shape.volume > 0
-        assert bounds.min.Z == pytest.approx(ceiling - 1) and bounds.max.Z == pytest.approx(
-            ceiling + 1
-        )
+    for roof in roofs:
+        for face in roof.faces:
+            bounds = face.bounding_box()
+            assert face.is_valid and face.area > 0
+            assert bounds.min.Z == pytest.approx(ceiling)
+            assert bounds.max.Z == pytest.approx(ceiling)
 
 
 @pytest.mark.parametrize(
@@ -249,7 +244,6 @@ def test_catalogue_keeps_unchanged_families_at_their_standard_identities():
         (["--family", "plate"], "applies only to tiles"),
         (["--family", "support", "--length-cells", "1"], "applies only to tiles"),
         (["--family", "rod"], "rod is unchanged"),
-        (["--joint-style", "full-height"], "full-height"),
         (["--stack-count", "2"], "stacking does not support"),
     ],
 )

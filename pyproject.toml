@@ -64,7 +64,6 @@ testpaths = ["tests"]
 pythonpath = ["src"]
 markers = [
     "native: requires an explicitly supplied local Bambu Studio executable",
-    "reference: requires an explicitly supplied local reference 3MF",
     "slow: exhaustive CAD or review-package validation run explicitly outside portable CI",
 ]
 

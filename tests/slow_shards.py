@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-SLOW_SELECTION = "slow and not native and not reference"
+SLOW_SELECTION = "slow and not native"
 SLOW_SHARDS = (
     (
         "tests/test_auto_roof_support.py",
@@ -20,7 +20,6 @@ SLOW_SHARDS = (
         "tests/test_00_zeekr_rear_export.py",
         "tests/test_adjustable_stop.py",
         "tests/test_h2d_catalogue.py",
-        "tests/test_joint_styles.py",
         "tests/test_pull_handles.py",
         "tests/test_vertical_tile_bracket.py",
         "tests/test_x2d_catalogue.py",
@@ -33,7 +32,7 @@ def pytest_addoption(parser):
         "--slow-shard",
         type=int,
         choices=(1, 2),
-        help="run one whole-file shard of the slow, non-native, non-reference selection",
+        help="run one whole-file shard of the slow, non-native selection",
     )
 
 
@@ -44,9 +43,7 @@ def pytest_collection_modifyitems(config, items):
     if shard is None:
         return
     if any(
-        item.get_closest_marker("slow") is None
-        or item.get_closest_marker("native") is not None
-        or item.get_closest_marker("reference") is not None
+        item.get_closest_marker("slow") is None or item.get_closest_marker("native") is not None
         for item in items
     ):
         raise pytest.UsageError(f'--slow-shard requires -m "{SLOW_SELECTION}"')

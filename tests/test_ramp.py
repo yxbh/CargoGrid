@@ -314,13 +314,6 @@ def test_catalogue_includes_every_ramp_width_that_fits_selected_envelope():
         if spec.family == "ramp" and spec.ramp_join == "male"
     ]
     assert compact == [1, 2, 3, 4]
-    assert not any(
-        spec.family == "ramp"
-        for spec in accessory_variants(
-            BuildVolume(350, 320, 325),
-            Interface(joint_style="full-height"),
-        )
-    )
 
 
 @pytest.mark.parametrize("ramp_join", ["female", "male"])
@@ -412,8 +405,6 @@ def test_bambu_ramp_scopes_normal_auto_without_changing_orientation_or_other_obj
 def test_ramp_rejects_irrelevant_height_and_unsupported_interfaces():
     custom = make_accessory(Accessory("ramp", interface=Interface(pitch=65, height=18)))
     assert tuple(custom.bounding_box().size) == pytest.approx((65, 50, 18), abs=1e-5)
-    with pytest.raises(ValueError, match="original roofed tile-edge joints"):
-        Accessory("ramp", interface=Interface(joint_style="full-height"))
     with pytest.raises(ValueError, match="height does not apply"):
         Accessory("ramp", height=120)
     with pytest.raises(ValueError, match="ramp uses nx"):
@@ -422,8 +413,6 @@ def test_ramp_rejects_irrelevant_height_and_unsupported_interfaces():
         Accessory("ramp", ramp_join="both")
     with pytest.raises(ValueError, match="ramp join does not apply"):
         Accessory("plate", ramp_join="male")
-    with pytest.raises(ValueError, match="original roofed tile-edge joints"):
-        Accessory("ramp", ramp_join="male", interface=Interface(joint_style="full-height"))
 
 
 def test_approved_shape_constants_are_explicit():

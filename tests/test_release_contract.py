@@ -12,11 +12,10 @@ from zipfile import ZipFile
 import pytest
 from build123d import Box
 
-from cargo_grid import BuildVolume, Tile, __version__
+from cargo_grid import BuildVolume, __version__
 from cargo_grid.cli import main
 from cargo_grid.export import BambuSettings, Material, export_job, write_3mf
-from cargo_grid.jobs import Design, Job, tile_design
-from cargo_grid.roof_support import RoofSupportSettings
+from cargo_grid.jobs import Design, Job
 from cargo_grid.stacking import StackSettings
 
 
@@ -55,8 +54,7 @@ def test_version_and_module_entrypoint(tmp_path):
         check=True,
     )
     assert all(
-        command in help_result.stdout
-        for command in ("part", "layout", "catalogue", "extras", "compare-reference")
+        command in help_result.stdout for command in ("part", "layout", "catalogue", "extras")
     )
     assert "adjustable-stop" not in help_result.stdout
     normalized_help = " ".join(help_result.stdout.split())
@@ -72,7 +70,6 @@ def test_manifest_version_design_mode_and_limits(block_job, tmp_path):
         "workflow": "diagnostic",
         "joint_styles": [],
         "hole_scopes": [],
-        "roof_coverage": None,
         "stacked": False,
     }
     assert report["physical_fit_verified"] is False
@@ -133,14 +130,6 @@ def test_invalid_stack_api_is_rejected_before_step_exports(block_job, bambu, tmp
     assert not (tmp_path / "non-tile").exists()
 
 
-def test_tile_only_catalogue_still_rejects_roof_support(bambu, tmp_path):
-    settings = BambuSettings(bambu.materials, 0.4, 0.2, RoofSupportSettings(0.2, 2, 0))
-    job = Job([tile_design(Tile())], BuildVolume(150, 150, 50), "catalogue")
-    with pytest.raises(ValueError, match="part or layout job; catalogues"):
-        export_job(job, tmp_path / "catalogue", bambu=settings)
-    assert not (tmp_path / "catalogue").exists()
-
-
 @pytest.mark.parametrize("gap", ["0", "-13", "nan", "inf"])
 def test_auto_stack_invalid_gap_is_a_cli_error_not_traceback(tmp_path, capsys, gap):
     with pytest.raises(SystemExit) as error:
@@ -183,23 +172,6 @@ def test_auto_stack_invalid_gap_is_a_cli_error_not_traceback(tmp_path, capsys, g
     assert error.value.code == 2
     assert "stack gap" in capsys.readouterr().err
     assert not (tmp_path / "job").exists()
-
-
-def test_reference_report_refuses_existing_path(tmp_path, capsys):
-    output = tmp_path / "reference-report.json"
-    output.write_text("preserve me")
-    with pytest.raises(SystemExit) as error:
-        main(
-            [
-                "compare-reference",
-                "--reference-file",
-                str(tmp_path / "not-supplied.3mf"),
-                "--output",
-                str(output),
-            ]
-        )
-    assert error.value.code == 2 and "already exists" in capsys.readouterr().err
-    assert output.read_text() == "preserve me"
 
 
 def distribution_checker():

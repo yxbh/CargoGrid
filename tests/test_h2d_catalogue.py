@@ -750,9 +750,7 @@ def test_h2d_dual_safe_cli_writes_the_h2d_profiles_for_each_nozzle(nozzle, monke
                 f"{nozzle:g}",
                 "--layer-height-mm",
                 f"{profiles.layer_height_mm:g}",
-                "--roof-support",
-                "--roof-support-mode",
-                "auto",
+                "--auto-roof-support",
                 "--output",
                 str(tmp_path / "catalogue"),
             ]

@@ -277,7 +277,7 @@ def test_strap_bar_handle_refuses_tiles_too_thick_to_rest_on_its_front():
 
 @pytest.mark.parametrize(
     "interface",
-    [Interface(height=16), Interface(fit_offset=0.1), Interface(joint_style="full-height")],
+    [Interface(height=16), Interface(fit_offset=0.1)],
 )
 def test_other_interface_settings_get_their_own_identity(interface):
     for strap_bar in (True, False):
@@ -378,7 +378,6 @@ def test_cli_h2d_pull_handle_extras_export_one_project(tmp_path):
         (["--hole-diameter-mm", "8"], "round-hole options apply to tiles"),
         (["--hole-scope", "interior"], "round-hole options apply to tiles"),
         (["--solid-bottom-thickness-mm", "0.32"], "pull handles are unchanged"),
-        (["--roof-support"], "catalogues and extras are not supported"),
         (["--packing-gap-mm", "0"], "H2D packing gap"),
     ],
 )
@@ -392,7 +391,9 @@ def test_cli_pull_handle_extras_reject_options_that_do_not_apply(
 
 
 H2D_PLA = ["--material", "Bambu PLA Basic @BBL H2D 0.8 nozzle", "PLA", "#0A2989"]
-AUTO_SUPPORT = ["--roof-support", "--roof-support-mode", "auto"]
+AUTO_SUPPORT = [
+    "--auto-roof-support",
+]
 
 
 def test_cli_h2d_pull_handle_extras_inherit_global_support_with_a_pla_interface(tmp_path):
@@ -452,12 +453,11 @@ def test_auto_support_accepts_accessory_support_but_not_a_job_with_nothing_to_su
     unsupported = Design(
         "unsupported_handle", Box(120, 60, 70), dict(no_bar.parameters), bambu_object_settings={}
     )
-    auto = RoofSupportSettings(mode="auto")
+    auto = RoofSupportSettings()
     validate_roof_job(Job([strap_bar, no_bar], H2D, "extras"), auto, 0.32)
     with pytest.raises(ValueError, match="no retained original female pocket roofs"):
         validate_roof_job(Job([unsupported], H2D, "extras"), auto, 0.32)
-    with pytest.raises(ValueError, match="no retained original female pocket roofs"):
-        validate_roof_job(Job([strap_bar, no_bar], H2D, "part"), RoofSupportSettings(), 0.32)
+    validate_roof_job(Job([strap_bar, no_bar], H2D, "part"), auto, 0.32)
 
 
 def test_cli_h2d_pull_handle_extras_keep_the_standard_grid(tmp_path, capsys):

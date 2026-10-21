@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass
 from math import isfinite
 from typing import Literal
 
-JointStyle = Literal["full-height", "original"]
+JointStyle = Literal["original"]
 DEFAULT_HOLE_DIAMETER_MM = 10.0
 REFERENCE_UNIT_SIZE_MM = 60.0
 REFERENCE_TILE_THICKNESS_MM = 13.0
@@ -29,17 +29,12 @@ class Interface:
     solid_bottom_mm: float = 0.0
 
     def __post_init__(self) -> None:
-        if self.joint_style not in ("full-height", "original"):
-            raise ValueError("joint_style must be full-height or original")
+        if self.joint_style != "original":
+            raise ValueError("joint_style must be original")
         positive("pitch", self.pitch)
         positive("height", self.height)
         positive("solid bottom thickness", self.solid_bottom_mm, zero=True)
         object.__setattr__(self, "solid_bottom_mm", float(self.solid_bottom_mm))
-        if self.solid_bottom_mm and self.joint_style != "original":
-            raise ValueError(
-                "a solid bottom requires original roofed tile-edge joints; "
-                "full-height joints with a solid bottom are not supported"
-            )
         if self.pitch < 30 or self.height < 6:
             raise ValueError(
                 "unit size >= 30 mm and tile thickness >= 6 mm required by interface envelopes"
@@ -70,11 +65,11 @@ class Interface:
 
     @property
     def male_height(self) -> float:
-        return self.body_height if self.joint_style == "full-height" else self.body_height - 3.0
+        return self.body_height - 3.0
 
     @property
     def female_opening_height(self) -> float:
-        return self.body_height if self.joint_style == "full-height" else self.body_height - 2.8
+        return self.body_height - 2.8
 
     @property
     def plug_depth(self) -> float:
@@ -117,7 +112,7 @@ class Interface:
     def _base_compatibility(self) -> dict:
         return {
             "joint_style": self.joint_style,
-            "experimental": self.joint_style == "full-height",
+            "experimental": False,
             "unit_size_mm": self.pitch,
             "tile_thickness_mm": self.height,
             "nominal_local_plane_scale": self.unit_scale,
@@ -131,21 +126,15 @@ class Interface:
             },
             "support_rail_interface": "separate fixed physical dovetail; not scaled with tile unit size",
             "attachment_seating_note": (
-                "Socket/plug dimensions and seating datum are retained, but open-through edge pockets remove roof-bearing land near edge sockets."
-                if self.joint_style == "full-height"
-                else "Original socket entry and roof-bearing lands; printed friction and load capacity remain unverified."
+                "Original socket entry and roof-bearing lands; printed friction and load capacity remain unverified."
             ),
             "geometry_warning": (
-                "At the standard 60/13 mm dimensions the negative-X pocket/socket web thins to about 0.146 mm at Z=12.5 and opens to the exterior near Z=12.75. Round holes are not the cause; structural integrity is not validated."
-                if self.joint_style == "full-height" and self.reference_socket_dimensions
-                else "Custom unit size/thickness match internally but printed fit and compatibility with standard 60/13 mm parts require independent checks."
+                "Custom unit size/thickness match internally but printed fit and compatibility with standard 60/13 mm parts require independent checks."
                 if not self.reference_defaults
                 else None
             ),
             "edge_note": (
-                "Experimental full-height tabs require open-through matching pockets; not compatible with original roofed female edges."
-                if self.joint_style == "full-height"
-                else "Original partial-height edge geometry; custom dimensions require separate compatibility checks."
+                "Original partial-height edge geometry; custom dimensions require separate compatibility checks."
             ),
             "physical_fit_verified": False,
         }

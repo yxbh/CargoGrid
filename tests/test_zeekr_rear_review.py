@@ -1,8 +1,6 @@
 """Measured rear-panel review recipe and local artifact checks."""
 
-import os
 from math import hypot
-from pathlib import Path
 
 import pytest
 from build123d import Axis, GeomType, Location, Solid
@@ -33,7 +31,6 @@ from cargo_grid.vehicles.zeekr_7x_rear_review import (
     _south_design,
     _tail_slope_dy_dx,
     _taper_interpolators,
-    inspect_scan_obj,
     rear_review_job,
     right_review_outline_x_mm,
     right_wall_x_mm,
@@ -664,20 +661,3 @@ def test_custom_solids_mesh_and_assembly_contacts_have_no_nominal_gap_or_overlap
         second = _placed(designs[second_name])
         assert first.distance_to(second) < 1e-6
         assert _intersection_volume(first, second) < 1e-7
-
-
-@pytest.mark.reference
-def test_supplied_scan_matches_frozen_review_registration_facts():
-    source = os.environ.get("CARGO_GRID_ZEEKR_SCAN")
-    if not source:
-        pytest.skip("Set CARGO_GRID_ZEEKR_SCAN to verify the supplied local OBJ")
-    report = inspect_scan_obj(Path(source))
-    assert report["matches_review_source"]
-    assert report["literal_counts"] == {
-        "vertices": 5164,
-        "texture_coordinates": 6206,
-        "normals": 5161,
-        "faces": 10096,
-    }
-    assert report["referenced_vertices"] == 5160
-    assert report["pca_extents_obj"] == pytest.approx((1.332152, 0.398826, 0.046206), abs=5e-6)

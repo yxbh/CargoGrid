@@ -1,7 +1,6 @@
 """Approved reference-space geometry, not a physical load or fit certification."""
 
 import json
-from dataclasses import replace
 
 import pytest
 from build123d import (
@@ -336,11 +335,6 @@ def test_bracket_variants_and_scaled_interface_policy():
     assert custom_bracket.is_valid
     with pytest.raises(ValueError, match="was replaced"):
         Accessory("lock-90")
-    assert make_accessory(
-        replace(
-            Accessory("vertical-tile-bracket", nx=2), interface=Interface(joint_style="full-height")
-        )
-    ).is_valid
 
 
 @pytest.mark.parametrize(

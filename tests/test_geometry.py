@@ -1,6 +1,3 @@
-import os
-from pathlib import Path
-
 import pytest
 from build123d import Compound, Location, Vector
 
@@ -118,17 +115,3 @@ def test_service_rejects_invalid_job_quantities():
             Design("test", shape, {}, quantity=quantity)
     with pytest.raises(ValueError):
         Job([], BuildVolume(100, 100, 100), "part")
-
-
-@pytest.mark.skipif(
-    not os.environ.get("CARGO_GRID_REFERENCE"), reason="local reference not supplied"
-)
-@pytest.mark.reference
-def test_local_functional_interoperability():
-    from cargo_grid.validation import compare_reference
-
-    report = compare_reference(Path(os.environ["CARGO_GRID_REFERENCE"]))
-    assert report["joint_style"] == "original"
-    assert report["functional_envelope_pass"], report["joining_mating_min_clearance_mm"]
-    assert report["engagement_flanks_and_plug_pass"]
-    assert report["not_checked"]

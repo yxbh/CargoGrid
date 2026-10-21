@@ -40,8 +40,6 @@ def variants(
     hole_scope: Literal["interior", "full"] = "full",
 ) -> list[Accessory]:
     """Required 2/3/4-cell edges, with the five-cell run supplied by a second 2+3 pair."""
-    if interface.joint_style != "original":
-        raise ValueError("Zeekr 7X extras require original roofed tile-edge joints")
     return [
         tile_matched_perimeter(
             family,
@@ -97,8 +95,6 @@ def extras_job(
     Every piece is required on every build; a fit failure refuses the set.
     ``auto_roof_support`` reserves a prime tower on every plate.
     """
-    if interface.joint_style != "original":
-        raise ValueError("Zeekr 7X extras require original roofed tile-edge joints")
     if replace(interface, solid_bottom_mm=0.0) != Interface():
         raise ValueError(
             "the Zeekr 7X expansion set requires the standard 60 mm unit, "

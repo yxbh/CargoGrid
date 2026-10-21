@@ -96,9 +96,7 @@ def test_help_explains_dimensions_and_multivalue_order(command, capsys):
         "X_MM Y_MM WIDTH_MM DEPTH_MM",
     ):
         assert explanation in normalized
-    for printer in PRINTERS.values():
-        slots = ", ".join(f"{slot}={nozzle.name}" for slot, nozzle in enumerate(printer.nozzles, 1))
-        assert f"{printer.name}: {slots}" in normalized
+    assert "--auto-roof-support" in text
     assert not re.search(r"--build(?:[ =,]|$)", text)
 
 
@@ -198,6 +196,14 @@ def test_named_dimensions_generate_the_same_two_by_one_contract(tmp_path):
         "--roof-interface-spacing",
         "--roof-nozzles",
         "--roof-foot-expansion",
+        "--roof-support",
+        "--roof-support-mode",
+        "--roof-top-gap-mm",
+        "--roof-interface-layer-count",
+        "--roof-coverage",
+        "--roof-interface-spacing-mm",
+        "--roof-nozzle-slots",
+        "--roof-foot-expansion-mm",
         "--stack-gap",
         "--interface-thickness",
         "--material-roles",
