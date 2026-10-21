@@ -11,7 +11,7 @@ from cargo_grid.printers import H2D, PRINTERS, X2D
 from cargo_grid.roof_support import BAMBU_SUPPORT_DEFAULTS
 from cargo_grid.sliced_extrusion import SUPPORT_REACH_ALLOWANCE_MM, feature_bounds
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def _tool():

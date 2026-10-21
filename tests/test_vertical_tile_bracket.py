@@ -36,6 +36,8 @@ from cargo_grid.cli import main
 from cargo_grid.interfaces import make_plug, x_profile
 from cargo_grid.tiles import hole_placements
 
+pytestmark = pytest.mark.geometry_inputs
+
 
 def volume(shape):
     return sum(s.volume for s in shape.solids()) if shape and shape.solids() else 0

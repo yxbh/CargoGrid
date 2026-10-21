@@ -9,6 +9,8 @@ from cargo_grid.layout import exact_layout
 from cargo_grid.parameters import Interface
 from cargo_grid.tiles import hole_placements
 
+pytestmark = pytest.mark.geometry_inputs
+
 
 def test_prism_wrapper_has_real_positive_volume():
     shape = prism(rectangle(0, 0, 10, 20), 3)

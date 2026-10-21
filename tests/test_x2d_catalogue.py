@@ -16,6 +16,8 @@ from cargo_grid.printers import H2D, X2D
 from cargo_grid.rods import Rod
 from cargo_grid.roof_support import RoofSupportSettings
 
+pytestmark = pytest.mark.geometry_inputs
+
 
 @pytest.fixture(scope="module")
 def wide_perimeter_designs():

@@ -21,6 +21,8 @@ from cargo_grid.accessories import (
     make_accessory,
 )
 
+pytestmark = pytest.mark.geometry_inputs
+
 OUTWARD = 10.0
 # Seams meet another piece along ~60 mm (tile-facing) or 10 mm (strip ends). Bands stop 1 mm
 # short of the neighbouring corner rounds, as the reference bands do.

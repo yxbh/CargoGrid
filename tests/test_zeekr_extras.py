@@ -30,6 +30,8 @@ from cargo_grid.rods import Rod, RodBrace
 from cargo_grid.vehicles import zeekr_7x, zeekr_7x_contours
 from cargo_grid.vehicles.zeekr_7x import extras_job, variants
 
+pytestmark = pytest.mark.geometry_inputs
+
 COLLECTION = "zeekr-7x"
 H2D = BuildVolume(350, 320, 325)
 H2D_OPTIONS = [
@@ -837,11 +839,19 @@ def test_real_expansion_set_keeps_families_and_never_exceeds_rectangle_capacity(
 
 
 @pytest.mark.slow
-def test_real_expansion_set_exports_every_piece_in_one_project(expansion_set_job, tmp_path):
-    manifest_path = export_job(expansion_set_job.job, tmp_path / "set", stl=False, bambu=H2D_BAMBU)
+def test_real_expansion_set_exports_every_piece_in_one_project(expansion_set_job, artifact_inputs):
+    def create(destination):
+        export_job(expansion_set_job.job, destination / "set", stl=False, bambu=H2D_BAMBU)
+
+    output = artifact_inputs(
+        "zeekr-expansion-project",
+        {"printer": "h2d", "nozzle": 0.8, "layer": 0.32, "stl": False},
+        create,
+    )
+    manifest_path = output / "set/manifest.json"
     manifest = json.loads(manifest_path.read_text())
     assert len(manifest["designs"]) == 19
-    assert len(list((tmp_path / "set").glob("*.step"))) == 19
+    assert len(list(manifest_path.parent.glob("*.step"))) == 19
     for design in manifest["designs"]:
         assert design["step_roundtrip"] == "passed"
         assert design["step_volume_delta_mm3"] <= design["step_volume_budget_mm3"]

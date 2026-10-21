@@ -32,6 +32,8 @@ from cargo_grid.export import BambuSettings, Material, export_job, write_3mf
 from cargo_grid.jobs import Job
 from cargo_grid.meshes import checked_mesh
 
+pytestmark = pytest.mark.geometry_inputs
+
 CASES = [
     (1, 1, 60, 138018.07378332317, 135.65095768561332, 4385.433372204407),
     (1, 1, 120, 252394.55403519978, 116.08947705488677, 7130.9316949135355),

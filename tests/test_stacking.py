@@ -10,6 +10,8 @@ from cargo_grid.jobs import Design, tile_design
 from cargo_grid.parameters import BuildVolume, Exclusion, Tile
 from cargo_grid.stacking import StackSettings, stack_volumes
 
+pytestmark = pytest.mark.geometry_inputs
+
 
 @pytest.fixture(scope="module")
 def tile():

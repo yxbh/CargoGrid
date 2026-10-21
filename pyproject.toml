@@ -60,11 +60,13 @@ cargo-grid = "cargo_grid.cli:main"
 dev = ["filelock>=3", "pytest>=8", "pytest-xdist>=3", "ruff>=0.11"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
-pythonpath = ["src"]
+testpaths = ["tests/contracts"]
+pythonpath = ["src", "tests"]
+addopts = "-m 'not native'"
 markers = [
     "native: requires an explicitly supplied local Bambu Studio executable",
     "slow: exhaustive CAD and assembled geometry checks run outside portable CI",
+    "geometry_inputs: use independent source-keyed geometry inputs, not constructor assertions",
 ]
 
 [tool.ruff]

@@ -28,6 +28,8 @@ from cargo_grid.jobs import Design, Job
 from cargo_grid.packing import PrintPlacement, packing_score
 from cargo_grid.parameters import BuildVolume
 
+pytestmark = pytest.mark.geometry_inputs
+
 
 def test_projected_mesh_footprint_unions_all_height_triangles():
     vertices = np.array(

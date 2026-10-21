@@ -8,8 +8,8 @@ from zipfile import ZipFile
 import numpy as np
 import pytest
 from build123d import import_step
+from contracts.test_prepared_export import stl_triangles
 from test_export import _project_facts
-from test_prepared_export import stl_triangles
 
 from cargo_grid import BuildVolume
 from cargo_grid import catalogue as catalogue_module
@@ -28,6 +28,8 @@ from cargo_grid.export import BambuSettings, Material, export_job, write_3mf
 from cargo_grid.jobs import Job
 from cargo_grid.meshes import checked_mesh
 from cargo_grid.parameters import Exclusion
+
+pytestmark = pytest.mark.geometry_inputs
 
 BAMBU = BambuSettings((Material("Diagnostic PETG", "PETG", "#789784"),), 0.4, 0.2)
 

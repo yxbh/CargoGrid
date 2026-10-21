@@ -4,7 +4,6 @@ import pytest
 from build123d import Axis, Edge, GeomType, Location, Solid, Wire
 from local_geometry import bounded_distance
 from OCP.BRepAdaptor import BRepAdaptor_Surface
-from shared_fixture import shared_fixture
 from zeekr_assembly import assemble_rear_panel
 
 from cargo_grid.interfaces import make_plug
@@ -32,6 +31,8 @@ from cargo_grid.vehicles.zeekr_7x_contours import (
     right_wall_x_mm,
     tail_y_mm,
 )
+
+pytestmark = pytest.mark.geometry_inputs
 
 
 def _placed(design):
@@ -67,11 +68,8 @@ def _witness_intersection_volume(placed, bore):
 
 
 @pytest.fixture(scope="module")
-def assembled_parts(tmp_path_factory, worker_id):
-    if worker_id == "master":
-        return assemble_rear_panel()
-    path = tmp_path_factory.getbasetemp().parent / "zeekr-assembled-parts.pickle"
-    return shared_fixture(path, assemble_rear_panel)
+def assembled_parts():
+    return assemble_rear_panel()
 
 
 @pytest.fixture(scope="module")

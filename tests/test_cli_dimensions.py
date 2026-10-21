@@ -18,6 +18,8 @@ from cargo_grid.cli import (
 from cargo_grid.parameters import Interface
 from cargo_grid.printers import DEFAULT_PART_CLEARANCE_MM, PRINTERS
 
+pytestmark = pytest.mark.geometry_inputs
+
 OPTIONS = ("--build-width-mm", "--build-depth-mm", "--build-height-mm")
 COMPLETE = [OPTIONS[0], "150", OPTIONS[1], "150", OPTIONS[2], "50"]
 

@@ -18,6 +18,8 @@ from cargo_grid.export import BambuSettings, Material, export_job, write_3mf
 from cargo_grid.jobs import Design, Job
 from cargo_grid.stacking import StackSettings
 
+pytestmark = pytest.mark.geometry_inputs
+
 
 @pytest.fixture
 def block_job():

@@ -8,6 +8,8 @@ from cargo_grid.catalogue import accessory_design
 from cargo_grid.jobs import tile_design
 from cargo_grid.roof_support import female_roofs
 
+pytestmark = pytest.mark.geometry_inputs
+
 EXPECTED = {
     "tile": ({("west", 1), ("south", 1), ("south", 2)}, {(0, 30), (30, 0), (90, 0)}),
     "edge-y": ({("south", 1), ("south", 2)}, {(30, 0), (90, 0)}),

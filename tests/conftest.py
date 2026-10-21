@@ -1,40 +1,85 @@
+from hashlib import sha256
+from pathlib import Path
+
 import pytest
-from build123d import Box
 
-from cargo_grid import catalogue
-
-pytest_plugins = ["slow_shards"]
-
-# Tests using these expensive module fixtures are collected first, so their long chains start
-# at the beginning of a run instead of becoming its tail. A group name keeps the tests on one
-# worker under `--dist loadgroup`, so the fixture is built once. Without one, each test is
-# long enough that building a copy per worker finishes sooner than one chain.
-EARLY_FIXTURES = {
-    "h2d_plan": "h2d-plan",
-    "x2d_plan": "x2d-plan",
-    "wide_perimeter_designs": "wide-perimeter",
-    "expansion_set_job": "zeekr-expansion-set",
-    # A run-local snapshot lets these long checks run in parallel without rebuilding CAD.
-    "review_job": None,
-}
+SOURCE_DIGESTS = pytest.StashKey[dict[Path, str]]()
 
 
-@pytest.hookimpl(tryfirst=True)
-def pytest_collection_modifyitems(items):
-    order = list(EARLY_FIXTURES)
+def pytest_sessionstart(session):
+    root = session.config.rootpath
+    session.config.stash[SOURCE_DIGESTS] = {
+        path: sha256(path.read_bytes()).hexdigest()
+        for folder in (root / "src/cargo_grid", root / "tests")
+        for path in folder.rglob("*.py")
+    }
 
-    def rank(item):
-        names = getattr(item, "fixturenames", ())
-        return next((index for index, name in enumerate(order) if name in names), len(order))
 
-    for item in items:
-        index = rank(item)
-        if index < len(order) and EARLY_FIXTURES[order[index]]:
-            item.add_marker(pytest.mark.xdist_group(EARLY_FIXTURES[order[index]]))
-    items.sort(key=rank)
+def pytest_addoption(parser):
+    parser.addoption(
+        "--input-cache", choices=("on", "off"), default="on", help="reuse source-keyed test inputs"
+    )
+    parser.addoption(
+        "--input-cache-dir", type=Path, help="test input store (default: .local/test-inputs)"
+    )
+
+
+@pytest.fixture(scope="session")
+def input_store(pytestconfig):
+    from input_cache import InputStore
+
+    root = pytestconfig.getoption("--input-cache-dir")
+    store = InputStore(
+        root if root is not None else pytestconfig.rootpath / ".local/test-inputs",
+        enabled=pytestconfig.getoption("--input-cache") == "on",
+        sources_at_start=pytestconfig.stash[SOURCE_DIGESTS],
+    )
+    yield store
+    store.close()
+
+
+@pytest.fixture
+def fresh_geometry(input_store):
+    enabled = input_store.enabled
+    input_store.enabled = False
+    try:
+        yield
+    finally:
+        input_store.enabled = enabled
+
+
+@pytest.fixture(scope="module", autouse=True)
+def geometry_inputs(request):
+    if request.node.get_closest_marker("geometry_inputs") is None:
+        yield
+        return
+    from geometry_inputs import GeometryInputs
+
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        GeometryInputs(request.getfixturevalue("input_store")).install(monkeypatch, request.module)
+        yield
+
+
+@pytest.fixture
+def artifact_inputs(input_store, request):
+    root = request.config.rootpath
+    sources = [
+        *sorted((root / "src/cargo_grid").rglob("*.py")),
+        root / "tests/geometry_inputs.py",
+        Path(request.module.__file__),
+    ]
+
+    def load(kind, parameters, create):
+        return input_store.artifacts(kind, parameters, sources, create)
+
+    return load
 
 
 @pytest.fixture
 def accessory_metadata_shape(monkeypatch):
     """Exercise design metadata without constructing an unrelated family body."""
+    from build123d import Box
+
+    from cargo_grid import catalogue
+
     monkeypatch.setattr(catalogue, "make_accessory", lambda spec: Box(2, 3, 4))

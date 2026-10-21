@@ -38,6 +38,8 @@ from cargo_grid.roof_support import (
     validate_roof_job,
 )
 
+pytestmark = pytest.mark.geometry_inputs
+
 T = 1.92
 # Bambu's default tower is used, so none of these is written.
 TOWER_SETTINGS = (

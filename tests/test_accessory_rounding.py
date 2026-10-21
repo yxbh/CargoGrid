@@ -23,6 +23,8 @@ from cargo_grid.accessories import (
 from cargo_grid.export import _checked_step_roundtrip
 from cargo_grid.interfaces import horizontal_edges, prism
 
+pytestmark = pytest.mark.geometry_inputs
+
 
 def volume(shape):
     return sum(s.volume for s in shape.solids()) if shape and shape.solids() else 0

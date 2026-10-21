@@ -23,6 +23,8 @@ from cargo_grid.printers import DEFAULT_PART_CLEARANCE_MM, H2D
 from cargo_grid.rods import Rod, RodBrace
 from cargo_grid.tiles import hole_placements
 
+pytestmark = pytest.mark.geometry_inputs
+
 
 def required_accessories(max_cells, *, hole_diameter=10, hole_scope="full"):
     def perimeter(

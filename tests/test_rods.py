@@ -9,8 +9,12 @@ from zipfile import ZipFile
 import numpy as np
 import pytest
 from build123d import Axis, GeomType, Location, Vector, import_step
+from contracts.test_prepared_export import (
+    archive_triangles,
+    assert_serialized_closed,
+    stl_triangles,
+)
 from OCP.BRepAdaptor import BRepAdaptor_Surface
-from test_prepared_export import archive_triangles, assert_serialized_closed, stl_triangles
 
 from cargo_grid import Rod, RodBrace, make_rod, prepared
 from cargo_grid.accessories import accessory_datums, make_accessory
@@ -22,6 +26,8 @@ from cargo_grid.packing import PrintPlacement
 from cargo_grid.parameters import BuildVolume, Interface, Tile
 from cargo_grid.rods import BRACE_BORES_MM, BRACE_SPACINGS_MM, ROD_HEIGHTS_MM, fit_evidence
 from cargo_grid.tiles import hole_placements, make_tile
+
+pytestmark = pytest.mark.geometry_inputs
 
 BAMBU = BambuSettings((Material("PETG", "PETG", "#637B70"),), nozzle=0.8, layer_height=0.32)
 FOUR = [*(Rod(h) for h in ROD_HEIGHTS_MM), *(RodBrace(s) for s in BRACE_SPACINGS_MM)]

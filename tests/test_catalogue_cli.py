@@ -26,6 +26,8 @@ from cargo_grid.jobs import Design, tile_identity
 from cargo_grid.parameters import BuildVolume, Tile
 from cargo_grid.tiles import hole_placements
 
+pytestmark = pytest.mark.geometry_inputs
+
 
 def test_complete_ordered_tile_family():
     assert set(tile_sizes(BuildVolume(246, 246, 13))) == {

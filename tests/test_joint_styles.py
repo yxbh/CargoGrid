@@ -13,6 +13,8 @@ from cargo_grid.export import export_job
 from cargo_grid.jobs import Job, layout_job, tile_design
 from cargo_grid.layout import exact_layout
 
+pytestmark = pytest.mark.geometry_inputs
+
 
 def test_default_contract_and_invalid_styles():
     interface = Interface()

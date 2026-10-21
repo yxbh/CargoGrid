@@ -32,6 +32,8 @@ from cargo_grid.interfaces import tile_join_tool
 from cargo_grid.jobs import Job
 from cargo_grid.meshes import checked_mesh
 
+pytestmark = pytest.mark.geometry_inputs
+
 
 def volume(shape) -> float:
     return sum(solid.volume for solid in shape.solids()) if shape else 0
