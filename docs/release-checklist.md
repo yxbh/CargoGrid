@@ -16,13 +16,13 @@ On a 12-core workstation, run the full portable suite with 12 workers:
 ```sh
 uv run ruff check .
 uv run ruff format --check .
-uv run pytest -q -n 12 --dist loadfile -m "not native"
+uv run pytest -q tests -n 12 --dist worksteal -m "not native"
 git diff --check
 uv build
 uv run python tools/check_distributions.py dist
 ```
 
-Use fewer workers on a smaller machine. This command includes the `slow` tier. CI uses four workers with `--dist worksteal` for the portable tier, so a long geometry test does not leave other workers idle behind a whole-file assignment. `tests/conftest.py` collects the tests that share the whole-catalogue H2D plan fixture first, so they start together at the head of one worker's queue; work stealing takes tests from the end of a queue, and building that plan on a second worker would cost minutes. With many workers and a small selection, stealing can still reach those tests; `--dist loadgroup` always keeps them on one worker. `--dist loadfile` remains useful for controlled comparisons and module-local fixtures. Do not use xdist for native Bambu tests.
+Use fewer workers on a smaller machine. This command includes the `slow` tier and the separately collected default contracts. Portable CI uses four workers with `--dist worksteal`. Each run constructs fresh geometry; ordinary fixtures share read-only inputs within that run. Do not use xdist for native Bambu tests.
 
 Build into a fresh directory. The distribution checker expects one wheel and one source archive and rejects extra build output. It checks package metadata, entry points, the licence and the allowlist; it isn't a general secret or licence scanner.
 
@@ -36,13 +36,13 @@ The Linux job installs the CAD runtime libraries, runs Ruff, runs the portable t
 
 The portable test command includes pytest's built-in `--durations=0 --durations-min=0` report. It lists every test's setup, call and teardown durations, slowest first, without adding a timing plugin. Add the same flags to a local run when investigating slow tests. These are per-phase elapsed times: phases on parallel workers can overlap, so their sum is not the CI job's wall time. The same run writes a JUnit report, and `tools/check_test_durations.py` fails the job if any portable test takes longer than its per-test budget, unless the test is in the checker's reviewed allowlist with its own limit. It warns, without failing, when the pytest session runs past its target, because hosted runners differ in speed from run to run. `tests/README.md` describes how to keep new tests inside the budget.
 
-The slow tier holds exhaustive parameter sweeps and assembled geometry checks. Portable CI keeps at least one case for each male/female joint, family variant and recorded pose, plus the largest size; the slow tier adds interior sizes, repeated poses and full exports. It runs with `--dist loadgroup`, which hands out one test at a time, so its few multi-minute tests start on separate workers.
+The slow tier holds exhaustive parameter sweeps, assembled geometry checks and complete exports. Geometry contracts have bounded owners; metadata and policy checks use stand-ins rather than repeating real construction. Weekly and manual slow selections use three cost-balanced runner partitions with four workers and `--dist loadgroup` each, keeping expensive shared plans and assemblies on one worker. See `tests/README.md` for complete-selection and partition commands.
 
 Keep option propagation, design metadata, family geometry and whole-catalogue packing as separate test responsibilities. CLI option tests capture the resolved spec at the construction boundary; each distinct physical hole configuration also goes through real CLI export. Metadata-only accessory tests use a small real solid at `make_accessory`, while family geometry tests still construct the actual bodies. Neither parser results nor manifest hole counts prove that a bore was cut.
 
 The bracket catalogue-fit test limits enumeration to all maintained brackets, then makes independent source-pose and print-pose catalogue requests with real geometry. The H2D plan tests build the whole unpatched inventory once in a read-only module fixture, compare complete parameters against independent per-family contracts, and check actual posed solids for each plate group, reach, gaps, projected footprints, the export replan, support settings and family-grouped plates as separate tests. Add an independent inventory and grouping contract when introducing a family; don't replace those contracts with global design totals or incidental plate numbers. The native archive's plate limit remains a separate export contract.
 
-For a test refactor, collect test IDs before and after, map renamed or split assertions to their new owners, and compare equivalent selectors with the same worker count and `--dist loadfile`. Keep raw duration reports and measurements with the review, not in maintained documentation. Run the full portable suite after the focused checks. Keep geometry cases and tolerances intact; don't introduce shared mutable solids or cross-run geometry caches to improve a timing result. A module fixture that tests only read is fine.
+For a test refactor, collect test IDs before and after and map renamed, moved or split assertions to their new owners. Keep raw duration reports and measurements with the review, not in maintained documentation. Run the full portable suite after the focused checks. Keep geometry cases and tolerances intact. Share read-only inputs through ordinary fixtures within a run, copy before mutation, and keep constructor-operation tests on the real factory.
 
 Export-lifecycle tests check fresh ownership, mutations between requests, one checked mesh shared by output formats and copies, and the actual serialized STL/3MF topology and coordinates. Tile-construction tests check independent joint-tool topology and one multi-tool socket cut; the family, hole, scaled-interface, STEP and mesh tests still establish the resulting geometry. When changing these stages, compare complete cold CLI exports as well as the suite. Record source and dependency versions, worker count, host contention, CPU time and peak memory; overlapping test or profiler phases must not be added together as wall time.
 
@@ -53,7 +53,7 @@ CI can't use private reference files, local slicer profiles or printers. Treat a
 Normal generation does not need Bambu Studio. To include the optional checks, point `CARGO_GRID_BAMBU` at the chosen Bambu Studio CLI, then run the suite serially:
 
 ```sh
-uv run pytest -q
+uv run pytest -q tests -m native
 ```
 
 Unavailable checks skip.

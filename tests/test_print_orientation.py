@@ -8,8 +8,8 @@ from zipfile import ZipFile
 import numpy as np
 import pytest
 from build123d import import_step
+from contracts.test_prepared_export import stl_triangles
 from test_export import _project_facts
-from test_prepared_export import stl_triangles
 
 from cargo_grid import BuildVolume
 from cargo_grid import catalogue as catalogue_module

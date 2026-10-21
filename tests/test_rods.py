@@ -9,8 +9,12 @@ from zipfile import ZipFile
 import numpy as np
 import pytest
 from build123d import Axis, GeomType, Location, Vector, import_step
+from contracts.test_prepared_export import (
+    archive_triangles,
+    assert_serialized_closed,
+    stl_triangles,
+)
 from OCP.BRepAdaptor import BRepAdaptor_Surface
-from test_prepared_export import archive_triangles, assert_serialized_closed, stl_triangles
 
 from cargo_grid import Rod, RodBrace, make_rod, prepared
 from cargo_grid.accessories import accessory_datums, make_accessory

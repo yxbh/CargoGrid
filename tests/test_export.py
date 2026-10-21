@@ -175,7 +175,9 @@ def _project_facts(path):
         return settings, sorted(plates), sorted(volumes)
 
 
-def test_bracket_display_name_is_bambu_metadata_not_design_identity(materials, tmp_path):
+def test_bracket_display_name_is_bambu_metadata_not_design_identity(
+    materials, tmp_path, accessory_metadata_shape
+):
     design = accessory_design(Accessory("vertical-tile-bracket", nx=2, ny=1))
     project = write_3mf(
         Job([design], BuildVolume(350, 320, 325), "part"),

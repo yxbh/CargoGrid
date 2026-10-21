@@ -1,17 +1,33 @@
 # Writing tests
 
-Portable CI runs every test not marked `native` or `slow` with four workers on a shared hosted runner, where a test takes roughly five times as long as it does alone on a fast workstation. `tools/check_test_durations.py` fails the job when one test's setup, call and teardown exceed its budget, and warns when the whole pytest session runs past its target. The `slow` tier runs weekly and on a manual CI dispatch with `tier: slow`, using two runners with four workers and the same 60-minute timeout each.
+`uv run pytest -q` collects `tests/contracts/`: parameters, synthetic packing and serialization, printer settings, export ownership and failure paths. Put real family geometry and integration checks elsewhere under `tests/`. The full command names `tests` so it includes both directories; a marker filter alone is not the default tier.
 
-- Check representative sites. Keep at least one portable case for each male/female joint, family variant and recorded pose, plus the largest size. Mark the other values of a sweep with `pytest.param(..., marks=pytest.mark.slow)` so their test IDs stay the same.
+| Selection | Command |
+|---|---|
+| Default contracts | `uv run pytest -q` |
+| Full portable, including slow | `uv run pytest -q tests -n 12 --dist worksteal -m "not native"` |
+| PR portable | `uv run pytest -q tests -n 4 --dist worksteal -m "not native and not slow"` |
+| Complete slow selection | `uv run pytest -q tests -n 4 --dist loadgroup -m "slow and not native"` |
+| Optional native Bambu | Supply `CARGO_GRID_BAMBU`, then `uv run pytest -q tests -m native` serially |
+
+Use fewer workers on smaller machines. CI splits the slow selection across three runners with `--ci-partition=0/3`, `--ci-partition=1/3` and `--ci-partition=2/3`. `tests/ci_partition.py` assigns complete files using measured relative costs; new files receive a default weight, not an omission. Collection checks require disjoint, complete coverage. Within each runner, `loadgroup` keeps users of an expensive shared plan together; the portable job uses `worksteal`. Native checks are excluded by default; an explicit `-m native` overrides that selection. Unavailable external checks remain skips.
+
+The local targets are 30 seconds for default contracts and two minutes warm or six minutes cold for the full portable selection. Record actual timings, toolchain, workers and contention in the review; do not weaken a contract to meet a timing target. `tools/check_test_durations.py` also checks the PR's individual test costs from its JUnit report. `--durations=0 --durations-min=0` prints every phase, whose sum is not parallel wall time.
+
+## Choosing an input
+
+- Give each geometry contract one owner. Keep bounded coverage of joints, family variants, poses, largest sizes and supported custom geometry; don't repeat construction in metadata, CLI routing or settings tests.
+- Use a small solid or captured resolved spec when the assertion does not inspect CAD. Inventory and printer policy do not establish geometric or physical fit.
+- Share expensive read-only inputs through ordinary module fixtures within a run. Constructor-operation tests call the real factory; a test that mutates a shared input must first make its own copy.
+- Shared catalogue and assembly fixtures are grouped on one worker in the slow tier. A two-worker test checks actual fixture construction counts, not just marker collection.
+- Export fixtures write fresh files in a test-owned temporary directory. Every run constructs its geometry and reruns its assertions.
+
+## Geometry checks
+
 - Query geometry near the feature. Clip shapes to a small box around a hole before classifying points (`_local_assembly_contains` in `test_edge_variants.py`), and use `local_geometry.bounded_distance` for contact checks. Skip shapes whose bounding boxes can't reach the region. Point queries and distances against a whole tile can take seconds each.
 - Avoid whole-solid witness Booleans when a clipped or local check answers the same question, and keep a small test showing that the local check agrees with the whole-solid one.
-- Don't export full multi-part packages in portable tests. Export one or two designs, or mark the package check `slow`.
-- Whole H2D catalogue planning and prepared-export checks are `slow`; portable tests cover family inventories, representative real geometry and the shared planner. When a test also inspects a generated job, reuse that read-only job for its export instead of rebuilding the same CAD.
-- Build expensive geometry once. Use a module fixture that tests only read and list it in `EARLY_FIXTURES` in `conftest.py`, so its tests start first and stay on one worker. Don't change a shared shape; move or copy it first.
-- Rear-panel assembly checks share one trusted, run-local fixture snapshot under pytest's temporary directory. A file lock lets one worker build and write it; the others load independent copies instead of serializing every long check behind one xdist group. Snapshots preserve BREP geometry and job metadata, but omit OCCT construction history, which these geometry checks do not use. They are never reused across runs or read from a supplied path.
-- Split long integration checks by responsibility, so a failure names the broken contract and no single test becomes the tail of the run.
+- Share an expensive input/export before splitting its assertions by responsibility. Splitting must not multiply construction or export work.
+- Whole catalogue and complete-package checks belong in integration or `slow`, not in default contracts. Reuse a read-only job when an export checks that same job.
 - A faster check must answer the same question. Keep assertions and tolerances.
 
-Run the portable tier with `uv run pytest -q -n 4 --dist worksteal -m "not native and not slow"` and the full slow tier with `uv run pytest -q -n 4 --dist loadgroup -m "slow and not native"`. Append `--slow-shard 1` or `--slow-shard 2` to reproduce one CI shard. Add `--durations=0 --durations-min=0` to see where time goes.
-
-`tests/slow_shards.py` assigns whole files to two shards using measured setup and call costs, sharing assembled geometry fixtures. File boundaries keep module fixtures and xdist groups together; existing catalogue and expansion groups remain on one worker. A portable collection check compares both shards with the complete slow selection, rejecting gaps, duplicates and groups split across shards. New slow files must be assigned before CI can collect a shard; the same split is used by scheduled and manual runs.
+Run default contracts and the affected geometry checks while editing, then the full portable gate before merge. Every rewrite stage independently compares all published archives with the saved baseline. Valid solids and slicer observations do not establish printed fit, support removal or strength.
