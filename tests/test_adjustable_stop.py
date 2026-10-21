@@ -217,10 +217,24 @@ def test_adjustable_stop_x2d_uses_the_shared_profiles_and_tower_reservation(nozz
     assert job.tower_bounds(0)[2] == 256
 
 
-@pytest.mark.parametrize("nozzle_diameter_mm", H2D.profiles)
+@pytest.mark.parametrize(
+    "nozzle_diameter_mm",
+    [pytest.param(0.8, id="real-kit"), pytest.param(0.4, id="profile-stand-in")],
+)
 def test_complete_print_project_uses_shared_h2d_support_conventions(
     tmp_path, nozzle_diameter_mm, monkeypatch
 ):
+    if nozzle_diameter_mm == 0.4:
+        monkeypatch.setattr(
+            adjustable_stop_export,
+            "make_adjustable_stop_parts",
+            lambda spec: (Box(20, 20, 10), Box(20, 10, 15), Box(20, 10, 5)),
+        )
+        monkeypatch.setattr(
+            adjustable_stop_export,
+            "make_adjustable_stop_prong_lock_clip",
+            lambda spec: Box(8, 10, 5),
+        )
     job = adjustable_stop_print_job(nozzle_diameter_mm)
     assert [design.name for design in job.designs] == [
         "fixed_base",

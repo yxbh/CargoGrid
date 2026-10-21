@@ -94,14 +94,14 @@ import pytest
 
 
 @pytest.fixture(scope="module")
-def h2d_plan():
+def expansion_set_job():
     Path(__file__).with_name(f"built-{os.getpid()}").touch()
     return "shared"
 
 
 @pytest.mark.parametrize("case", range(6))
-def test_plan(h2d_plan, case):
-    assert h2d_plan == "shared"
+def test_plan(expansion_set_job, case):
+    assert expansion_set_job == "shared"
 """
     )
     result = subprocess.run(

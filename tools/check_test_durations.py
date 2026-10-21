@@ -19,7 +19,7 @@ from pathlib import Path
 # ramp or whole catalogue group in roughly 50-90 s, so a lower budget would fail on slow
 # runners. New exhaustive sweeps and multi-part exports take several minutes and still fail.
 DEFAULT_BUDGET_SECONDS = 120.0
-DEFAULT_TARGET_SECONDS = 780.0
+DEFAULT_TARGET_SECONDS = 300.0
 
 # Reviewed exceptions: node id -> (limit in seconds, reason).
 ALLOWLIST: dict[str, tuple[float, str]] = {}

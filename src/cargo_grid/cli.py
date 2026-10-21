@@ -690,6 +690,58 @@ def _resolved_hole_diameter(args) -> float | None:
     return requested_diameter if requested_diameter is not None else DEFAULT_HOLE_DIAMETER_MM
 
 
+def _part_specification(
+    args, interface: Interface, hole_diameter: float | None
+) -> Tile | Accessory | Rod | RodBrace:
+    """Resolve one narrow parameter type before constructing any geometry."""
+    count("copy count", args.copy_count)
+    cells = _part_dimensions(args)
+    variant = _part_option(
+        args,
+        "variant_number",
+        {"corner-in", "corner-out", "support-end"},
+        1,
+    )
+    length = _part_option(args, "connector_length_mm", {"support-bit"}, 60)
+    stop_height = _part_option(
+        args,
+        "stop_height_mm",
+        {"lock-45", "vertical-stop"},
+        60 if args.family == "vertical-stop" else 50,
+    )
+    panel_height = _part_option(args, "panel_height_cells", {"vertical-tile-bracket"}, None)
+    edge_outward = _part_option(args, "edge_outward_mm", set(EDGE_FAMILIES), 10.0)
+    complete_edge_holes = _part_option(args, "complete_edge_holes", set(EDGE_FAMILIES), None)
+    ramp_join = _part_option(args, "ramp_join", {"ramp"}, "female")
+    rod_height = _part_option(args, "rod_height_mm", {"rod"}, 120.0)
+    peg_diameter = _part_option(args, "peg_diameter_mm", {"rod"}, 10.0)
+    brace_spacing = _part_option(args, "brace_spacing_mm", {"rod-brace"}, 60.0)
+    bore_diameter = _part_option(args, "bore_diameter_mm", {"rod-brace"}, 10.0)
+    if args.family == "tile":
+        return Tile(*cells, interface, hole_diameter, hole_scope=args.hole_scope)
+    if args.family == "rod":
+        if interface.fit_offset:
+            raise ValueError("rod uses --peg-diameter-mm, not --fit-offset-mm")
+        return Rod(rod_height, peg_diameter, interface.height)
+    if args.family == "rod-brace":
+        if interface.fit_offset:
+            raise ValueError("rod-brace uses --bore-diameter-mm, not --fit-offset-mm")
+        return RodBrace(brace_spacing, bore_diameter)
+    return Accessory(
+        args.family,
+        *cells,
+        variant,
+        length,
+        stop_height,
+        interface,
+        panel_height_cells=panel_height,
+        ramp_join=ramp_join,
+        edge_outward=edge_outward,
+        complete_edge_holes=complete_edge_holes,
+        edge_hole_diameter=(hole_diameter if args.family in EDGE_FAMILIES else None),
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     p = parser()
     args = p.parse_args(argv)
@@ -703,79 +755,8 @@ def main(argv: list[str] | None = None) -> int:
         bambu = _bambu_settings(args, roof_support)
         stack = _stack_settings(args, bambu, build, interface)
         if args.command == "part":
-            count("copy count", args.copy_count)
-            cells = _part_dimensions(args)
-            variant = _part_option(
-                args,
-                "variant_number",
-                {"corner-in", "corner-out", "support-end"},
-                1,
-            )
-            length = _part_option(
-                args,
-                "connector_length_mm",
-                {"support-bit"},
-                60,
-            )
-            stop_height = _part_option(
-                args,
-                "stop_height_mm",
-                {"lock-45", "vertical-stop"},
-                60 if args.family == "vertical-stop" else 50,
-            )
-            panel_height = _part_option(
-                args,
-                "panel_height_cells",
-                {"vertical-tile-bracket"},
-                None,
-            )
-            edge_outward = _part_option(
-                args,
-                "edge_outward_mm",
-                set(EDGE_FAMILIES),
-                10.0,
-            )
-            complete_edge_holes = _part_option(
-                args,
-                "complete_edge_holes",
-                set(EDGE_FAMILIES),
-                None,
-            )
-            ramp_join = _part_option(args, "ramp_join", {"ramp"}, "female")
-            rod_height = _part_option(args, "rod_height_mm", {"rod"}, 120.0)
-            peg_diameter = _part_option(args, "peg_diameter_mm", {"rod"}, 10.0)
-            brace_spacing = _part_option(args, "brace_spacing_mm", {"rod-brace"}, 60.0)
-            bore_diameter = _part_option(args, "bore_diameter_mm", {"rod-brace"}, 10.0)
-            if args.family == "tile":
-                design = tile_design(
-                    Tile(*cells, interface, hole_diameter, hole_scope=args.hole_scope)
-                )
-            elif args.family == "rod":
-                if interface.fit_offset:
-                    raise ValueError("rod uses --peg-diameter-mm, not --fit-offset-mm")
-                design = accessory_design(Rod(rod_height, peg_diameter, interface.height))
-            elif args.family == "rod-brace":
-                if interface.fit_offset:
-                    raise ValueError("rod-brace uses --bore-diameter-mm, not --fit-offset-mm")
-                design = accessory_design(RodBrace(brace_spacing, bore_diameter))
-            else:
-                design = accessory_design(
-                    Accessory(
-                        args.family,
-                        *cells,
-                        variant,
-                        length,
-                        stop_height,
-                        interface,
-                        panel_height_cells=panel_height,
-                        ramp_join=ramp_join,
-                        edge_outward=edge_outward,
-                        complete_edge_holes=complete_edge_holes,
-                        edge_hole_diameter=(
-                            hole_diameter if args.family in EDGE_FAMILIES else None
-                        ),
-                    )
-                )
+            spec = _part_specification(args, interface, hole_diameter)
+            design = tile_design(spec) if isinstance(spec, Tile) else accessory_design(spec)
             design.quantity = args.copy_count
             print_size = design.bambu_size if bambu else design.size
             if build.placement(print_size) is None:

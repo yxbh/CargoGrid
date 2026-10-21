@@ -6,11 +6,13 @@ results remain unverified.
 """
 
 import json
+from dataclasses import replace
 from xml.etree import ElementTree as ET
 from zipfile import ZipFile
 
 import pytest
 from build123d import Box
+from test_h2d_catalogue import _design_group
 from tower_checks import assert_towers_stay_where_bambu_keeps_them
 
 from cargo_grid import BuildVolume, Interface, Tile
@@ -19,14 +21,16 @@ from cargo_grid.accessories import Accessory
 from cargo_grid.catalogue import accessory_design, dual_safe_catalogue_job
 from cargo_grid.cli import main
 from cargo_grid.export import BambuSettings, Material, export_job, write_3mf
-from cargo_grid.jobs import Design, Job, tile_design, tile_identity
+from cargo_grid.jobs import Design, Job, tile_design
 from cargo_grid.packing import PrimeTower, PrintPlacement
 from cargo_grid.plates import (
     AUTO_SUPPORT_TOWER_CLEARANCE_MM,
     DEFAULT_PRIME_TOWER,
     BambuTowerEstimate,
+    PlateGroup,
     _DualNozzleTowerLayout,
     needs_auto_support,
+    plan_plates,
 )
 from cargo_grid.printers import H2D
 from cargo_grid.rods import Rod, RodBrace
@@ -325,27 +329,10 @@ def test_cli_rejects_unsupported_auto_combinations(command, message, tmp_path, c
     assert not (tmp_path / "job").exists()
 
 
-@pytest.fixture
-def stubbed_h2d(monkeypatch):
-    """Stand-in tiles and accessories with real sizes that inherit global support."""
-
-    def fake_tile(tile):
-        size = (tile.nx * 60 + 6, tile.ny * 60 + 6, 13 + tile.interface.solid_bottom_mm)
-        name, parameters = tile_identity(tile)
-        return Design(name, Box(*size).moved(_corner(size)), parameters)
-
-    monkeypatch.setattr(catalogue_module, "tile_design", fake_tile)
-    monkeypatch.setattr(catalogue_module, "make_accessory", lambda spec: Box(20, 30, 10))
-
-
-def _corner(size):
-    from build123d import Location
-
-    return Location(tuple(value / 2 for value in size))
-
-
 @pytest.mark.parametrize("layer_height", [0.32, 0.24])
-def test_h2d_auto_plan_reserves_a_tower_corner_on_every_support_plate(stubbed_h2d, layer_height):
+def test_h2d_auto_plan_reserves_a_tower_corner_on_every_support_plate(
+    catalogue_stand_ins, layer_height
+):
     default = dual_safe_catalogue_job(H2D, solid_bottom_mm=T)
     job = dual_safe_catalogue_job(
         H2D, solid_bottom_mm=T, auto_roof_support=True, layer_height_mm=layer_height
@@ -391,7 +378,7 @@ def test_h2d_auto_plan_reserves_a_tower_corner_on_every_support_plate(stubbed_h2
     assert {d.name for d in job.designs} == {d.name for d in default.designs}
 
 
-def test_plain_auto_catalogue_reserves_a_front_left_tower_corner(stubbed_h2d):
+def test_plain_auto_catalogue_reserves_a_front_left_tower_corner(catalogue_stand_ins):
     build = BuildVolume(350, 320, 325)
     job = catalogue_module.catalogue_job(
         build,
@@ -413,17 +400,90 @@ def test_plain_auto_catalogue_reserves_a_front_left_tower_corner(stubbed_h2d):
     assert job.part_gap == 2
 
 
+AUTO_GROUP_PLATES = {
+    "Tiles": 12,
+    "Female ramps": 1,
+    "Male ramps": 1,
+    "Normal stops": 2,
+    "Tile brackets - deep and shallow": 1,
+    "Angled stops": 1,
+    "Attachment plates": 1,
+    "10mm edges and corners - complete holes": 1,
+    "20mm edges and corners - complete holes": 2,
+    "30mm edges and corners - complete holes": 2,
+    "Rails and connectors": 2,
+    "Rods and upper braces": 1,
+}
+
+
+def _real_group_export_job(job, group):
+    indices = [i for i, design in enumerate(job.designs) if _design_group(design)[0] == group]
+    designs = [job.designs[i] for i in indices]
+    if group != "Tiles":
+        witness = next(
+            i
+            for i, design in enumerate(job.designs)
+            if "family" not in design.parameters
+            and (design.parameters["nx"], design.parameters["ny"]) == (1, 1)
+        )
+        indices.append(witness)
+        # A mixed Auto job needs a real female roof even when this group has none.
+        designs.append(tile_design(Tile(1, 1, interface=Interface(solid_bottom_mm=T))))
+    placements = [job.print_placements[i] for i in indices]
+    plates = {plate: index for index, plate in enumerate(sorted({p.plate for p in placements}))}
+    per_plate = (
+        "plate_names",
+        "plate_settings",
+        "plate_builds",
+        "projected_footprint_clearances",
+        "prime_tower_positions",
+        "prime_tower_reaches",
+        "prime_tower_clearances",
+    )
+    return replace(
+        job,
+        designs=designs,
+        print_placements=[replace(p, plate=plates[p.plate]) for p in placements],
+        projected_footprints=[job.projected_footprints[i] for i in indices],
+        placement_policy={},
+        omitted=[],
+        **{
+            name: {plates[p]: value for p, value in getattr(job, name).items() if p in plates}
+            for name in per_plate
+        },
+    )
+
+
+def test_family_plate_counts_compose_without_mixing_groups():
+    shape = Box(70, 70, 5)
+    groups = [
+        PlateGroup(title, [Design(f"{title}-{i}", shape, {}) for i in range(count)], 4)
+        for title, count in AUTO_GROUP_PLATES.items()
+    ]
+    plan = plan_plates(groups, BuildVolume(100, 100, 10), size=lambda design: (70, 70, 5))
+    assert plan.plate_count == sum(AUTO_GROUP_PLATES.values()) == 27
+    assert list(plan.plate_names.values()) == [
+        title if count == 1 else f"{title} {i + 1}"
+        for title, count in AUTO_GROUP_PLATES.items()
+        for i in range(count)
+    ]
+    assert len({p.plate for p in plan.placements}) == len(plan.designs) == 27
+
+
 @pytest.mark.slow
-def test_real_h2d_auto_plan_with_solid_bottom(tmp_path):
+@pytest.mark.parametrize("group", AUTO_GROUP_PLATES)
+def test_real_h2d_auto_group_with_solid_bottom(tmp_path, real_catalogue_group, group):
     job = dual_safe_catalogue_job(H2D, solid_bottom_mm=T, auto_roof_support=True)
-    assert max(p.plate for p in job.print_placements) + 1 == 27
-    report = write_3mf(job, tmp_path / "auto.3mf", bambu=bambu())
-    roof = report["roof_support"]
+    assert real_catalogue_group
+    assert len(real_catalogue_group) == len(set(real_catalogue_group))
+    group_plates = {
+        placement.plate
+        for design, placement in zip(job.designs, job.print_placements, strict=True)
+        if _design_group(design)[0] == group
+    }
+    assert len(group_plates) == AUTO_GROUP_PLATES[group]
     assert len(job.designs) == 129
-    assert len(roof["supported_objects"]) == 129
-    for entry in roof["supported_objects"]:
-        assert entry["object_settings"] == {}
-    families = {entry["family"] for entry in roof["supported_objects"]}
+    families = {design.parameters.get("family", "tile") for design in job.designs}
     assert families == {
         "tile",
         "edge-y",
@@ -441,4 +501,13 @@ def test_real_h2d_auto_plan_with_solid_bottom(tmp_path):
         "support-end",
         "support-bit",
     }
-    assert len(report["prime_tower"]["plates"]) == len(job.prime_tower_positions) == 27
+    exported = _real_group_export_job(job, group)
+    report = write_3mf(exported, tmp_path / "auto.3mf", bambu=bambu())
+    roof = report["roof_support"]
+    assert len(roof["supported_objects"]) == len(exported.designs)
+    assert {entry["family"] for entry in roof["supported_objects"]} == {
+        design.parameters.get("family", "tile") for design in exported.designs
+    }
+    for entry in roof["supported_objects"]:
+        assert entry["object_settings"] == {}
+    assert len(report["prime_tower"]["plates"]) == len(exported.prime_tower_positions)

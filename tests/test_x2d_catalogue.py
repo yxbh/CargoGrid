@@ -4,43 +4,21 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
-from build123d import Box, Pos
+from test_h2d_catalogue import EXPECTED_GROUP_ORDER, _design_group
 
-from cargo_grid import catalogue, cli
-from cargo_grid.catalogue import dual_safe_catalogue_job
+from cargo_grid import cli
+from cargo_grid.catalogue import WIDE_PERIMETER_PACKING_ATTEMPTS, dual_safe_catalogue_job
 from cargo_grid.export import BambuSettings, Material, _PreparedProject
-from cargo_grid.jobs import Design, tile_identity
+from cargo_grid.jobs import Job
 from cargo_grid.packing import PrintPlacement
 from cargo_grid.printers import H2D, X2D
-from cargo_grid.rods import Rod
 from cargo_grid.roof_support import RoofSupportSettings
-
-
-@pytest.fixture
-def inventory_stand_ins(monkeypatch):
-    def tile(spec):
-        name, parameters = tile_identity(spec)
-        return Design(
-            name,
-            Box(spec.nx * 60 + 6, spec.ny * 60 + 6, 13 + spec.interface.solid_bottom_mm),
-            parameters,
-        )
-
-    monkeypatch.setattr(catalogue, "tile_design", tile)
-
-    def accessory(spec):
-        if isinstance(spec, Rod):
-            length = spec.above_mat_height_mm + 12
-            return Box(10, 10, length) + Pos(0, 0, -length / 2 + 13.6) * Box(18, 18, 3.2)
-        return Box(20, 30, 10)
-
-    monkeypatch.setattr(catalogue, "make_accessory", accessory)
 
 
 @pytest.mark.parametrize("layer", [0.32, 0.24])
 @pytest.mark.parametrize("supported", [False, True])
 def test_smaller_printer_accounts_for_the_whole_bounded_inventory(
-    inventory_stand_ins, layer, supported
+    catalogue_stand_ins, layer, supported
 ):
     job = dual_safe_catalogue_job(X2D, auto_roof_support=supported, layer_height_mm=layer)
     tiles = {
@@ -122,7 +100,7 @@ def _arguments(nozzle=0.8):
         {"hole_scope": "interior"},
     ],
 )
-def test_unmeasured_settings_keep_the_original_support_foot_inset(inventory_stand_ins, options):
+def test_unmeasured_settings_keep_the_original_support_foot_inset(catalogue_stand_ins, options):
     job = dual_safe_catalogue_job(X2D, auto_roof_support=True, **options)
     assert all(build.margin == 6 for build in job.plate_builds.values())
     assert not any(
@@ -132,7 +110,7 @@ def test_unmeasured_settings_keep_the_original_support_foot_inset(inventory_stan
     assert job.prime_tower_width_mm is None
 
 
-def test_catalogue_policy_works_with_a_distinct_printer_value(inventory_stand_ins):
+def test_catalogue_policy_works_with_a_distinct_printer_value(catalogue_stand_ins):
     printer = replace(X2D, name="Test")
     job = dual_safe_catalogue_job(printer, auto_roof_support=True)
     assert job.prime_tower_width_mm == 18
@@ -224,14 +202,14 @@ def test_retired_h2d_selector_is_an_unknown_option(tmp_path, capsys):
     assert "unrecognized arguments: --h2d-dual-safe" in capsys.readouterr().err
 
 
-@pytest.fixture(scope="module")
-def x2d_plan():
-    return dual_safe_catalogue_job(X2D, auto_roof_support=True)
-
-
 @pytest.mark.slow
-def test_real_x2d_catalogue_solids_and_prepared_placements_stay_in_reach(x2d_plan):
-    job = x2d_plan
+@pytest.mark.parametrize("group", EXPECTED_GROUP_ORDER)
+def test_real_x2d_catalogue_solids_and_prepared_placements_stay_in_reach(
+    real_catalogue_group, group
+):
+    job = dual_safe_catalogue_job(X2D, auto_roof_support=True)
+    assert real_catalogue_group
+    assert len(real_catalogue_group) == len(set(real_catalogue_group))
     assert len(job.designs) + len(job.omitted) == 130
     assert {
         tuple(d.parameters[k] for k in ("nx", "ny"))
@@ -275,3 +253,38 @@ def test_real_x2d_catalogue_solids_and_prepared_placements_stay_in_reach(x2d_pla
     assert rod.recommended_print_rotation_y == 90
     assert rod.recommended_print_rotation_z == 45
     assert max(rod.bambu_size[:2]) < 191
+    if group == "30mm edges and corners - complete holes":
+        _assert_wide_perimeter_plan(job, group)
+
+
+def _assert_wide_perimeter_plan(job, group):
+    members = [
+        (design, placement, footprint)
+        for design, placement, footprint in zip(
+            job.designs, job.print_placements, job.projected_footprints, strict=True
+        )
+        if _design_group(design)[0] == group
+    ]
+    assert len(members) == 18
+    plates = sorted({placement.plate for _, placement, _ in members})
+    record = job.placement_policy["projected_footprint_packing"][group]
+    assert len(plates) == 2 and record["rectangle_plates"] == 3
+    assert record["maximum_layout_attempts"] == WIDE_PERIMETER_PACKING_ATTEMPTS
+    normalized = {plate: index for index, plate in enumerate(plates)}
+    placements = [replace(p, plate=normalized[p.plate]) for _, p, _ in members]
+    clearances = {
+        normalized[plate]: gap
+        for plate, gap in job.projected_footprint_clearances.items()
+        if plate in normalized
+    }
+    assert set(clearances) <= set(range(len(plates)))
+    family_job = Job(
+        [design for design, _, _ in members],
+        X2D.build,
+        "catalogue",
+        print_placements=placements,
+        projected_footprints=[footprint for _, _, footprint in members],
+        projected_footprint_clearances=clearances,
+        plate_builds={normalized[plate]: job.plate_builds[plate] for plate in plates},
+    )
+    assert _PreparedProject(family_job, None, None).placements == placements
