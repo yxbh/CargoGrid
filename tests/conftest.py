@@ -32,10 +32,12 @@ def pytest_collection_modifyitems(config, items):
     def rank(item):
         return next((i for i, name in enumerate(shared) if name in item.fixturenames), len(shared))
 
-    for item in items:
-        group = rank(item)
-        if group < len(shared):
-            item.add_marker(pytest.mark.xdist_group(shared[group]))
+    grouped = config.getoption("dist") == "loadgroup"
+    if grouped:
+        for item in items:
+            group = rank(item)
+            if group < len(shared):
+                item.add_marker(pytest.mark.xdist_group(shared[group]))
     result = yield
     value = config.getoption("--ci-partition")
     if value is not None:
@@ -60,7 +62,8 @@ def pytest_collection_modifyitems(config, items):
             target.append(item)
         config.hook.pytest_deselected(items=rejected)
         items[:] = kept
-    items.sort(key=rank)
+    if grouped:
+        items.sort(key=rank)
     return result
 
 

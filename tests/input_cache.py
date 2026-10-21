@@ -119,7 +119,9 @@ def _copy_input_shape(shape: Shape, memo: dict) -> Shape:
 def _toolchain() -> dict[str, str]:
     return {
         "python": sys.version,
-        "platform": platform.platform(),
+        "platform": sys.platform,
+        "libc": ":".join(platform.libc_ver()),
+        "macos": platform.mac_ver()[0],
         "machine": platform.machine(),
         **{
             name: version(name)
@@ -278,11 +280,8 @@ class InputStore:
         from OCP.BinTools import BinTools
         from OCP.TopoDS import TopoDS_Shape
 
-        fresh = None
-
         def build(staging: Path) -> dict:
-            nonlocal fresh
-            shape = fresh = create()
+            shape = create()
             bounds = shape.bounding_box()
             volume = shape.volume
             if not shape.is_valid or not shape.solids() or not isfinite(volume) or volume <= 0:
@@ -321,11 +320,8 @@ class InputStore:
             from cargo_grid.meshes import checked_mesh
 
             # A BREP remesh can change bytes; use the original constructor's owned copy.
-            original = fresh if fresh is not None else create()
-            if fresh is None:
-                _verify_geometry(original, record, entry)
-            elif sha256(_binary(original)).hexdigest() != record["files"]["shape.brep"]:
-                raise InputCacheError(f"original geometry input changed before meshing: {entry}")
+            original = create()
+            _verify_geometry(original, record, entry)
             owned = deepcopy(original)
             owned.bounding_box()
             result = checked_mesh(owned)

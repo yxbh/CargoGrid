@@ -1,19 +1,19 @@
 """Keep slow files together while balancing runner allocations by measured cost."""
 
 COSTS = {
-    "test_x2d_catalogue.py": 1527,
-    "test_h2d_catalogue.py": 1506,
-    "test_auto_roof_support.py": 766,
-    "test_zeekr_contours.py": 653,
-    "test_zeekr_extras.py": 312,
-    "test_ramp.py": 202,
-    "test_adjustable_stop.py": 159,
-    "test_edge_variants.py": 137,
-    "test_edge_seams.py": 136,
-    "test_vertical_tile_bracket.py": 74,
-    "test_pull_handles.py": 38,
-    "test_solid_bottom.py": 33,
-    "test_print_orientation.py": 18,
+    "test_x2d_catalogue.py": 1537,
+    "test_auto_roof_support.py": 738,
+    "test_h2d_catalogue.py": 646,
+    "test_zeekr_extras.py": 394,
+    "test_zeekr_contours.py": 372,
+    "test_ramp.py": 143,
+    "test_adjustable_stop.py": 130,
+    "test_edge_seams.py": 127,
+    "test_edge_variants.py": 94,
+    "test_vertical_tile_bracket.py": 52,
+    "test_solid_bottom.py": 30,
+    "test_print_orientation.py": 28,
+    "test_pull_handles.py": 24,
 }
 
 

@@ -76,6 +76,23 @@ def test_active_run_rejects_source_edits_instead_of_miskeying_loaded_code(tmp_pa
     assert not store.root.exists()
 
 
+def test_toolchain_keys_ignore_host_kernel_but_keep_runtime_and_architecture(tmp_path, monkeypatch):
+    import input_cache
+
+    def key():
+        return InputStore(tmp_path / "cache").key("snapshot", (), SOURCES)
+
+    monkeypatch.setattr(input_cache.platform, "platform", lambda: "Linux-kernel-one")
+    first = key()
+    monkeypatch.setattr(input_cache.platform, "platform", lambda: "Linux-kernel-two")
+    assert key() == first
+    with monkeypatch.context() as runtime:
+        runtime.setattr(input_cache.platform, "libc_ver", lambda: ("glibc", "different"))
+        assert key() != first
+    monkeypatch.setattr(input_cache.platform, "machine", lambda: "different-architecture")
+    assert key() != first
+
+
 def test_inputs_changed_inside_a_builder_are_not_published(tmp_path):
     source = tmp_path / "geometry.py"
     source.write_text("radius = 2\n")
@@ -190,11 +207,18 @@ def test_deferred_mesh_reconstruction_checks_geometry_and_source_before_publicat
         store.checked_mesh(shape)
     assert len(list(store.root.glob("*/entry.json"))) == 1
     assert not list(store.root.glob(".building-*"))
-    original = Box(2, 3, 4)
-    owned = store.geometry("mutable", (), SOURCES, lambda: original)
-    original.move(Location((10, 0, 0)))
-    with pytest.raises(InputCacheError, match="original geometry input changed"):
-        store.checked_mesh(owned)
+    constructed = []
+
+    def fresh():
+        shape = Box(2, 3, 4)
+        constructed.append(shape)
+        return shape
+
+    owned = store.geometry("mutable", (), SOURCES, fresh)
+    constructed[0].move(Location((10, 0, 0)))
+    points, _, _ = store.checked_mesh(owned)
+    assert points[:, 0].min() == -1
+    assert len(constructed) == 2
 
 
 def _mesh_worker(arguments):

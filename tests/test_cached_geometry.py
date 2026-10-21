@@ -15,7 +15,7 @@ from cargo_grid.jobs import Design, Job
 from cargo_grid.vehicles.zeekr_7x_contours import ContourParameters, _side_design
 
 
-@pytest.mark.parametrize("family", ["tile", "contour", "rod"])
+@pytest.mark.parametrize("family", ["tile", "contour", "contour-sequence", "rod"])
 def test_project_bytes_are_identical_fresh_cold_and_warm(tmp_path, family):
     store = InputStore(tmp_path / "cache")
     if family == "tile":
@@ -23,11 +23,13 @@ def test_project_bytes_are_identical_fresh_cold_and_warm(tmp_path, family):
 
         def create():
             return make_tile(spec)
-    elif family == "contour":
+    elif family.startswith("contour"):
         spec = ContourParameters()
 
         def create():
-            return _side_design("east", "north", spec).shape
+            return _side_design(
+                "west" if family == "contour-sequence" else "east", "north", spec
+            ).shape
 
     else:
         spec = Rod(120)
@@ -36,7 +38,10 @@ def test_project_bytes_are_identical_fresh_cold_and_warm(tmp_path, family):
             return make_rod(spec)
 
     sources = [
-        *(ROOT / "src/cargo_grid" / f"{name}.py" for name in FAMILIES[family]),
+        *(
+            ROOT / "src/cargo_grid" / f"{name}.py"
+            for name in FAMILIES["contour" if family.startswith("contour") else family]
+        ),
         Path(__file__),
     ]
     design = accessory_design(spec) if family == "rod" else Design("source", create(), {})
@@ -46,6 +51,9 @@ def test_project_bytes_are_identical_fresh_cold_and_warm(tmp_path, family):
         store.geometry(family, spec, sources, create),
         store.geometry(family, spec, sources, create),
     ]
+    if family == "contour-sequence":
+        for side, segment in (("west", "south"), ("east", "north"), ("east", "south")):
+            _side_design(side, segment, spec)
     for kind, bambu in (
         ("core", None),
         ("bambu", BambuSettings((Material("PETG", "PETG", "#637B70"),), 0.8, 0.32)),
