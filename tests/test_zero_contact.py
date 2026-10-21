@@ -3,7 +3,6 @@
 import json
 import os
 import subprocess
-from dataclasses import replace
 from xml.etree import ElementTree as ET
 from zipfile import ZipFile
 
@@ -16,7 +15,6 @@ from cargo_grid.jobs import Job, tile_design
 from cargo_grid.printers import PRINTERS
 from cargo_grid.roof_support import (
     BAMBU_SUPPORT_DEFAULT_PROCESSES,
-    BAMBU_SUPPORT_DEFAULTS,
     RoofSupportSettings,
 )
 
@@ -59,81 +57,10 @@ def test_default_contact_overrides_only_changed_settings():
     )
 
 
-@pytest.mark.parametrize("changes", [{"interface_layers": 1}, {"interface_spacing": 0.2}])
-def test_zero_contact_rejects_insufficient_or_sparse_interface(changes):
-    with pytest.raises(ValueError, match="at least two dense"):
-        replace(RoofSupportSettings(), **changes)
-    assert (
-        RoofSupportSettings(interface_layers=3).native_settings()["support_interface_top_layers"]
-        == "3"
-    )
-
-
-def test_explicit_gapped_mode_does_not_force_synchronized_contact():
-    settings = RoofSupportSettings(0.2, 1, 0.5)
-    assert settings.contact_mode == "gapped"
-    assert "support_top_z_distance" not in settings.native_settings()
-    assert "support_object_xy_distance" not in settings.native_settings()
-    assert "support_expansion" not in settings.native_settings()
-    assert "support_interface_spacing" not in settings.native_settings()
-    assert "independent_support_layer_height" not in settings.native_settings()
-
-
-@pytest.mark.parametrize("mode", ["painted", "auto"])
-@pytest.mark.parametrize(
-    "changes,expected",
-    [
-        ({}, {}),
-        ({"interface_layers": 3}, {"support_interface_top_layers": "3"}),
-        (
-            {"top_gap": 0.3, "interface_layers": 1, "interface_spacing": 0.6},
-            {
-                "support_top_z_distance": "0.3",
-                "support_interface_top_layers": "1",
-                "support_interface_spacing": "0.6",
-            },
-        ),
-        ({"foot_expansion": 0}, {"raft_first_layer_expansion": "0"}),
-    ],
-)
-def test_default_filtering_preserves_requested_nondefault_values(mode, changes, expected):
-    settings = RoofSupportSettings(mode=mode, **changes)
-    native = settings.native_settings()
-    assert {key: native[key] for key in expected} == expected
-    assert expected.keys() <= settings.process_override_keys
-    assert all(BAMBU_SUPPORT_DEFAULTS.get(key) != value for key, value in native.items())
-    assert "support_filament" not in native
-
-
 def test_audited_support_processes_match_all_supported_printer_pairs():
     assert BAMBU_SUPPORT_DEFAULT_PROCESSES == {
         profile.process for printer in PRINTERS.values() for profile in printer.profiles.values()
     }
-
-
-@pytest.mark.parametrize("mode", ["painted", "auto"])
-@pytest.mark.parametrize(
-    "settings",
-    [RoofSupportSettings(), RoofSupportSettings(top_gap=0.2, interface_spacing=0.5)],
-    ids=["zero-contact", "gapped"],
-)
-def test_unknown_process_keeps_all_requested_support_values(mode, settings):
-    settings = replace(settings, mode=mode)
-    native = settings.native_settings(process_profile="0.16mm Optimal @BBL X1C")
-    assert native["support_on_build_plate_only"] == "0"
-    assert native["support_interface_top_layers"] == "2"
-    assert native["support_top_z_distance"] == f"{settings.top_gap:g}"
-    assert native["support_interface_spacing"] == f"{settings.interface_spacing:g}"
-    overrides = settings.native_process_override_keys(process_profile="0.16mm Optimal @BBL X1C")
-    assert set(native) == overrides
-    if settings.contact_mode == "gapped":
-        assert native["support_expansion"] == "0"
-        assert native["support_object_xy_distance"] == "0.35"
-        assert "independent_support_layer_height" not in native
-    else:
-        assert native["independent_support_layer_height"] == "0"
-        assert native["support_object_xy_distance"] == "0.4"
-        assert "support_expansion" not in native
 
 
 @pytest.fixture(scope="module")
@@ -154,7 +81,7 @@ def profile_test_tile():
     ],
 )
 def test_export_filters_only_audited_process_defaults(process_profile, profile_test_tile, tmp_path):
-    support = RoofSupportSettings(top_gap=0.2, interface_spacing=0.5)
+    support = RoofSupportSettings()
     bambu = BambuSettings(
         (Material("model", "PETG", "#778877"), Material("interface", "PLA", "#dddddd")),
         0.4,
@@ -163,27 +90,27 @@ def test_export_filters_only_audited_process_defaults(process_profile, profile_t
         printer_settings_id="Bambu Lab X1 Carbon 0.4 nozzle" if process_profile else None,
         print_settings_id=process_profile,
     )
-    project = tmp_path / "gapped.3mf"
+    project = tmp_path / "auto.3mf"
     write_3mf(Job([profile_test_tile], BuildVolume(150, 150, 50), "part"), project, bambu=bambu)
     with ZipFile(project) as archive:
         native = json.loads(archive.read("Metadata/project_settings.config"))
     overrides = set(native["different_settings_to_system"][0].split(";"))
-    requested = {
-        "support_top_z_distance": "0.2",
-        "support_interface_spacing": "0.5",
+    assert {key: native[key] for key in CONTACT} == CONTACT
+    assert set(CONTACT) <= overrides
+    assert native["support_object_xy_distance"] == "0.4"
+    inherited = {
         "support_interface_top_layers": "2",
         "support_on_build_plate_only": "0",
-        "support_expansion": "0",
-        "support_object_xy_distance": "0.35",
     }
     if process_profile is None or process_profile in BAMBU_SUPPORT_DEFAULT_PROCESSES:
-        assert requested.keys().isdisjoint(native)
-        assert requested.keys().isdisjoint(overrides)
+        assert inherited.keys().isdisjoint(native)
+        assert inherited.keys().isdisjoint(overrides)
     else:
-        assert {key: native[key] for key in requested} == requested
-        assert requested.keys() <= overrides
+        assert {key: native[key] for key in inherited} == inherited
+        assert inherited.keys() <= overrides
     assert "support_filament" not in native
-    assert "independent_support_layer_height" not in native
+    assert native["independent_support_layer_height"] == "0"
+    assert "support_expansion" not in native
 
 
 def test_zero_contact_selects_the_passing_side_clearance_witness():
@@ -241,7 +168,7 @@ def test_cli_defaults_encode_contact_intent_and_preserve_markers(tmp_path):
                 ".8",
                 "--layer-height-mm",
                 ".32",
-                "--roof-support",
+                "--auto-roof-support",
                 "--output",
                 str(target),
             ]

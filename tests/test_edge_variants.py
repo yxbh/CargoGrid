@@ -305,11 +305,10 @@ def test_straight_edge_projection_and_hole_mode(family, outward, complete):
     )
 
 
-@pytest.mark.parametrize("style", ["original", "full-height"])
 @pytest.mark.parametrize("outward", _OUTWARD_WIDTHS)
 @pytest.mark.parametrize("complete", [False, True])
-def test_corner_variants_remain_single_valid_solids(style, outward, complete):
-    interface = Interface(joint_style=style)
+def test_corner_variants_remain_single_valid_solids(outward, complete):
+    interface = Interface()
     specs = [
         *(
             Accessory(

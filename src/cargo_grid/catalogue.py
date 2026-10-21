@@ -183,12 +183,11 @@ def accessory_variants(
         )
         for x, base_y, panel_z in VERTICAL_BRACKET_CONFIGS
     )
-    if interface.joint_style == "original":
-        result.extend(
-            Accessory("ramp", nx=n, interface=interface, ramp_join=join)
-            for join in ("female", "male")
-            for n in range(1, nmax + 1)
-        )
+    result.extend(
+        Accessory("ramp", nx=n, interface=interface, ramp_join=join)
+        for join in ("female", "male")
+        for n in range(1, nmax + 1)
+    )
     result.extend(
         Accessory("vertical-stop", nx=x, ny=y, height=height, interface=unchanged)
         for x, y in VERTICAL_STOP_CELLS

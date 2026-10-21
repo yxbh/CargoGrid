@@ -329,7 +329,6 @@ def test_forty_mm_corners_are_not_supported(family):
 @pytest.mark.parametrize(
     "settings,message",
     [
-        ({"interface": Interface(joint_style="full-height")}, "original roofed"),
         ({"interface": Interface(pitch=50)}, "standard 60 mm unit"),
         ({"interface": Interface(height=15)}, "standard 60 mm unit"),
         ({"interface": Interface(fit_offset=0.1)}, "standard 60 mm unit"),
@@ -635,7 +634,6 @@ def test_cli_extras_outside_h2d_uses_the_same_default_gap_for_every_family(
         (["--hole-diameter-mm", "8"], "full-scope 10 mm hole pattern"),
         (["--unit-size-mm", "50"], "standard 60 mm unit"),
         (["--tile-thickness-mm", "15"], "standard 60 mm unit"),
-        (["--joint-style", "full-height"], "original roofed"),
     ],
 )
 def test_cli_extras_rejects_patterns_the_contour_pieces_cannot_match(
@@ -720,7 +718,6 @@ def test_cli_only_accepts_the_single_expansion_set_route(command, tmp_path, caps
 @pytest.mark.parametrize(
     "options,message",
     [
-        (["--roof-support"], "catalogues and extras are not supported"),
         (
             [
                 "--stack-count",
@@ -936,9 +933,7 @@ def test_auto_support_outside_h2d_uses_a_front_left_tower_corner(auto_stand_ins)
             )
 
 
-def test_cli_extras_accept_auto_roof_support_and_refuse_painted(
-    auto_stand_ins, monkeypatch, tmp_path, capsys
-):
+def test_cli_extras_accept_auto_roof_support(auto_stand_ins, monkeypatch, tmp_path):
     captured = []
 
     def capture(job, output, **settings):
@@ -952,15 +947,11 @@ def test_cli_extras_accept_auto_roof_support_and_refuse_painted(
         "PLA",
         "#dddddd",
     ]
-    command = ["extras", COLLECTION, *H2D_OPTIONS, *materials, "--roof-support"]
-    assert main([*command, "--roof-support-mode", "auto", "--output", str(tmp_path / "a")]) == 0
+    command = ["extras", COLLECTION, *H2D_OPTIONS, *materials, "--auto-roof-support"]
+    assert main([*command, "--output", str(tmp_path / "a")]) == 0
     ((job, settings),) = captured
-    assert settings["bambu"].roof_support.mode == "auto"
+    assert settings["bambu"].roof_support is not None
     assert job.prime_tower is not None and job.prime_tower_positions
-    with pytest.raises(SystemExit) as error:
-        main([*command, "--output", str(tmp_path / "painted")])
-    assert error.value.code == 2
-    assert "use auto mode (--roof-support-mode auto)" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("side", ["east", "west"])
@@ -969,7 +960,7 @@ def test_real_contour_caps_inherit_global_support(side):
 
     parameters = zeekr_7x_rear_review.RearReviewParameters()
     design = zeekr_7x_rear_review._side_design(side, "north", parameters)
-    auto = RoofSupportSettings(mode="auto")
+    auto = RoofSupportSettings()
     assert effective_object_settings(design, auto) == {}
     assert needs_auto_support(design)
 

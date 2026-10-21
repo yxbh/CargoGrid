@@ -265,7 +265,7 @@ def _apply_adjustable_stop_support_settings(path: Path) -> None:
     with ZipFile(path) as source:
         entries = {name: source.read(name) for name in source.namelist()}
     settings = json.loads(entries["Metadata/project_settings.config"])
-    support = RoofSupportSettings(mode="auto")
+    support = RoofSupportSettings()
     process_profile = settings["print_settings_id"]
     settings.update(support.native_settings(process_profile=process_profile))
     existing = settings.get("different_settings_to_system", [""])

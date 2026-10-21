@@ -153,9 +153,7 @@ def variants(printers: tuple[str, ...] = ("h2d",)) -> list[Variant]:
                         "PLA",
                         PLA_COLOUR,
                         *_layer_arguments(nozzle, profiles),
-                        "--roof-support",
-                        "--roof-support-mode",
-                        "auto",
+                        "--auto-roof-support",
                         "--no-stl",
                     ]
                     if bottom:

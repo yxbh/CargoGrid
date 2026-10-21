@@ -16,7 +16,7 @@ On a 12-core workstation, run the full portable suite with 12 workers:
 ```sh
 uv run ruff check .
 uv run ruff format --check .
-uv run pytest -q -n 12 --dist loadfile -m "not native and not reference"
+uv run pytest -q -n 12 --dist loadfile -m "not native"
 git diff --check
 uv build
 uv run python tools/check_distributions.py dist
@@ -36,7 +36,7 @@ The Linux job installs the CAD runtime libraries, runs Ruff, runs the portable t
 
 The portable test command includes pytest's built-in `--durations=0 --durations-min=0` report. It lists every test's setup, call and teardown durations, slowest first, without adding a timing plugin. Add the same flags to a local run when investigating slow tests. These are per-phase elapsed times: phases on parallel workers can overlap, so their sum is not the CI job's wall time. The same run writes a JUnit report, and `tools/check_test_durations.py` fails the job if any portable test takes longer than its per-test budget, unless the test is in the checker's reviewed allowlist with its own limit. It warns, without failing, when the pytest session runs past its target, because hosted runners differ in speed from run to run. `tests/README.md` describes how to keep new tests inside the budget.
 
-The slow tier holds exhaustive parameter sweeps and review-package exports. Portable CI keeps at least one case for each male/female joint, joint style, family variant and recorded pose, plus the largest size; the slow tier adds interior sizes, repeated poses and full exports. It runs with `--dist loadgroup`, which hands out one test at a time, so its few multi-minute tests start on separate workers.
+The slow tier holds exhaustive parameter sweeps and review-package exports. Portable CI keeps at least one case for each male/female joint, family variant and recorded pose, plus the largest size; the slow tier adds interior sizes, repeated poses and full exports. It runs with `--dist loadgroup`, which hands out one test at a time, so its few multi-minute tests start on separate workers.
 
 Keep option propagation, design metadata, family geometry and whole-catalogue packing as separate test responsibilities. CLI option tests capture the resolved spec at the construction boundary; each distinct physical hole configuration also goes through real CLI export. Metadata-only accessory tests use a small real solid at `make_accessory`, while family geometry tests still construct the actual bodies. Neither parser results nor manifest hole counts prove that a bore was cut.
 
@@ -48,15 +48,15 @@ Export-lifecycle tests check fresh ownership, mutations between requests, one ch
 
 CI can't use private reference files, local slicer profiles or printers. Treat a CI failure as a source, package or test failure until the log shows otherwise.
 
-## Optional local Bambu and reference checks
+## Optional local Bambu checks
 
-Normal generation does not need either resource. To include the optional checks, point `CARGO_GRID_BAMBU` at the chosen Bambu Studio CLI and optionally point `CARGO_GRID_REFERENCE` at a local reference 3MF, then run the suite serially:
+Normal generation does not need Bambu Studio. To include the optional checks, point `CARGO_GRID_BAMBU` at the chosen Bambu Studio CLI, then run the suite serially:
 
 ```sh
 uv run pytest -q
 ```
 
-Unavailable checks skip. `cargo-grid compare-reference --reference-file path/to/reference.3mf --output outputs/reference-report.json` runs the same local interface comparison without uploading the file.
+Unavailable checks skip.
 
 Native CLI import/export isn't a print test. When Bambu settings or modifiers change, slice the affected job with the intended machine, process and materials. Check material roles, nozzle mapping, support contact, X-socket clearance, model/support paths and tower reach. Keep profiles, G-code and logs in ignored output directories.
 
@@ -64,9 +64,9 @@ If a separate CAD workbench is needed, use its documented interpreter and launch
 
 ## Check the physical assumptions
 
-- Keep original roofed joints and experimental open-through tile-edge joints clearly separated.
+- Keep the original roofed tile-edge geometry unchanged.
 - Confirm the default full 10 mm hole pattern or a `--no-holes` opt-out; roof support remains opt-in.
-- Confirm roof support appears only under female pocket roofs (tile west/south edges and female edges, corners and ramps), and that male-only pieces get none.
+- Confirm global normal Auto support is on when requested; inspect female pocket roofs and other overhangs without assuming every object receives support.
 - Recheck support, brim and tower paths after profile changes.
 - Record printer, nozzle, layer height, materials, fit, roof finish, support removal and flatness for any physical trial.
 

@@ -30,9 +30,7 @@ STANDARD = [
 @pytest.mark.parametrize(
     "spec", STANDARD, ids=lambda s: f"{s.family}-{s.nx}-{s.ny}-{s.variant}-{s.length}-{s.height}"
 )
-@pytest.mark.parametrize("joint_style", ["full-height", "original"])
-def test_standard_families_are_connected_and_labeled(spec, joint_style):
-    spec = replace(spec, interface=replace(spec.interface, joint_style=joint_style))
+def test_standard_families_are_connected_and_labeled(spec):
     part = make_accessory(spec)
     assert part.is_valid
     assert len(part.solids()) == 1
@@ -71,17 +69,14 @@ def test_standard_families_are_connected_and_labeled(spec, joint_style):
 
 
 @pytest.mark.parametrize("family,depth", [("edge-x", 16), ("edge-y", 10)])
-@pytest.mark.parametrize("joint_style", ["full-height", "original"])
-def test_straight_edge_envelopes_and_join_pitch(family, depth, joint_style):
-    spec = Accessory(family, nx=5, interface=Interface(joint_style=joint_style))
+def test_straight_edge_envelopes_and_join_pitch(family, depth):
+    spec = Accessory(family, nx=5)
     part = make_accessory(spec)
     assert tuple(part.bounding_box().size) == pytest.approx((300, depth, 13))
     joins = accessory_datums(spec)["joins"]
     assert [j["position"][0] for j in joins] == [30, 90, 150, 210, 270]
     assert {j["sex"] for j in joins} == {"male" if family == "edge-x" else "female"}
-    assert all(
-        (j["height"] == 13) if joint_style == "full-height" else (j["height"] < 13) for j in joins
-    )
+    assert all(j["height"] == (10 if j["sex"] == "male" else 10.2) for j in joins)
 
 
 @pytest.mark.parametrize(

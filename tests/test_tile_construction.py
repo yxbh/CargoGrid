@@ -61,9 +61,7 @@ def test_all_standard_socket_bores_share_one_boolean_without_changing_their_spac
     assert result.is_valid and len(result.solids()) == 1
 
 
-@pytest.mark.parametrize(
-    "interface", [Interface(), Interface(30, 8), Interface(joint_style="full-height")]
-)
+@pytest.mark.parametrize("interface", [Interface(), Interface(30, 8)])
 @pytest.mark.parametrize("male", [True, False])
 def test_cached_joint_tool_templates_hand_out_independent_identical_copies(interface, male):
     depth = interface.male_join_depth if male else interface.female_join_depth

@@ -159,7 +159,7 @@ def tile_join_tool(
     depth: float | None = None,
     male: bool,
 ) -> Part:
-    """Consistent tile/edging join: original roof or full-height open pocket."""
+    """Shared original roofed tile/edging join."""
     if depth is None:
         depth = interface.male_join_depth if male else interface.female_join_depth
     # Every caller cuts, fuses or moves its tool, so each gets an independent copy.
@@ -168,81 +168,16 @@ def tile_join_tool(
 
 @lru_cache(maxsize=64)
 def _tile_join_template(interface: Interface, depth: float, male: bool) -> Part:
-    if interface.joint_style == "original":
-        return joining_tool(
-            interface,
-            depth=depth,
-            ledge=interface.male_height if male else interface.female_opening_height,
-        )
-    face = dovetail_face(interface, depth=depth)
-    blend = interface.tile_join_blend_radius
-    face = face.fillet_2d(blend, face.vertices())
-    if not male:
-        return prism(face, interface.body_height + 2).moved(Location((0, 0, -1)))
-    shape = prism(face, interface.body_height)
-    return shape.fillet(blend, horizontal_edges(shape, interface.body_height))
-
-
-def full_height_part(
-    body: Face,
-    male_faces: list[Face],
-    female_faces: list[Face],
-    height: float,
-    *,
-    round_body_corners: bool = True,
-    free_top_rims: list[tuple[str, float]] | None = None,
-    free_top_radius: float = 2.0,
-    interface_blend_radius: float = 1.0,
-) -> Part:
-    """Build roofless joints in the planar outline, avoiding coincident 3D cuts."""
-    outline = body
-    if male_faces:
-        outline = outline.fuse(*male_faces)
-    if female_faces:
-        outline = outline.cut(*female_faces)
-    if len(outline.faces()) != 1:
-        raise ValueError("full-height edge outline must remain connected")
-    face = outline.faces()[0]
-    vertices = list(face.vertices())
-    if not round_body_corners:
-        vertices = [
-            v
-            for v in vertices
-            if all(v.distance_to(original) > 1e-6 for original in body.vertices())
-        ]
-    if vertices:
-        face = face.fillet_2d(interface_blend_radius, vertices)
-    part = prism(face, height)
-    if free_top_rims is not None:
-        operation = BRepFilletAPI_MakeFillet(part.wrapped)
-        selected = 0
-        for edge in horizontal_edges(part, height):
-            box = edge.bounding_box()
-            free = any(
-                abs(getattr(box.min, axis) - coordinate) < 1e-5
-                and abs(getattr(box.max, axis) - coordinate) < 1e-5
-                for axis, coordinate in free_top_rims
-            )
-            selected += free
-            operation.Add(
-                free_top_radius if free else interface_blend_radius,
-                edge.wrapped,
-            )
-        if not selected:
-            raise ValueError("full-height accessory has no selected free top rims")
-        try:
-            rounded = Part(Solid(operation.Shape()).wrapped)
-        except (Standard_Failure, StdFail_NotDone) as error:
-            raise ValueError("could not solve selective full-height top radii") from error
-        if not rounded.is_valid or len(rounded.solids()) != 1:
-            raise ValueError("selective full-height top rounding produced invalid geometry")
-        return rounded
-    return part.fillet(interface_blend_radius, horizontal_edges(part, height))
+    return joining_tool(
+        interface,
+        depth=depth,
+        ledge=interface.male_height if male else interface.female_opening_height,
+    )
 
 
 @lru_cache(maxsize=16)
 def socket_entry_tool(interface: Interface) -> Part:
-    """Preserve the 3 mm entry roundover even where open edge pockets meet it.
+    """Preserve the 3 mm socket entry roundover.
 
     Without a solid bottom the socket runs through the underside; with one, the
     cutter stops on the floor at Z=solid_bottom_mm, keeping the socket depth.

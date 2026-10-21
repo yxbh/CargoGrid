@@ -34,7 +34,7 @@ def test_variants_cover_each_published_set_and_nozzle_once():
         assert not any(option.startswith("--build-") for option in variant.arguments)
         assert args.layer_height_mm == profiles.layer_height_mm
         assert variant.name.split("_")[:2] == ["CargoGrid", "H2D"]
-        assert args.roof_support and args.roof_support_mode == "auto"
+        assert args.auto_roof_support
         assert [material[0] for material in args.material] == [profiles.petg, profiles.pla]
         titles = {"pull-handle": "Pull-Handle-Set", "adjustable-stop": "Adjustable-Stop"}
         if args.command == "extras" and args.recipe in titles:
@@ -169,7 +169,7 @@ def test_x2d_variants_use_the_shared_sets_and_both_official_profile_pairs():
         assert args.printer == "x2d"
         assert not any(option.startswith("--build-") for option in variant.arguments)
         assert args.layer_height_mm == profile.layer_height_mm
-        assert args.roof_support and args.roof_support_mode == "auto"
+        assert args.auto_roof_support
         assert [m[0] for m in args.material] == [profile.petg, profile.pla]
         assert variant.name.split("_")[:2] == ["CargoGrid", "X2D"]
         assert args.no_stl and args.bambu

@@ -1,7 +1,6 @@
 """Command-line tools for making Cargo-Grid parts, layouts and catalogues."""
 
 import argparse
-import json
 import sys
 from math import floor
 from pathlib import Path
@@ -37,7 +36,7 @@ from cargo_grid.printers import (
 )
 from cargo_grid.pull_handle_set import extras_job as pull_handle_extras_job
 from cargo_grid.rods import ROD_FAMILIES, Rod, RodBrace
-from cargo_grid.roof_support import RoofSupportSettings, check_roof_job_kind
+from cargo_grid.roof_support import RoofSupportSettings
 from cargo_grid.stacking import StackSettings
 from cargo_grid.vehicles import zeekr_7x
 
@@ -210,29 +209,10 @@ def _check_pull_handle_options(args) -> None:
 
 
 def _roof_support(args) -> RoofSupportSettings | None:
-    supplied = (
-        args.roof_top_gap_mm,
-        args.roof_interface_layer_count,
-        args.roof_interface_spacing_mm,
-        args.roof_coverage,
-        args.roof_nozzle_slots,
-        args.roof_foot_expansion_mm,
-        args.roof_support_mode,
-    )
-    if not args.roof_support and not any(value is not None for value in supplied):
+    if not args.auto_roof_support:
         return None
-    if not args.roof_support:
-        raise ValueError("roof contact options require --roof-support")
     if not args.bambu:
         raise ValueError("roof supports require --bambu; core 3MF has no native support semantics")
-    if args.joint_style != "original":
-        raise ValueError("roof supports require original roofed joints")
-    mode = args.roof_support_mode or "painted"
-    check_roof_job_kind(args.command, mode)
-    if mode == "auto" and args.roof_coverage is not None:
-        raise ValueError(
-            "--roof-coverage applies to painted roof support; auto support covers whole roofs"
-        )
     if any(
         value is not None
         for value in (
@@ -243,15 +223,7 @@ def _roof_support(args) -> RoofSupportSettings | None:
         )
     ):
         raise ValueError("roof supports and stacked separator jobs cannot be combined")
-    return RoofSupportSettings(
-        args.roof_top_gap_mm if args.roof_top_gap_mm is not None else 0.0,
-        args.roof_interface_layer_count if args.roof_interface_layer_count is not None else 2,
-        args.roof_interface_spacing_mm if args.roof_interface_spacing_mm is not None else 0.0,
-        tuple(args.roof_nozzle_slots) if args.roof_nozzle_slots is not None else None,
-        coverage=args.roof_coverage or "critical",
-        foot_expansion=args.roof_foot_expansion_mm,
-        mode=mode,
-    )
+    return RoofSupportSettings()
 
 
 def _bambu_settings(args, roof_support: RoofSupportSettings | None) -> BambuSettings | None:
@@ -270,7 +242,7 @@ def _bambu_settings(args, roof_support: RoofSupportSettings | None) -> BambuSett
                     for nozzle, choice in printer.profiles.items()
                 )
                 raise ValueError(f"{option} requires {supported}")
-            if roof_support is not None and roof_support.mode == "auto":
+            if roof_support is not None:
                 if (
                     len(materials) != 2
                     or [m.kind.upper() for m in materials] != ["PETG", "PLA"]
@@ -448,9 +420,9 @@ def parser() -> argparse.ArgumentParser:
         )
         p.add_argument(
             "--joint-style",
-            choices=("original", "full-height"),
+            choices=("original",),
             default=argparse.SUPPRESS,
-            help=f"original roofed joints or experimental open-through full-height edge joints; default {defaults['joint_style']}; fixed by --printer",
+            help=f"roofed tile-edge geometry; default {defaults['joint_style']}; fixed by --printer",
         )
         p.add_argument(
             "--fit-offset-mm",
@@ -523,64 +495,9 @@ def parser() -> argparse.ArgumentParser:
             help="layer height recorded in the unsliced project, in mm",
         )
         p.add_argument(
-            "--roof-support",
+            "--auto-roof-support",
             action="store_true",
-            help="add PETG/PLA support under every retained female pocket roof in a part or layout job",
-        )
-        p.add_argument(
-            "--roof-support-mode",
-            choices=("painted", "auto"),
-            help=(
-                "painted (default): non-printing support enforcers under each female roof, part/layout only; "
-                "auto: object-scoped normal Auto support on parts with female roofs or existing "
-                "object support, also for catalogues and extras, with a reserved prime tower"
-            ),
-        )
-        p.add_argument(
-            "--roof-top-gap-mm",
-            type=float,
-            metavar="MM",
-            help="roof contact gap in mm; default 0 for the intentional PETG/PLA workflow, positive values select gapped contact",
-        )
-        p.add_argument(
-            "--roof-interface-layer-count",
-            type=int,
-            metavar="COUNT",
-            help="top interface layers; default 2, at least 2 for zero contact",
-        )
-        p.add_argument(
-            "--roof-coverage",
-            choices=("critical", "full"),
-            help="critical pads (default when roof support is enabled) or conservative full roof",
-        )
-        p.add_argument(
-            "--roof-interface-spacing-mm",
-            type=float,
-            metavar="MM",
-            help="interface line spacing in mm; default 0, required for zero contact",
-        )
-        p.add_argument(
-            "--roof-nozzle-slots",
-            type=int,
-            nargs=2,
-            metavar=("PETG_SLOT", "PLA_SLOT"),
-            help=(
-                "optional PETG/PLA nozzle slots 1/2 for Custom matching ("
-                + "; ".join(
-                    f"{printer.name}: "
-                    + ", ".join(
-                        f"{slot}={nozzle.name}" for slot, nozzle in enumerate(printer.nozzles, 1)
-                    )
-                    for printer in PRINTERS.values()
-                )
-                + "); omit to keep automatic matching"
-            ),
-        )
-        p.add_argument(
-            "--roof-foot-expansion-mm",
-            type=float,
-            metavar="MM",
-            help="support first-layer expansion in mm; omit or -1 for native auto, 0 disables it",
+            help="global normal Auto support with the fixed zero-contact PETG/PLA interface and a reserved prime tower",
         )
         p.add_argument(
             "--stack-count", help="maximum identical tiles per batch: positive integer or auto"
@@ -743,20 +660,6 @@ def parser() -> argparse.ArgumentParser:
                     "oversized designs are listed as omitted"
                 ),
             )
-    compare = commands.add_parser(
-        "compare-reference",
-        help="Compare measured interfaces with an explicitly supplied local reference; no upload.",
-        allow_abbrev=False,
-    )
-    compare.add_argument(
-        "--reference-file",
-        type=Path,
-        required=True,
-        help="optional local 3MF reference file; read locally and never uploaded",
-    )
-    compare.add_argument(
-        "--output", type=Path, required=True, help="new JSON report path; never overwritten"
-    )
     return root
 
 
@@ -791,19 +694,6 @@ def main(argv: list[str] | None = None) -> int:
     p = parser()
     args = p.parse_args(argv)
     try:
-        if args.command == "compare-reference":
-            from cargo_grid.validation import compare_reference
-
-            if args.output.exists():
-                raise ValueError(f"output file already exists: {args.output}; choose a new path")
-            result = compare_reference(args.reference_file)
-            args.output.parent.mkdir(parents=True, exist_ok=True)
-            with args.output.open("x", encoding="utf-8") as output:
-                output.write(json.dumps(result, indent=2) + "\n")
-            print(
-                f"reference comparison (joint-style original): {'PASS' if result['checked_pass'] else 'FAIL'}; {args.output}"
-            )
-            return 0 if result["checked_pass"] else 1
         args = _resolve_build_options(args, p)
         hole_diameter = _resolved_hole_diameter(args)
         build = _build_volume(args)
@@ -918,10 +808,8 @@ def main(argv: list[str] | None = None) -> int:
                         raise ValueError(
                             "extras adjustable-stop requires --printer h2d/x2d and --bambu"
                         )
-                    if roof_support is None or roof_support.mode != "auto":
-                        raise ValueError(
-                            "extras adjustable-stop requires --roof-support --roof-support-mode auto"
-                        )
+                    if roof_support is None:
+                        raise ValueError("extras adjustable-stop requires --auto-roof-support")
                     from cargo_grid.adjustable_stop_export import (
                         export_adjustable_stop_print_project,
                     )
@@ -942,7 +830,7 @@ def main(argv: list[str] | None = None) -> int:
                         placement_build=(printer.common_build() if printer else None),
                         gap=packing_gap,
                         orient_for_bambu=bool(bambu),
-                        auto_roof_support=bool(roof_support and roof_support.mode == "auto"),
+                        auto_roof_support=roof_support is not None,
                         **({"layer_height_mm": bambu.layer_height} if bambu else {}),
                     )
                 else:
@@ -953,7 +841,7 @@ def main(argv: list[str] | None = None) -> int:
                         hole_scope=args.hole_scope,
                         placement_build=(printer.common_build() if printer else None),
                         gap=packing_gap,
-                        auto_roof_support=bool(roof_support and roof_support.mode == "auto"),
+                        auto_roof_support=roof_support is not None,
                         **({"layer_height_mm": bambu.layer_height} if bambu else {}),
                     )
                 if printer:
@@ -974,7 +862,7 @@ def main(argv: list[str] | None = None) -> int:
                     hole_scope=args.hole_scope,
                     packing_gap=packing_gap,
                     solid_bottom_mm=interface.solid_bottom_mm,
-                    auto_roof_support=bool(roof_support and roof_support.mode == "auto"),
+                    auto_roof_support=roof_support is not None,
                     layer_height_mm=bambu.layer_height,
                 )
             else:
@@ -984,7 +872,7 @@ def main(argv: list[str] | None = None) -> int:
                     hole_diameter=hole_diameter,
                     hole_scope=args.hole_scope,
                     orient_for_bambu=bool(bambu),
-                    auto_roof_support=bool(roof_support and roof_support.mode == "auto"),
+                    auto_roof_support=roof_support is not None,
                     packing_gap=packing_gap,
                 )
         if not job.print_placements:

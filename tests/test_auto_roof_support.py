@@ -33,8 +33,8 @@ from cargo_grid.rods import Rod, RodBrace
 from cargo_grid.roof_support import (
     OBJECT_AUTO_SUPPORT,
     RoofSupportSettings,
-    auto_support_reason,
     effective_object_settings,
+    global_auto_support_reason,
     validate_roof_job,
 )
 
@@ -50,7 +50,7 @@ TOWER_SETTINGS = (
 H2D_PETG = "Bambu PETG Basic @BBL H2D 0.8 nozzle"
 H2D_PLA = "Bambu PLA Basic @BBL H2D 0.8 nozzle"
 MATERIALS = (Material(H2D_PETG, "PETG", "#637b70"), Material(H2D_PLA, "PLA", "#dddddd"))
-AUTO = RoofSupportSettings(mode="auto")
+AUTO = RoofSupportSettings()
 BUILD = BuildVolume(350, 320, 325)
 BAMBU_ARGS = [
     "--bambu",
@@ -103,31 +103,6 @@ def test_auto_mode_keeps_the_zero_contact_keys_with_global_support_on():
     } <= AUTO.process_override_keys
 
 
-def test_painted_mode_keeps_manual_support_and_omits_inherited_defaults():
-    assert list(RoofSupportSettings().native_settings()) == [
-        "enable_support",
-        "support_type",
-        "support_interface_filament",
-        "support_top_z_distance",
-        "support_interface_spacing",
-        "independent_support_layer_height",
-        "support_object_xy_distance",
-    ]
-    assert RoofSupportSettings().native_settings()["support_type"] == "normal(manual)"
-
-
-@pytest.mark.parametrize(
-    "kwargs,message",
-    [
-        ({"mode": "tree"}, "painted or auto"),
-        ({"mode": "auto", "coverage": "full"}, "auto support covers whole roofs"),
-    ],
-)
-def test_invalid_auto_settings_are_rejected(kwargs, message):
-    with pytest.raises(ValueError, match=message):
-        RoofSupportSettings(**kwargs)
-
-
 @pytest.fixture(scope="module")
 def designs():
     interface = Interface(solid_bottom_mm=T)
@@ -159,22 +134,20 @@ def designs():
 def test_objects_inherit_global_support_without_redundant_overrides(designs):
     female, existing, plain = designs
     for design in female.values():
-        assert auto_support_reason(design, AUTO) == "retained original female pocket roof"
+        assert global_auto_support_reason(design) == "retained original female pocket roof"
         assert effective_object_settings(design, AUTO) == {}
         assert needs_auto_support(design)
     for design in existing.values():
         assert design.bambu_object_settings == OBJECT_AUTO_SUPPORT
-        assert auto_support_reason(design, AUTO).startswith("normal Auto")
+        assert global_auto_support_reason(design).startswith("normal Auto")
         assert effective_object_settings(design, AUTO) == {}
         assert needs_auto_support(design)
     for name, design in plain.items():
-        assert auto_support_reason(design, AUTO).startswith("global normal Auto"), name
+        assert global_auto_support_reason(design).startswith("global normal Auto"), name
         assert effective_object_settings(design, AUTO) == {}
         assert needs_auto_support(design)
-    # Painted roof jobs leave every accessory's own settings alone.
-    painted = RoofSupportSettings()
-    assert effective_object_settings(female["tile"], painted) == {}
-    assert effective_object_settings(existing["rod"], painted) == OBJECT_AUTO_SUPPORT
+    assert effective_object_settings(female["tile"], None) == {}
+    assert effective_object_settings(existing["rod"], None) == OBJECT_AUTO_SUPPORT
 
 
 def test_object_support_off_is_not_an_accepted_design_setting():
@@ -308,12 +281,10 @@ def test_tower_positions_need_a_tower_and_valid_plates():
         )
 
 
-def test_auto_mode_allows_catalogues_and_extras_but_painted_mode_does_not(designs):
+def test_auto_support_allows_catalogues_and_extras(designs):
     tile = designs[0]["tile"]
     for kind in ("catalogue", "extras"):
         validate_roof_job(Job([tile], BUILD, kind), AUTO, 0.32)
-        with pytest.raises(ValueError, match="catalogues and extras are not supported"):
-            validate_roof_job(Job([tile], BUILD, kind), RoofSupportSettings(), 0.32)
     with pytest.raises(ValueError, match="part, layout, catalogue or extras"):
         validate_roof_job(Job([tile], BUILD, "stack-review"), AUTO, 0.32)
 
@@ -335,10 +306,6 @@ def test_auto_part_job_turns_rail_ends_over_without_object_overrides(designs):
             ["catalogue", "--printer", "h2d", "--material", H2D_PETG, "PETG", "#637b70"],
             "two official",
         ),
-        (
-            ["catalogue", "--printer", "h2d", *TWO_MATERIALS, "--roof-coverage", "full"],
-            "--roof-coverage applies to painted",
-        ),
         (["catalogue", "--printer", "h2d", *TWO_MATERIALS], "requires one official"),
         (
             ["extras", "zeekr-7x", "--printer", "h2d", "--material", H2D_PETG, "PETG", "#637b70"],
@@ -347,7 +314,9 @@ def test_auto_part_job_turns_rail_ends_over_without_object_overrides(designs):
     ],
 )
 def test_cli_rejects_unsupported_auto_combinations(command, message, tmp_path, capsys):
-    mode = ["--roof-support", "--roof-support-mode", "auto"]
+    mode = [
+        "--auto-roof-support",
+    ]
     if "requires one official" in message:
         mode = []
     with pytest.raises(SystemExit) as error:
@@ -355,22 +324,6 @@ def test_cli_rejects_unsupported_auto_combinations(command, message, tmp_path, c
     assert error.value.code == 2
     assert message in capsys.readouterr().err
     assert not (tmp_path / "job").exists()
-
-
-def test_cli_mode_needs_roof_support(tmp_path, capsys):
-    with pytest.raises(SystemExit):
-        main(
-            [
-                "part",
-                *H2D_ARGS,
-                *TWO_MATERIALS,
-                "--roof-support-mode",
-                "auto",
-                "--output",
-                str(tmp_path / "x"),
-            ]
-        )
-    assert "require --roof-support" in capsys.readouterr().err
 
 
 @pytest.fixture

@@ -5,11 +5,9 @@ from dataclasses import dataclass
 from functools import lru_cache
 from math import hypot
 
-from build123d import Axis, Face, Location, Part, Solid, Vector
+from build123d import Axis, Location, Part, Solid, Vector
 
 from cargo_grid.interfaces import (
-    dovetail_face,
-    full_height_part,
     horizontal_edges,
     prism,
     rectangle,
@@ -18,7 +16,7 @@ from cargo_grid.interfaces import (
     underside_fillet,
     x_profile,
 )
-from cargo_grid.parameters import Interface, Tile
+from cargo_grid.parameters import Tile
 
 
 @dataclass(frozen=True)
@@ -93,16 +91,6 @@ def _hole_placements(_key: str, tile: Tile) -> tuple[HolePlacement, ...]:
         )
         result.append(HolePlacement(x, y, safe, "" if safe else "socket/join/material keep-out"))
     return tuple(result)
-
-
-def _join_tool(
-    interface: Interface,
-    x: float,
-    y: float,
-    angle: float,
-    depth: float,
-) -> Face:
-    return dovetail_face(interface, depth=depth).rotate(Axis.Z, angle).moved(Location((x, y, 0)))
 
 
 def tile_joins(tile: Tile) -> list[dict]:
@@ -185,34 +173,17 @@ def make_tile(tile: Tile = Tile()) -> Part:
 
     male_tools = []
     female_tools = []
-    male_faces = []
-    female_faces = []
     for join in tile_joins(tile):
         x, y, _ = join["position"]
         male = join["sex"] == "male"
-        face = _join_tool(tile.interface, x, y, join["angle"], join["depth"])
-        (male_faces if male else female_faces).append(face)
-        if tile.interface.joint_style == "original":
-            (male_tools if male else female_tools).append(
-                tool(x, y, join["angle"], join["depth"], male)
-            )
-    if tile.interface.joint_style == "full-height":
-        part = full_height_part(
-            body,
-            male_faces,
-            female_faces,
-            h,
-            interface_blend_radius=tile.interface.tile_join_blend_radius,
+        (male_tools if male else female_tools).append(
+            tool(x, y, join["angle"], join["depth"], male)
         )
-    else:
-        body = body.fillet_2d(1, body.vertices())
-        part = _original_body(prism(body, h), h, male_tools, female_tools)
+    body = body.fillet_2d(1, body.vertices())
+    part = _original_body(prism(body, h), h, male_tools, female_tools)
     part = part.clean()
     part = underside_fillet(part)
-    if tile.interface.joint_style == "full-height":
-        cutter = socket_entry_tool(tile.interface)
-        part = part.cut(*(cutter.moved(Location((cx, cy, 0))) for cx, cy in socket_centers(tile)))
-    elif tile.interface.unit_scale != 1:
+    if tile.interface.unit_scale != 1:
         cutter = socket_entry_tool(tile.interface)
         part = part.cut(*(cutter.moved(Location((cx, cy, 0))) for cx, cy in socket_centers(tile)))
     else:

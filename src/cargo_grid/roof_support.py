@@ -1,20 +1,17 @@
-"""PETG/PLA support settings and painted roof enforcers; the slicer generates support."""
+"""Fixed PETG/PLA Auto support and the female pockets it may occupy."""
 
 from dataclasses import dataclass
 from math import hypot
 from typing import Literal
 
-from build123d import Face, GeomType, Location, Part, Solid, Vector
+from build123d import Face, GeomType, Vector
 
 from cargo_grid.accessories import FAMILIES, Accessory, accessory_datums
 from cargo_grid.jobs import Design, Job
-from cargo_grid.parameters import DEFAULT_HOLE_DIAMETER_MM, Interface, Tile, count, positive
+from cargo_grid.parameters import DEFAULT_HOLE_DIAMETER_MM, Interface, Tile
 from cargo_grid.printers import PRINTERS
-from cargo_grid.stacking import Volume
 from cargo_grid.tiles import hole_placements, tile_joins
 
-RoofCoverage = Literal["critical", "full"]
-RoofSupportMode = Literal["painted", "auto"]
 GLOBAL_AUTO_SUPPORT_SETTINGS = {"enable_support": "1", "support_type": "normal(auto)"}
 # Compatibility name for callers checking an accessory's support recommendation.
 OBJECT_AUTO_SUPPORT = GLOBAL_AUTO_SUPPORT_SETTINGS
@@ -31,61 +28,22 @@ BAMBU_SUPPORT_DEFAULTS = {
 BAMBU_SUPPORT_DEFAULT_PROCESSES = frozenset(
     profile.process for printer in PRINTERS.values() for profile in printer.profiles.values()
 )
-CRITICAL_PAD_WIDTH_MM = 3.0
-MIN_ENFORCER_HALF_SPAN_MM = 1.0
 
 
 @dataclass(frozen=True)
 class RoofSupportSettings:
     """Intentional PETG-base/PLA-interface contact, not a chemistry guarantee."""
 
-    top_gap: float = 0.0
-    interface_layers: int = 2
-    interface_spacing: float = 0.0
-    nozzle_slots: tuple[int, int] | None = None
-    coverage: RoofCoverage = "critical"
-    foot_expansion: float | None = None
-    mode: RoofSupportMode = "painted"
-
-    def __post_init__(self) -> None:
-        if self.coverage not in ("critical", "full"):
-            raise ValueError("roof coverage must be critical or full")
-        if self.mode not in ("painted", "auto"):
-            raise ValueError("roof support mode must be painted or auto")
-        if self.mode == "auto" and self.coverage != "critical":
-            raise ValueError(
-                "roof coverage applies to painted roof support; auto support covers whole roofs"
-            )
-        positive("roof interface gap", self.top_gap, zero=True)
-        count("roof interface layers", self.interface_layers)
-        positive("roof interface spacing", self.interface_spacing, zero=True)
-        if self.top_gap == 0 and (self.interface_layers < 2 or self.interface_spacing != 0):
-            raise ValueError(
-                "zero-contact roof support requires at least two dense interface layers with spacing 0"
-            )
-        if self.foot_expansion is not None and self.foot_expansion != -1:
-            positive("roof support-foot expansion", self.foot_expansion, zero=True)
-        if self.nozzle_slots is not None:
-            if len(self.nozzle_slots) != 2:
-                raise ValueError("roof supports need a PETG/PLA two-nozzle mapping")
-            for nozzle in self.nozzle_slots:
-                count("nozzle slot", nozzle)
-            if set(self.nozzle_slots) != {1, 2}:
-                raise ValueError("PETG and PLA must use distinct nozzle slots 1 and 2")
-
     @property
-    def contact_mode(self) -> Literal["zero-contact", "gapped"]:
-        return "zero-contact" if self.top_gap == 0 else "gapped"
+    def contact_mode(self) -> Literal["zero-contact"]:
+        return "zero-contact"
 
     @property
     def process_override_keys(self) -> set[str]:
         return self.native_process_override_keys()
 
     def native_process_override_keys(self, *, process_profile: str | None = None) -> set[str]:
-        return set(self.native_settings(process_profile=process_profile)) - {
-            "filament_map",
-            "filament_map_mode",
-        }
+        return set(self.native_settings(process_profile=process_profile))
 
     def native_settings(self, *, process_profile: str | None = None) -> dict[str, str | list[str]]:
         """Inherit audited defaults only for the common base or supported printer processes."""
@@ -94,26 +52,16 @@ class RoofSupportSettings:
         )
         settings: dict[str, str | list[str]] = {
             "enable_support": "1",
-            "support_type": "normal(manual)" if self.mode == "painted" else "normal(auto)",
+            "support_type": "normal(auto)",
             "support_interface_filament": "2",
-            "support_interface_top_layers": str(self.interface_layers),
-            "support_top_z_distance": f"{self.top_gap:g}",
-            "support_interface_spacing": f"{self.interface_spacing:g}",
+            "support_interface_top_layers": "2",
+            "support_top_z_distance": "0",
+            "support_interface_spacing": "0",
+            "independent_support_layer_height": "0",
+            "support_object_xy_distance": "0.4",
         }
         if not inherit_defaults:
             settings["support_on_build_plate_only"] = "0"
-        if self.contact_mode == "zero-contact":
-            settings["independent_support_layer_height"] = "0"
-            settings["support_object_xy_distance"] = "0.4"
-        elif not inherit_defaults:
-            settings.update(support_expansion="0", support_object_xy_distance="0.35")
-        if self.nozzle_slots is not None:
-            settings.update(
-                filament_map=[str(n) for n in self.nozzle_slots],
-                filament_map_mode="Manual",
-            )
-        if self.foot_expansion is not None and self.foot_expansion != -1:
-            settings["raft_first_layer_expansion"] = f"{self.foot_expansion:g}"
         return {
             key: value
             for key, value in settings.items()
@@ -274,14 +222,9 @@ def global_auto_support_reason(design: Design) -> str:
     return "global normal Auto support; the slicer detects overhangs"
 
 
-def auto_support_reason(design: Design, settings: RoofSupportSettings) -> str | None:
-    """Compatibility helper; painted jobs use roof enforcers rather than global Auto."""
-    return global_auto_support_reason(design) if settings.mode == "auto" else None
-
-
 def effective_object_settings(design: Design, settings: RoofSupportSettings | None) -> dict:
     """Per-object Bambu settings written for one design in a roof-support job."""
-    if settings is not None and settings.mode == "auto":
+    if settings is not None:
         return {
             key: value
             for key, value in design.bambu_object_settings.items()
@@ -290,129 +233,27 @@ def effective_object_settings(design: Design, settings: RoofSupportSettings | No
     return dict(design.bambu_object_settings)
 
 
-# Job kinds each roof-support mode can plan for. Painted enforcers need parts that keep their
-# model orientation and plates without prime towers; auto mode plans towers per plate.
-ROOF_SUPPORT_JOB_KINDS = {
-    "painted": ("part", "layout"),
-    "auto": ("part", "layout", "catalogue", "extras"),
-}
-_JOB_KIND_PLURALS = {"catalogue": "catalogues", "extras": "extras"}
-
-
-def check_roof_job_kind(kind: str, mode: str) -> None:
-    """Reject a job kind the selected roof-support mode can't plan; shared by CLI and export."""
-    allowed = ROOF_SUPPORT_JOB_KINDS[mode]
-    if kind in allowed:
-        return
-    subject = "roof supports require" if mode == "painted" else f"{mode} roof support requires"
-    kinds = f"{', '.join(allowed[:-1])} or {allowed[-1]}"
-    unsupported = [name for name in _JOB_KIND_PLURALS if name not in allowed]
-    plurals = " and ".join(_JOB_KIND_PLURALS[name] for name in unsupported)
-    message = f"{subject} a {kinds} job"
-    if unsupported:
-        message += f"; {plurals} are not supported"
-        if mode != "auto" and set(unsupported) <= set(ROOF_SUPPORT_JOB_KINDS["auto"]):
-            message += f"; use auto mode (--roof-support-mode auto) for {plurals}"
-    raise ValueError(message)
-
-
 def validate_roof_job(job: Job, settings: RoofSupportSettings, layer_height: float) -> None:
-    check_roof_job_kind(job.kind, settings.mode)
+    if job.kind not in ("part", "layout", "catalogue", "extras"):
+        raise ValueError("Auto roof support requires a part, layout, catalogue or extras job")
     found_female = False
     for design in job.designs:
         interface = _design_interface(design)
         if interface is None:
             continue
-        if interface.joint_style != "original":
-            raise ValueError("roof supports require original roofed joints, not full-height")
         if not _female_joins(design):
             continue
-        if (
-            settings.top_gap + settings.interface_layers * layer_height
-            >= interface.female_opening_height
-        ):
+        if 2 * layer_height >= interface.female_opening_height:
             raise ValueError("roof support interface consumes the entire pocket height")
         if layer_height >= interface.body_height - interface.female_opening_height:
-            raise ValueError("layer height is too large for the roof enforcer")
+            raise ValueError("layer height is too large for the pocket roof")
         found_female = True
     if found_female:
         return
     # Auto mode also accepts accessories that already request object support on their own.
-    if settings.mode == "auto" and any(
-        d.bambu_object_settings == GLOBAL_AUTO_SUPPORT_SETTINGS for d in job.designs
-    ):
+    if any(d.bambu_object_settings == GLOBAL_AUTO_SUPPORT_SETTINGS for d in job.designs):
         return
     raise ValueError(
         "this job has no retained original female pocket roofs to support; "
         "add a tile with a west or south female edge, a female edge, corner or ramp"
     )
-
-
-def roof_enforcers(
-    design: Design, layer_height: float, coverage: RoofCoverage = "critical"
-) -> list[Volume]:
-    if coverage not in ("critical", "full"):
-        raise ValueError("roof coverage must be critical or full")
-    roofs = female_roofs(design)
-    if not roofs:
-        return []
-    interface = _design_interface(design)
-    half_span = min(
-        max(MIN_ENFORCER_HALF_SPAN_MM, layer_height),
-        interface.body_height - interface.female_opening_height,
-    )
-    volumes = []
-    for roof in roofs:
-        edge = roof.side
-        shapes = [
-            Part([Solid.extrude(face, (0, 0, 2 * half_span))]).moved(Location((0, 0, -half_span)))
-            for face in roof.faces
-        ]
-        # A tangent round cut can split one roof into two faces.
-        # Keep full masks separate to avoid a nonmanifold shared edge.
-        masks = [
-            ("full" if len(shapes) == 1 else f"full_{n + 1}", shape)
-            for n, shape in enumerate(shapes)
-        ]
-        if coverage == "critical":
-            across_y = edge in ("west", "east")
-            center = roof.center[1] if across_y else roof.center[0]
-            offset = max(6.0, roof.hole_radius + 1.0)
-            bounds = Part([solid for shape in shapes for solid in shape.solids()]).bounding_box()
-            masks = []
-            for band, low in (
-                ("lower", center - offset - CRITICAL_PAD_WIDTH_MM),
-                ("upper", center + offset),
-            ):
-                if across_y:
-                    size = (bounds.size.X + 2, CRITICAL_PAD_WIDTH_MM, bounds.size.Z + 2)
-                    origin = (bounds.min.X - 1, low, bounds.min.Z - 1)
-                else:
-                    size = (CRITICAL_PAD_WIDTH_MM, bounds.size.Y + 2, bounds.size.Z + 2)
-                    origin = (low, bounds.min.Y - 1, bounds.min.Z - 1)
-                clip = Solid.make_box(*size).moved(Location(origin))
-                solids = []
-                for shape in shapes:
-                    clipped = shape.intersect(clip)
-                    if clipped is not None:
-                        solids.extend(clipped.solids())
-                if not solids:
-                    raise ValueError(
-                        f"{design.name}: critical {edge} roof pad does not fit; select full roof coverage"
-                    )
-                masks.append((band, Part(solids)))
-        for band, mask in masks:
-            if not mask.is_valid or len(mask.solids()) != 1 or mask.volume <= 0:
-                raise ValueError(f"{design.name}: invalid {edge} roof enforcer")
-            volumes.append(
-                Volume(
-                    f"{design.name}_{edge}_roof_{roof.index}_{coverage}_{band}_enforcer",
-                    mask,
-                    "roof-enforcer",
-                    1,
-                    subtype="support_enforcer",
-                    roof_side=edge,
-                    roof_index=roof.index,
-                )
-            )
-    return volumes

@@ -239,7 +239,7 @@ def test_x2d_catalogue_rectangle_is_a_process_override_without_changing_support_
         (Material("PETG", "PETG", "#688197"), Material("PLA", "PLA", "#0A2989")),
         0.4,
         0.24,
-        roof_support=RoofSupportSettings(mode="auto"),
+        roof_support=RoofSupportSettings(),
         printer=X2D,
         machine_nozzle_count=2,
     )
@@ -282,7 +282,7 @@ def test_rectangular_export_validation_follows_printer_capability():
         (Material("PETG", "PETG", "#688197"), Material("PLA", "PLA", "#0A2989")),
         0.8,
         0.32,
-        roof_support=RoofSupportSettings(mode="auto"),
+        roof_support=RoofSupportSettings(),
         printer=replace(X2D, name="Test"),
         machine_nozzle_count=2,
     )

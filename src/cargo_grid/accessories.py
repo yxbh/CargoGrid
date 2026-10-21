@@ -22,7 +22,6 @@ from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet
 
 from cargo_grid.interfaces import (
     dovetail_face,
-    full_height_part,
     horizontal_edges,
     make_plug,
     prism,
@@ -224,8 +223,6 @@ class Accessory:
                 )
         if self.family == "vertical-stop" and self.height not in VERTICAL_STOP_HEIGHTS_MM:
             raise ValueError("vertical-stop requires explicit accessory height 60 or 120 mm")
-        if self.family == "ramp" and self.interface.joint_style != "original":
-            raise ValueError("ramp requires original roofed tile-edge joints")
         if self.family == "ramp" and self.height != 50:
             raise ValueError("ramp rise follows tile thickness; accessory height does not apply")
         if self.complete_edge_holes is not None and not isinstance(self.complete_edge_holes, bool):
@@ -243,8 +240,6 @@ class Accessory:
                     "edge outward projection must be 10, 20 or 30 mm; "
                     "40 mm is supported only for straight edge-x/edge-y parts"
                 )
-            if self.edge_outward == 40 and self.interface.joint_style != "original":
-                raise ValueError("40 mm straight edges require original roofed tile-edge joints")
             object.__setattr__(self, "edge_outward", float(self.edge_outward))
             requested_completion = self.complete_edge_holes
             hole_diameter = self.edge_hole_diameter or DEFAULT_HOLE_DIAMETER_MM
@@ -1279,49 +1274,6 @@ def _ramp(spec: Accessory, *, cut_joins: bool = True) -> Part:
     return result
 
 
-def _free_top_rims(spec: Accessory) -> list[tuple[str, float]]:
-    p = spec.interface.pitch
-    outward = spec.edge_outward
-    if spec.family == "edge-x":
-        return [("Y", -outward)]
-    if spec.family == "edge-y":
-        return [("Y", outward)]
-    if spec.family == "corner-in":
-        return [
-            ("X", p - outward if spec.variant in (2, 3) else outward),
-            ("Y", p - outward if spec.variant in (1, 2) else outward),
-        ]
-    if spec.family == "corner-out":
-        return {
-            1: [("X", -outward)],
-            2: [("Y", outward)],
-            3: [("X", p + outward), ("Y", p + outward)],
-            4: [("X", outward)],
-            5: [("Y", -outward)],
-            6: [("X", -outward), ("Y", -outward)],
-        }[spec.variant]
-    return [("X", -22.5), ("X", 22.5)]
-
-
-def _round_free_top(part: Part, spec: Accessory) -> Part:
-    support = spec.family.startswith("support")
-    top = 0 if support else spec.interface.body_height
-    rims = _free_top_rims(spec)
-    edges = [
-        edge
-        for edge in horizontal_edges(part, top)
-        if edge.geom_type == GeomType.LINE
-        and any(
-            abs(getattr(edge.bounding_box().min, axis) - coordinate) < 1e-5
-            and abs(getattr(edge.bounding_box().max, axis) - coordinate) < 1e-5
-            for axis, coordinate in rims
-        )
-    ]
-    if not edges:
-        raise ValueError(f"{spec.family}: no non-mating top rim edges found")
-    return part.fillet(SUPPORT_TOP_RADIUS_MM if support else EDGE_TOP_RADIUS_MM, edges)
-
-
 def _edge_mating_sides(face: Face, joins: list[dict]) -> list[Edge]:
     """Plan sides that meet a tile or a neighbouring perimeter piece.
 
@@ -1630,7 +1582,7 @@ def accessory_datums(spec: Accessory | Rod | RodBrace) -> dict:
                     "height": (
                         spec.interface.male_height if male else spec.interface.female_opening_height
                     ),
-                    "open_through_top": spec.interface.joint_style == "full-height",
+                    "open_through_top": False,
                 }
                 for cell in range(spec.nx)
             ],
@@ -1659,9 +1611,7 @@ def accessory_datums(spec: Accessory | Rod | RodBrace) -> dict:
             if join["sex"] == "male"
             else spec.interface.female_opening_height
         )
-        join["open_through_top"] = (
-            join["sex"] == "female" and spec.interface.joint_style == "full-height"
-        )
+        join["open_through_top"] = False
     return _solid_bottom_datums(spec) | {
         "underside_z": 0,
         "top_z": spec.interface.body_height,
@@ -1696,36 +1646,15 @@ def make_accessory(spec: Accessory | Rod | RodBrace) -> Part:
         part = _support(spec)
     else:
         face, joins = _edge_plan(spec)
-        if spec.interface.joint_style == "full-height":
-            males, females = [], []
-            for join in joins:
-                profile = dovetail_face(spec.interface, depth=join["depth"]).rotate(
-                    Axis.Z, join["angle"]
-                )
-                profile = profile.moved(Location(join["position"]))
-                (males if join["sex"] == "male" else females).append(profile)
-            part = full_height_part(
-                face,
-                males,
-                females,
-                spec.interface.body_height,
-                round_body_corners=False,
-                free_top_rims=_free_top_rims(spec),
-                free_top_radius=EDGE_TOP_RADIUS_MM,
-                interface_blend_radius=spec.interface.tile_join_blend_radius,
-            )
+        if spec.family == "corner-out" and spec.variant in (1, 2, 4, 5):
+            body = _rounded_original_corner_out_half_body(spec, face)
         else:
-            if spec.family == "corner-out" and spec.variant in (1, 2, 4, 5):
-                body = _rounded_original_corner_out_half_body(spec, face)
-            else:
-                body = _round_edge_body(
-                    prism(face, spec.interface.body_height),
-                    _edge_mating_sides(face, joins),
-                    spec.family,
-                )
-            part = _apply_joins(body, joins, interface=spec.interface)
-        if spec.interface.joint_style == "full-height":
-            part = part.fillet(1, horizontal_edges(part, 0))
+            body = _round_edge_body(
+                prism(face, spec.interface.body_height),
+                _edge_mating_sides(face, joins),
+                spec.family,
+            )
+        part = _apply_joins(body, joins, interface=spec.interface)
         part = _cut_completed_edge_holes(part, spec)
     suffix = (
         (

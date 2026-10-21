@@ -3,13 +3,12 @@
 from math import cos, radians, sqrt
 
 import pytest
-from build123d import Axis, GeomType, Location, Part, Solid, Vector, export_step, import_step
+from build123d import GeomType, Location, Part, Solid, Vector, export_step, import_step
 from OCP.BRepAdaptor import BRepAdaptor_Surface
 from OCP.BRepGProp import BRepGProp
 from OCP.GProp import GProp_GProps
 from OCP.Precision import Precision
 
-from cargo_grid import Interface
 from cargo_grid.accessories import (
     Accessory,
     _apply_joins,
@@ -22,7 +21,7 @@ from cargo_grid.accessories import (
     make_accessory,
 )
 from cargo_grid.export import _checked_step_roundtrip
-from cargo_grid.interfaces import dovetail_face, full_height_part, horizontal_edges, prism
+from cargo_grid.interfaces import horizontal_edges, prism
 
 
 def volume(shape):
@@ -31,19 +30,10 @@ def volume(shape):
 
 def unrounded_edge(spec):
     face, joins = _edge_plan(spec)
-    if spec.interface.joint_style == "original":
-        part = _apply_joins(prism(face, spec.interface.height), joins, interface=spec.interface)
-    else:
-        male, female = [], []
-        for join in joins:
-            profile = dovetail_face(depth=join["depth"]).rotate(Axis.Z, join["angle"])
-            profile = profile.moved(Location(join["position"]))
-            (male if join["sex"] == "male" else female).append(profile)
-        part = full_height_part(face, male, female, spec.interface.height, round_body_corners=False)
+    part = _apply_joins(prism(face, spec.interface.height), joins, interface=spec.interface)
     return part.fillet(1, horizontal_edges(part, 0))
 
 
-@pytest.mark.parametrize("style", ["original", "full-height"])
 @pytest.mark.parametrize(
     "spec",
     [
@@ -53,33 +43,23 @@ def unrounded_edge(spec):
         *(Accessory("corner-out", variant=v, complete_edge_holes=False) for v in range(1, 7)),
     ],
 )
-def test_perimeter_rounds_exist_in_step_and_join_tools_are_preserved(spec, style, tmp_path):
-    from dataclasses import replace
-
-    spec = replace(spec, interface=Interface(joint_style=style))
+def test_perimeter_rounds_exist_in_step_and_join_tools_are_preserved(spec, tmp_path):
     before, after = unrounded_edge(spec), make_accessory(spec)
     assert after.volume < before.volume
     for join in accessory_datums(spec)["joins"]:
-        if style == "original":
-            tool = _join_solid(join, interface=spec.interface)
-            if join["sex"] == "male":
-                assert volume(tool.cut(after)) < 1e-7
-            else:
-                assert volume(tool.intersect(after)) < 1e-7
+        tool = _join_solid(join, interface=spec.interface)
+        if join["sex"] == "male":
+            assert volume(tool.cut(after)) < 1e-7
         else:
-            region = Solid.make_box(52, join["depth"] + 5, 13).moved(Location((-26, -4, 0)))
-            region = region.rotate(Axis.Z, join["angle"]).moved(Location(join["position"]))
-            a, b = before.intersect(region), after.intersect(region)
-            assert volume(Part(a.solids()).cut(Part(b.solids()))) < 1e-5
+            assert volume(tool.intersect(after)) < 1e-7
     path = tmp_path / "rounded.step"
     restored, _, _, _, _ = _checked_step_roundtrip(after, path)
     assert restored.is_valid
     volume_budget = max(1e-6, after.area * Precision.Confusion_s())
     assert abs(restored.volume - after.volume) <= volume_budget
-    expected_radius = 3 if style == "original" else 2
     assert any(
         face.geom_type == GeomType.CYLINDER
-        and BRepAdaptor_Surface(face.wrapped).Cylinder().Radius() == pytest.approx(expected_radius)
+        and BRepAdaptor_Surface(face.wrapped).Cylinder().Radius() == pytest.approx(3)
         for face in restored.faces()
     )
 

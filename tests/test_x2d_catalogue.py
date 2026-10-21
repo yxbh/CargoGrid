@@ -170,9 +170,7 @@ def _arguments(nozzle=0.8):
         str(nozzle),
         "--layer-height-mm",
         str(profiles.layer_height_mm),
-        "--roof-support",
-        "--roof-support-mode",
-        "auto",
+        "--auto-roof-support",
     ]
 
 
@@ -218,9 +216,7 @@ def test_catalogue_policy_works_with_a_distinct_printer_value(inventory_stand_in
 
 
 @pytest.mark.parametrize("nozzle", [0.8, 0.4])
-def test_cli_selects_x2d_profiles_and_preserves_requested_contact_settings(
-    monkeypatch, tmp_path, nozzle
-):
+def test_cli_selects_x2d_profiles_and_fixed_contact_settings(monkeypatch, tmp_path, nozzle):
     captured = {}
 
     def build(printer, **kwargs):
@@ -239,8 +235,6 @@ def test_cli_selects_x2d_profiles_and_preserves_requested_contact_settings(
         cli.main(
             [
                 *_arguments(nozzle),
-                "--roof-interface-layer-count",
-                "3",
                 "--packing-gap-mm",
                 "5",
                 "--output",
@@ -257,7 +251,7 @@ def test_cli_selects_x2d_profiles_and_preserves_requested_contact_settings(
     assert bambu.print_settings_id == profiles.process
     assert bambu.printer is X2D and bambu.machine_nozzle_count == 2
     settings = bambu.roof_support.native_settings(process_profile=profiles.process)
-    assert settings["support_interface_top_layers"] == "3"
+    assert "support_interface_top_layers" not in settings
     assert settings["support_object_xy_distance"] == "0.4"
     assert "support_on_build_plate_only" not in settings
     assert "support_filament" not in settings
@@ -324,7 +318,7 @@ def test_real_x2d_catalogue_solids_and_prepared_placements_stay_in_reach(x2d_pla
         (Material(profile.petg, "PETG", "#688197"), Material(profile.pla, "PLA", "#0A2989")),
         0.8,
         0.32,
-        roof_support=RoofSupportSettings(mode="auto"),
+        roof_support=RoofSupportSettings(),
         printer_settings_id=profile.printer,
         print_settings_id=profile.process,
         machine_nozzle_count=2,

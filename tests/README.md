@@ -1,8 +1,8 @@
 # Writing tests
 
-Portable CI runs every test not marked `native`, `reference` or `slow` with four workers on a shared hosted runner, where a test takes roughly five times as long as it does alone on a fast workstation. `tools/check_test_durations.py` fails the job when one test's setup, call and teardown exceed its budget, and warns when the whole pytest session runs past its target. The `slow` tier runs weekly and on a manual CI dispatch with `tier: slow`, using two runners with four workers and the same 60-minute timeout each.
+Portable CI runs every test not marked `native` or `slow` with four workers on a shared hosted runner, where a test takes roughly five times as long as it does alone on a fast workstation. `tools/check_test_durations.py` fails the job when one test's setup, call and teardown exceed its budget, and warns when the whole pytest session runs past its target. The `slow` tier runs weekly and on a manual CI dispatch with `tier: slow`, using two runners with four workers and the same 60-minute timeout each.
 
-- Check representative sites. Keep at least one portable case for each male/female joint, joint style, family variant and recorded pose, plus the largest size. Mark the other values of a sweep with `pytest.param(..., marks=pytest.mark.slow)` so their test IDs stay the same.
+- Check representative sites. Keep at least one portable case for each male/female joint, family variant and recorded pose, plus the largest size. Mark the other values of a sweep with `pytest.param(..., marks=pytest.mark.slow)` so their test IDs stay the same.
 - Query geometry near the feature. Clip shapes to a small box around a hole before classifying points (`_local_assembly_contains` in `test_edge_variants.py`), and use `local_geometry.bounded_distance` for contact checks. Skip shapes whose bounding boxes can't reach the region. Point queries and distances against a whole tile can take seconds each.
 - Avoid whole-solid witness Booleans when a clipped or local check answers the same question, and keep a small test showing that the local check agrees with the whole-solid one.
 - Don't export full multi-part packages in portable tests. Export one or two designs, or mark the package check `slow`.
@@ -12,6 +12,6 @@ Portable CI runs every test not marked `native`, `reference` or `slow` with four
 - Split long integration checks by responsibility, so a failure names the broken contract and no single test becomes the tail of the run.
 - A faster check must answer the same question. Keep assertions and tolerances.
 
-Run the portable tier with `uv run pytest -q -n 4 --dist worksteal -m "not native and not reference and not slow"` and the full slow tier with `uv run pytest -q -n 4 --dist loadgroup -m "slow and not native and not reference"`. Append `--slow-shard 1` or `--slow-shard 2` to reproduce one CI shard. Add `--durations=0 --durations-min=0` to see where time goes.
+Run the portable tier with `uv run pytest -q -n 4 --dist worksteal -m "not native and not slow"` and the full slow tier with `uv run pytest -q -n 4 --dist loadgroup -m "slow and not native"`. Append `--slow-shard 1` or `--slow-shard 2` to reproduce one CI shard. Add `--durations=0 --durations-min=0` to see where time goes.
 
 `tests/slow_shards.py` assigns whole files to two shards using measured setup and call costs, discounting duplicated rear-review construction. File boundaries keep module fixtures and xdist groups together; existing catalogue and expansion groups remain on one worker. A portable collection check compares both shards with the complete slow selection, rejecting gaps, duplicates and groups split across shards. New slow files must be assigned before CI can collect a shard; the same split is used by scheduled and manual runs.

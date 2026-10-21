@@ -43,7 +43,6 @@ from cargo_grid.roof_support import (
     effective_object_settings,
     female_roofs,
     global_auto_support_reason,
-    roof_enforcers,
     validate_roof_job,
 )
 from cargo_grid.stacking import StackSettings, Volume, stack_volumes
@@ -58,9 +57,6 @@ BAMBU_PROCESS_DEFAULTS = {
 }
 UNSUPPORTED_COMBINATIONS = {
     "roof_support_with_stacking": "Roof supports and stacked separator jobs cannot be combined.",
-    "roof_support_with_catalogues": "Roof supports require a part or layout job; catalogues and extras are not supported.",
-    "roof_support_with_bambu_oriented_models": "Roof supports cannot include models that Bambu export re-orients (plates, brackets, stops, angled stops, rods and rail ends).",
-    "roof_support_with_full_height": "Roof supports require original roofed joints.",
     "stacked_catalogues": "Stack repeated part/layout tile quantities, not mixed catalogue samples.",
 }
 
@@ -138,12 +134,6 @@ def _sides(clearance: TowerClearance) -> str:
     return "/".join(f"{getattr(clearance, side):g}" for side in ("left", "front", "right", "back"))
 
 
-def _filament_mode(settings: BambuSettings) -> str:
-    if settings.roof_support and settings.roof_support.nozzle_slots is not None:
-        return "Manual"
-    return "Auto For Match"
-
-
 def _bambu_project_settings(job: Job, bambu: BambuSettings, plate_count: int = 1) -> dict:
     nozzle_count = (
         len(bambu.printer.nozzles)
@@ -170,7 +160,7 @@ def _bambu_project_settings(job: Job, bambu: BambuSettings, plate_count: int = 1
         "filament_colour": [material.color for material in bambu.materials],
         "filament_settings_id": [material.name for material in bambu.materials],
         "filament_is_support": ["0"] * len(bambu.materials),
-        "filament_map_mode": _filament_mode(bambu),
+        "filament_map_mode": "Auto For Match",
     }
     settings.update(BAMBU_PROCESS_DEFAULTS)
     if bambu.printer is not None:
@@ -311,7 +301,6 @@ def _validate_request(job: Job, bambu: BambuSettings | None, stack: StackSetting
             bambu.printer is None
             or bambu.printer.catalogue_support is None
             or not bambu.roof_support
-            or bambu.roof_support.mode != "auto"
         )
     ):
         raise ValueError("rectangular prime towers are limited to X2D Auto-support catalogues")
@@ -347,20 +336,10 @@ def _validate_request(job: Job, bambu: BambuSettings | None, stack: StackSetting
                 f"{design.name}: Bambu accessory export requires its validated object settings; "
                 "create the design with accessory_design()"
             )
-        if (
-            bambu
-            and design.apply_orientation_to_bambu
-            and (stack or (bambu.roof_support and bambu.roof_support.mode == "painted"))
-        ):
+        if bambu and design.apply_orientation_to_bambu and stack:
             raise ValueError(
-                f"Bambu-oriented models cannot use stacking or roof support: {design.name} "
+                f"Bambu-oriented models cannot use stacking: {design.name} "
                 "is turned over for printing"
-                + (
-                    ""
-                    if stack
-                    else "; painted roof support needs parts in model orientation, so use "
-                    "--roof-support-mode auto or export this part in a separate job"
-                )
             )
         name = design.name
         if (
@@ -547,10 +526,6 @@ class _PreparedProject:
                     volumes = stack_volumes(design, settings, self.job.build)
                 else:
                     volumes = [Volume(design.display_name or design.name, posed, "model", 1)]
-                    if bambu and bambu.roof_support and bambu.roof_support.mode == "painted":
-                        volumes.extend(
-                            roof_enforcers(design, bambu.layer_height, bambu.roof_support.coverage)
-                        )
                 self.batches.append((design, volumes, n))
                 remaining -= n
         self.last_mesh_use: dict[int, int] = {}
@@ -827,18 +802,11 @@ def _write_3mf(
                 _metadata(
                     plate,
                     "filament_map_mode",
-                    settings.get("filament_map_mode", _filament_mode(bambu)),
+                    settings.get("filament_map_mode", "Auto For Match"),
                 )
                 for key in ("filament_maps", "filament_volume_maps"):
                     if key in settings:
                         _metadata(plate, key, settings[key])
-            if bambu and bambu.roof_support and bambu.roof_support.nozzle_slots is not None:
-                _metadata(
-                    plate,
-                    "filament_maps",
-                    " ".join(str(n) for n in bambu.roof_support.nozzle_slots),
-                )
-                _metadata(plate, "filament_volume_maps", "0 0")
             configured_plates[plate_index] = plate
             plate_records[plate_index] = {
                 "number": plate_index + 1,
@@ -915,11 +883,6 @@ def _write_3mf(
                 "filament_slot": v.slot if v.subtype == "normal_part" else None,
                 "subtype": v.subtype,
                 "printed_part": v.subtype == "normal_part",
-                **(
-                    {"roof_side": v.roof_side, "roof_index": v.roof_index}
-                    if v.roof_side is not None
-                    else {}
-                ),
             }
             for v in volumes
         )
@@ -985,12 +948,8 @@ def _write_3mf(
         "physical_print_verified": False,
         "filament_assignment": (
             {
-                "mode": _filament_mode(bambu),
-                "physical_map_requested": (
-                    list(bambu.roof_support.nozzle_slots)
-                    if bambu.roof_support and bambu.roof_support.nozzle_slots is not None
-                    else None
-                ),
+                "mode": "Auto For Match",
+                "physical_map_requested": None,
             }
             if bambu
             else None
@@ -1042,66 +1001,11 @@ def _write_3mf(
                 }
             }
         ),
-        "roof_support": _roof_support_record(job, bambu, batches, plates),
-    }
-
-
-def _roof_support_record(job: Job, bambu: BambuSettings | None, batches, plates) -> dict | None:
-    if not (bambu and bambu.roof_support):
-        return None
-    if bambu.roof_support.mode == "auto":
-        return _auto_roof_support_record(job, bambu, batches, plates)
-    settings = asdict(bambu.roof_support)
-    # Painted records keep their established keys; the mode is implied.
-    settings.pop("mode")
-    return {
-        "settings": settings,
-        "contact_mode": bambu.roof_support.contact_mode,
-        "contact_material_intent": "PETG model/base and distinct PLA interface; actual material compatibility and physical release must be checked",
-        "enforcer_count": sum(v.subtype == "support_enforcer" for _, vs, _ in batches for v in vs),
-        "target": (
-            "retained west (negative-X) and south (negative-Y) original female pocket roofs"
-            if all("family" not in d.parameters for d in job.designs)
-            else "every retained original female pocket roof: tile west/south edges plus "
-            "female edge, corner, ramp and contour-piece pockets"
+        "roof_support": (
+            _auto_roof_support_record(job, bambu, batches, plates)
+            if bambu and bambu.roof_support
+            else None
         ),
-        "targets": [
-            {
-                "design": d.name,
-                "batch": batch + 1,
-                "side": side,
-                "roof_indices": sorted({v.roof_index for v in vs if v.roof_side == side}),
-                "roof_count": len({v.roof_index for v in vs if v.roof_side == side}),
-                "enforcer_count": sum(v.roof_side == side for v in vs),
-                **(
-                    {}
-                    if "family" not in d.parameters
-                    else {
-                        "family": d.parameters["family"],
-                        "support_may_occupy_openings": _occupied_openings(d, side),
-                    }
-                ),
-            }
-            for batch, (d, vs, _) in enumerate(batches)
-            for side in ("west", "south", "north", "east")
-            if any(v.roof_side == side for v in vs)
-        ],
-        "skipped_edges": [
-            {"design": d.name, "side": side, "reason": "terminated female edge"}
-            for d in job.designs
-            if "family" not in d.parameters
-            for side in ("west", "south")
-            if not d.parameters.get(side, True)
-        ],
-        "coverage_note": "Critical uses two nominal 3 mm clipped roof pads; native interface coverage expands beyond the masks. Full retains conservative whole-roof masks. Neither mode verifies physical release.",
-        "critical_coverage_experimental": bambu.roof_support.coverage == "critical",
-        "enforcer_z_span_policy": "At least 1 mm either side of the roof, enlarged for the requested layer height and capped by roof thickness. Profile changes still require actual toolpath checks.",
-        "modifier_semantics": "non-printing support_enforcer; slicer generates actual support",
-        "scope_caveat": "Native support may temporarily occupy edge round cutouts inside the receiving pockets; remove from underside before assembly. X sockets are protected in the validated example.",
-        "untargeted_designs": [
-            d.name for d, vs, _ in batches if not any(v.subtype == "support_enforcer" for v in vs)
-        ],
-        "physical_detachment_verified": False,
     }
 
 
@@ -1138,7 +1042,7 @@ def _auto_roof_support_record(job: Job, bambu: BambuSettings, batches, plates) -
         "supported_objects": objects,
         "unsupported_designs": sorted({d.name for d, _, _ in batches} - supported),
         "enforcer_count": 0,
-        "coverage_note": "Auto support covers whole overhangs as the slicer detects them, not the painted critical pads. All supports on these objects get the PLA interface, including accessory supports that were PETG-only before. Not physically tested.",
+        "coverage_note": "Auto support covers whole overhangs as the slicer detects them. All supports on these objects get the PLA interface, including accessory supports that were PETG-only before. Not physically tested.",
         "scope_caveat": "Support may occupy round holes next to pocket roofs while printing; remove it from the underside before assembly.",
         "physical_detachment_verified": False,
     }
@@ -1146,18 +1050,6 @@ def _auto_roof_support_record(job: Job, bambu: BambuSettings, batches, plates) -
 
 def _object_settings(design: Design, bambu: BambuSettings | None) -> dict:
     return effective_object_settings(design, bambu.roof_support if bambu else None)
-
-
-def _occupied_openings(design: Design, side: str) -> list[tuple[float, float]]:
-    """Accepted round openings that meet a targeted roof, where support may grow while printing."""
-    return sorted(
-        {
-            (round(float(x), 6), round(float(y), 6))
-            for roof in female_roofs(design)
-            if roof.side == side
-            for x, y in roof.occupied_openings
-        }
-    )
 
 
 def export_job(
@@ -1354,7 +1246,6 @@ def export_job(
                     if d.parameters.get("hole_diameter") is not None
                 }
             ),
-            "roof_coverage": bambu.roof_support.coverage if bambu and bambu.roof_support else None,
             "stacked": stack is not None,
         },
         "units": "millimeter",
@@ -1367,9 +1258,9 @@ def export_job(
         "export": project,
         "joint_styles": project["joint_styles"],
         "compatibility": {
-            "tile_edges": "Styles must match. Full-height male tabs do not fit original roofed female pockets.",
-            "x_attachments": "Socket/plug dimensions and seating datum are independent of joint style; open-through edge pockets reduce nearby bearing land. Custom pitch/height/fit offsets still affect compatibility.",
-            "evidence": "compare-reference explicitly evaluates original style only; physical fit is unverified.",
+            "tile_edges": "Original roofed tile-edge joints; custom unit size, thickness and fit offsets affect compatibility.",
+            "x_attachments": "Socket/plug dimensions and seating datum are independent of tile-edge joints. Custom pitch/height/fit offsets still affect compatibility.",
+            "evidence": "Geometric checks do not establish physical fit.",
         },
         "physical_fit_verified": False,
         "unsupported_combinations": UNSUPPORTED_COMBINATIONS,

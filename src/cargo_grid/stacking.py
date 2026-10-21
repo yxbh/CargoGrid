@@ -43,9 +43,7 @@ class Volume:
     shape: Part
     role: str
     slot: int
-    subtype: Literal["normal_part", "support_enforcer"] = "normal_part"
-    roof_side: Literal["west", "south", "north", "east"] | None = None
-    roof_index: int | None = None
+    subtype: Literal["normal_part"] = "normal_part"
 
 
 def _part(shape: Shape | ShapeList | None) -> Part:
