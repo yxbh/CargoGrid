@@ -68,7 +68,7 @@ jobs:
               print(package, importlib.metadata.version(package))
           PY
       - name: Portable geometry and export tests
-        run: uv run --no-sync python tools/ci_memory_sampler.py -- /usr/bin/time -v uv run --no-sync pytest -q tests -n 4 --dist worksteal -m "not native and not slow" --durations=0 --durations-min=0 --junitxml=.local/portable-junit.xml
+        run: uv run --no-sync python tools/ci_memory_sampler.py -- /usr/bin/time -v uv run --no-sync pytest -q tests -n 2 --dist worksteal -m "not native and not slow" --durations=0 --durations-min=0 --junitxml=.local/portable-junit.xml
       - name: Check portable test durations
         if: ${{ !cancelled() && hashFiles('.local/portable-junit.xml') != '' }}
         run: uv run --no-sync python tools/check_test_durations.py .local/portable-junit.xml
