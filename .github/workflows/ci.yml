@@ -125,6 +125,39 @@ jobs:
           sudo apt-get install --no-install-recommends -y libgl1 libglu1-mesa
       - name: Install dependencies
         run: uv sync --frozen --group dev
+      - name: Diagnose STEP ownership before and after meshing
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          uv run --no-sync python - <<'PY'
+          import subprocess
+          import sys
+          code = """
+          import sys
+          from pathlib import Path
+          from OCP.BRepBuilderAPI import BRepBuilderAPI_Copy
+          from OCP.ShapeAnalysis import ShapeAnalysis_ShapeTolerance
+          from cargo_grid.adjustable_stop import make_adjustable_stop_parts
+          from cargo_grid.export import _checked_step_roundtrip, _StepSource
+          from cargo_grid.meshes import checked_mesh
+          stage = sys.argv[1]
+          base, *_ = make_adjustable_stop_parts()
+          if stage != "fresh":
+              target = base if stage == "meshed" else type(base)(BRepBuilderAPI_Copy(base.wrapped, True, False).Shape())
+              checked_mesh(target)
+          source = _StepSource.measure(base)
+          print(stage, "source", source.adaptive_volume, "budget", source.volume_budget,
+                "max tolerance", ShapeAnalysis_ShapeTolerance().Tolerance(base.wrapped, 1), flush=True)
+          try:
+              _, mode, delta, budget, bounds = _checked_step_roundtrip(base, Path(".local") / (stage + ".step"))
+          except ValueError as error:
+              print(stage, "REJECTED", error, flush=True)
+          else:
+              print(stage, "ACCEPTED", mode, delta, budget, bounds, flush=True)
+          """
+          import textwrap
+          for stage in ("fresh", "meshed", "copy-meshed"):
+              subprocess.run([sys.executable, "-c", textwrap.dedent(code), stage], check=True)
+          PY
       - name: Lint and format
         run: |
           uv run --no-sync ruff check .
