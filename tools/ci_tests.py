@@ -284,21 +284,22 @@ def complete(args):
 def resources():
     print("Platform:", platform.platform())
     cpuinfo = Path("/proc/cpuinfo")
-    print(
-        "CPU:",
-        next(
+    if cpuinfo.is_file():
+        cpu = next(
             (
                 line.split(":", 1)[1].strip()
                 for line in cpuinfo.read_text().splitlines()
                 if line.startswith("model name")
             ),
-            subprocess.check_output(["sysctl", "-n", "machdep.cpu.brand_string"], text=True).strip()
-            if platform.system() == "Darwin"
-            else platform.processor(),
+            platform.processor(),
         )
-        if cpuinfo.is_file()
-        else platform.processor(),
-    )
+    elif platform.system() == "Darwin":
+        cpu = subprocess.check_output(
+            ["sysctl", "-n", "machdep.cpu.brand_string"], text=True
+        ).strip()
+    else:
+        cpu = platform.processor()
+    print("CPU:", cpu)
     print("Logical CPUs:", os.cpu_count())
     if hasattr(os, "sched_getaffinity"):
         print("Allowed CPUs:", sorted(os.sched_getaffinity(0)))
