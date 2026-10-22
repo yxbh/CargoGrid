@@ -12,7 +12,7 @@
 | Complete slow selection | `uv run pytest -q tests -n 4 --dist loadgroup -m "slow and not native"` |
 | Optional native Bambu | Supply `CARGO_GRID_BAMBU`, then `uv run pytest -q tests -m native` serially |
 
-Use fewer workers on smaller machines (`--jobs N` for the local selector). All commands collect the complete non-native suite before deselecting. Native checks are excluded by default; an explicit `-m native` overrides that selection. Unavailable external checks remain skips.
+Use fewer workers on smaller machines (`--jobs N` for the local selector). Selection commands collect the complete non-native suite before deselecting. Native checks are excluded by default; an explicit `-m native` overrides that selection. Unavailable external checks remain skips.
 
 The local targets are 30 seconds for default contracts and two minutes for the full portable selection. Record actual timings, toolchain, workers and contention in the review; do not weaken a contract to meet a timing target. `tools/check_test_durations.py` also checks the PR's individual test costs from its JUnit report. `--durations=0 --durations-min=0` prints every phase, whose sum is not parallel wall time.
 
