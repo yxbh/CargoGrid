@@ -134,10 +134,12 @@ jobs:
           code = """
           import sys
           from pathlib import Path
+          from build123d import export_step, import_step, PrecisionMode
           from OCP.BRepBuilderAPI import BRepBuilderAPI_Copy
+          from OCP.Interface import Interface_Static
           from OCP.ShapeAnalysis import ShapeAnalysis_ShapeTolerance
           from cargo_grid.adjustable_stop import make_adjustable_stop_parts
-          from cargo_grid.export import _checked_step_roundtrip, _StepSource
+          from cargo_grid.export import _checked_step_roundtrip, _StepSource, _adaptive_volume
           from cargo_grid.meshes import checked_mesh
           stage = sys.argv[1]
           base, *_ = make_adjustable_stop_parts()
@@ -153,9 +155,20 @@ jobs:
               print(stage, "REJECTED", error, flush=True)
           else:
               print(stage, "ACCEPTED", mode, delta, budget, bounds, flush=True)
+          tolerance = ShapeAnalysis_ShapeTolerance().Tolerance(base.wrapped, 1)
+          previous = Interface_Static.RVal_s("write.precision.val")
+          path = Path(".local/source-tolerance.step")
+          try:
+              assert Interface_Static.SetRVal_s("write.precision.val", tolerance)
+              assert export_step(base, path, precision_mode=PrecisionMode.SESSION)
+          finally:
+              assert Interface_Static.SetRVal_s("write.precision.val", previous)
+          restored = import_step(path)
+          print("SOURCE-MAXIMUM", tolerance, "delta", abs(_adaptive_volume(restored) - source.adaptive_volume),
+                "budget", source.volume_budget, "valid", restored.is_valid, "solids", len(restored.solids()), flush=True)
           """
           import textwrap
-          for stage in ("fresh", "meshed", "copy-meshed"):
+          for stage in ("fresh",):
               subprocess.run([sys.executable, "-c", textwrap.dedent(code), stage], check=True)
           PY
       - name: Lint and format
