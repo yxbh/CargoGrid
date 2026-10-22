@@ -25,8 +25,10 @@ def gallery():
 def test_gallery_covers_every_bounded_catalogue_variant_once(gallery):
     items = gallery.inventory()
     assert [item.spec for item in items] == accessory_variants(gallery.BUILD)
-    assert len(items) == len({item.key for item in items}) == 105
+    assert len(items) == len({item.key for item in items}) == 107
     assert {item.key for item in items if item.spec.family in ("rod", "rod-brace")} == {
+        "rod-40",
+        "rod-60",
         "rod-120",
         "rod-240",
         "rod-brace-60-d10",
@@ -97,7 +99,7 @@ def test_thumbnail_manifest_has_unique_rows_and_family_scale(gallery):
     assert manifest["workbench_commit"] == gallery.WORKBENCH_REVISION
     entries = manifest["items"]
     for field in ("file", "key", "public_name", "alt", "sha256"):
-        assert len({entry[field] for entry in entries}) == 105
+        assert len({entry[field] for entry in entries}) == 107
     for family in gallery.FAMILIES:
         rows = [entry for entry in entries if entry["family"] == family]
         assert len({entry["pixels_per_mm"] for entry in rows}) == 1
@@ -546,6 +548,8 @@ def test_incremental_corner_half_composition_updates_only_12_assets(
 @pytest.mark.parametrize(
     ("key", "expected_size"),
     [
+        ("rod-40", (18, 18, 52)),
+        ("rod-60", (18, 18, 72)),
         ("rod-120", (18, 18, 132)),
         ("rod-240", (18, 18, 252)),
         ("rod-brace-60-d10", (78, 18, 6.4)),
@@ -697,7 +701,7 @@ def test_incremental_rod_composition_preserves_all_other_images(
 
     def overview(work, items, filename, title, columns, *, subtitle, family_scales):
         assert filename == "rods-and-braces.png" and columns == 2
-        assert len(items) == 4 and {item.spec.family for item in items} == families
+        assert len(items) == 6 and {item.spec.family for item in items} == families
         assert family_scales and subtitle.isascii() and "original joints" not in subtitle
         assert all(item.detail.isascii() for item in items)
         return {"file": "docs/images/rods-and-braces.png", "items": [item.key for item in items]}
@@ -727,7 +731,7 @@ def test_incremental_rod_composition_preserves_all_other_images(
     ]
     assert all((tmp_path / "docs" / name).read_bytes() == data for name, data in retained.items())
     report = json.loads((work / "render-report.json").read_text())
-    assert len(report["updated_keys"]) == 4 and len(report["sheets"]) == 1
+    assert len(report["updated_keys"]) == 6 and len(report["sheets"]) == 1
 
 
 def test_incremental_rod_composition_rejects_changed_retained_image(gallery, tmp_path, monkeypatch):

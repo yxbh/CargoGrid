@@ -24,11 +24,17 @@ from cargo_grid.export import BambuSettings, Material, export_job, write_3mf
 from cargo_grid.jobs import Design, Job
 from cargo_grid.packing import PrintPlacement
 from cargo_grid.parameters import BuildVolume, Interface, Tile
-from cargo_grid.rods import BRACE_BORES_MM, BRACE_SPACINGS_MM, ROD_HEIGHTS_MM, fit_evidence
+from cargo_grid.rods import (
+    BRACE_BORES_MM,
+    BRACE_SPACINGS_MM,
+    FIT_REPORTED_ROD_HEIGHTS_MM,
+    ROD_HEIGHTS_MM,
+    fit_evidence,
+)
 from cargo_grid.tiles import hole_placements, make_tile
 
 BAMBU = BambuSettings((Material("PETG", "PETG", "#637B70"),), nozzle=0.8, layer_height=0.32)
-FOUR = [*(Rod(h) for h in ROD_HEIGHTS_MM), *(RodBrace(s) for s in BRACE_SPACINGS_MM)]
+ROUND = [*(Rod(h) for h in ROD_HEIGHTS_MM), *(RodBrace(s) for s in BRACE_SPACINGS_MM)]
 
 
 def common_volume(a, b):
@@ -36,7 +42,15 @@ def common_volume(a, b):
     return 0 if shape is None else sum(s.volume for s in shape.solids())
 
 
-@pytest.mark.parametrize("height,volume", [(120, 10879.175954559389), (240, 20303.95391532877)])
+@pytest.mark.parametrize(
+    "height,volume",
+    [
+        (40, 4595.990647379802),
+        (60, 6166.786974174698),
+        (120, 10879.175954559389),
+        (240, 20303.95391532877),
+    ],
+)
 def test_rods_preserve_trial_dimensions_rounds_and_seating(height, volume):
     spec = Rod(height)
     shape = make_accessory(spec)
@@ -146,7 +160,7 @@ def test_actual_tile_hole_pairs_and_custom_thickness():
     assert fit_evidence(custom)["status"] == "not-tested"
 
 
-@pytest.mark.parametrize("spec", FOUR)
+@pytest.mark.parametrize("spec", ROUND)
 def test_round_family_exports_strict_step_mesh_and_evidence(spec, tmp_path):
     design = accessory_design(spec)
     report = json.loads(
@@ -165,7 +179,10 @@ def test_round_family_exports_strict_step_mesh_and_evidence(spec, tmp_path):
     restored = import_step(tmp_path / "bambu" / f"{design.name}.step")
     assert tuple(restored.bounding_box().size) == pytest.approx(design.size, abs=1e-5)
     if isinstance(spec, Rod):
-        assert entry["fit_evidence"]["status"] == "user-reported-fit"
+        reported = spec.above_mat_height_mm in FIT_REPORTED_ROD_HEIGHTS_MM
+        assert entry["fit_evidence"]["status"] == (
+            "user-reported-fit" if reported else "not-tested"
+        )
         assert entry["fit_evidence"]["reported_process"]["rod_print_rotation_y_degrees"] == 90
         assert entry["fit_evidence"]["measured_diameter_or_force"] is None
         assert entry["recommended_print_orientation"]["rotation_axis"] == "Y"
@@ -210,13 +227,15 @@ def test_brace_fit_evidence_scopes_user_report_to_nominal_ten_mm_bores(spacing, 
 def test_streamed_round_families_share_source_meshes_and_keep_per_design_evidence(
     tmp_path, monkeypatch
 ):
-    designs = [accessory_design(spec) for spec in FOUR]
+    designs = [accessory_design(spec) for spec in ROUND]
     job = Job(
         designs,
         BuildVolume(350, 320, 320),
         "part",
         part_gap=10,
         print_placements=[
+            PrintPlacement(0, 15, 30, 90),
+            PrintPlacement(0, 120, 100, 90),
             PrintPlacement(0, 50, 30, 90),
             PrintPlacement(0, 85, 30, 90),
             PrintPlacement(0, 120, 30, 0),
@@ -238,7 +257,7 @@ def test_streamed_round_families_share_source_meshes_and_keep_per_design_evidenc
     meshes, model = archive_triangles(tmp_path / "mixed/job.3mf")
     assert len(meshes) == len(model.findall("./{*}build/{*}item")) == len(designs)
     items = report["export"]["plates"][0]["items"]
-    for spec, design, entry, item, mesh in zip(FOUR, designs, report["designs"], items, meshes):
+    for spec, design, entry, item, mesh in zip(ROUND, designs, report["designs"], items, meshes):
         assert entry["parameters"] == design.parameters
         assert entry["fit_evidence"] == fit_evidence(spec)
         assert entry["mating_datums"] == json.loads(json.dumps(accessory_datums(spec)))
@@ -298,13 +317,14 @@ def test_finite_catalogue_round_parameters_are_absolute():
     variants = accessory_variants(BuildVolume(350, 320, 325), Interface(pitch=30, height=10))
     rods = [v for v in variants if isinstance(v, Rod)]
     braces = [v for v in variants if isinstance(v, RodBrace)]
-    assert rods == [Rod(120, tile_thickness_mm=10), Rod(240, tile_thickness_mm=10)]
+    assert rods == [Rod(h, tile_thickness_mm=10) for h in (40, 60, 120, 240)]
     assert braces == [RodBrace(60), RodBrace(120)]
     assert accessory_design(Rod()).name == accessory_design(Rod(120, 10, 13)).name
     assert accessory_design(RodBrace()).name == accessory_design(RodBrace(60, 10)).name
     assert accessory_design(Rod(240)).name != accessory_design(Rod()).name
     assert accessory_design(RodBrace(60, 10.2)).name != accessory_design(RodBrace()).name
     assert fit_evidence(Rod(120, 9.9))["status"] == "not-tested"
+    assert fit_evidence(Rod(40))["status"] == fit_evidence(Rod(60))["status"] == "not-tested"
 
 
 @pytest.mark.parametrize(
@@ -449,10 +469,10 @@ def test_catalogue_uses_pose_for_fit_and_reports_omissions(monkeypatch):
     import cargo_grid.catalogue as catalogue
 
     monkeypatch.setattr(catalogue, "tile_sizes", lambda *args: [])
-    monkeypatch.setattr(catalogue, "accessory_variants", lambda *args, **kwargs: FOUR)
+    monkeypatch.setattr(catalogue, "accessory_variants", lambda *args, **kwargs: ROUND)
     build = BuildVolume(260, 45, 20)
     upright = catalogue_job(build)
     assert {d.parameters["family"] for d in upright.designs} == {"rod-brace"}
-    assert len(upright.omitted) == 2
+    assert len(upright.omitted) == 4
     horizontal = catalogue_job(build, orient_for_bambu=True)
-    assert len(horizontal.designs) == 4 and not horizontal.omitted
+    assert len(horizontal.designs) == 6 and not horizontal.omitted

@@ -482,7 +482,7 @@ def test_real_h2d_auto_group_with_solid_bottom(tmp_path, real_catalogue_group, g
         if _design_group(design)[0] == group
     }
     assert len(group_plates) == AUTO_GROUP_PLATES[group]
-    assert len(job.designs) == 129
+    assert len(job.designs) == 131
     families = {design.parameters.get("family", "tile") for design in job.designs}
     assert families == {
         "tile",
