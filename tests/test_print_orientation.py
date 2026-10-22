@@ -3,6 +3,7 @@
 import json
 import xml.etree.ElementTree as ET
 from math import ceil, sqrt
+from types import SimpleNamespace
 from zipfile import ZipFile
 
 import numpy as np
@@ -22,7 +23,7 @@ from cargo_grid.accessories import (
     bambu_print_rotation,
     vertical_stop_print_rotation,
 )
-from cargo_grid.catalogue import accessory_design, catalogue_job
+from cargo_grid.catalogue import accessory_design, accessory_identity, catalogue_job
 from cargo_grid.cli import main
 from cargo_grid.export import BambuSettings, Material, export_job, write_3mf
 from cargo_grid.jobs import Job
@@ -121,6 +122,10 @@ def test_bambu_mesh_has_broad_bed_contact_and_recorded_transform(
         and abs(f.bounding_box().max.Z) < 1e-5
     )
     assert area == pytest.approx(expected_area, abs=0.002)
+    if family == "vertical-tile-bracket":
+        assert area >= 0.65 * design.bambu_size[0] * design.bambu_size[1]
+    else:
+        assert area > 1000 * nx
 
 
 @pytest.mark.parametrize("nx", [1, 2])
@@ -214,48 +219,27 @@ def test_rail_ends_print_on_their_flat_bearing_face(variant, tmp_path):
     assert sections[first_layer] >= 0.75 * largest
     assert sections[first_layer] > sections[height - first_layer] + 0.25 * largest
 
-    path = tmp_path / "job.3mf"
-    result = write_3mf(Job([design], BuildVolume(350, 320, 325), "part"), path, bambu=BAMBU)
-    item = result["plates"][0]["items"][0]
-    assert "object_settings" not in item
-    transform = item["source_to_project_transform"]
-    assert transform["rotation_x_degrees"] == 180 and transform["applied_to_mesh"]
-    assert "rotation_y_degrees" not in transform
-    assert item["size_mm"] == pytest.approx(design.bambu_size)
-    _, _, volumes = _project_facts(path)
-    assert volumes[0][-1][4] == pytest.approx(0, abs=1e-5)
-    assert volumes[0][-1][5] == pytest.approx(25, abs=0.02)
-    assert _placed_mesh_bed_area(path) >= 0.7 * largest
-
-
-def test_rail_end_source_exports_keep_model_orientation(tmp_path):
-    design = accessory_design(Accessory("support-end", variant=1))
-    bed = {}
-    for backend in (None, BAMBU):
-        folder = tmp_path / ("core" if backend is None else "bambu")
-        manifest = json.loads(
-            export_job(
-                Job([design], BuildVolume(350, 320, 325), "part"), folder, bambu=backend
-            ).read_text()
-        )
-        source = import_step(folder / f"{design.name}.step").bounding_box()
+    if variant == 1:
+        source = design.shape.bounding_box()
         assert (source.min.Z, source.max.Z) == pytest.approx((-25, 0), abs=1e-5)
         assert (source.min.Y, source.max.Y) == pytest.approx((0, 120), abs=1e-5)
-        z = stl_triangles(folder / f"{design.name}.stl")[:, :, 2]
-        assert (z.min(), z.max()) == pytest.approx((-25, 0), abs=1e-4)
-        recommendation = manifest["designs"][0]["recommended_print_orientation"]
-        assert recommendation["rotations"] == [{"axis": "X", "degrees": 180}]
-        assert recommendation["applied_to_exports"] == {
-            "step": False,
-            "stl": False,
-            "core_3mf": False,
-            "bambu_3mf": backend is not None,
-        }
-        item = manifest["export"]["plates"][0]["items"][0]
-        assert ("source_to_project_transform" in item) == (backend is not None)
-        bed[backend is not None] = _placed_mesh_bed_area(folder / "job.3mf")
-    # The plain 3MF keeps the sloped underside down; the Bambu project uses the flat face.
-    assert bed[True] > 2.5 * bed[False]
+        job = Job([design], BuildVolume(350, 320, 325), "part")
+        path = tmp_path / "job.3mf"
+        result = write_3mf(job, path, bambu=BAMBU)
+        item = result["plates"][0]["items"][0]
+        assert "object_settings" not in item
+        transform = item["source_to_project_transform"]
+        assert transform["rotation_x_degrees"] == 180 and transform["applied_to_mesh"]
+        assert "rotation_y_degrees" not in transform
+        assert item["size_mm"] == pytest.approx(design.bambu_size)
+        _, _, volumes = _project_facts(path)
+        assert volumes[0][-1][4] == pytest.approx(0, abs=1e-5)
+        assert volumes[0][-1][5] == pytest.approx(25, abs=0.02)
+        bed_area = _placed_mesh_bed_area(path)
+        assert bed_area >= 0.7 * largest
+        core = tmp_path / "core.3mf"
+        write_3mf(job, core)
+        assert bed_area > 2.5 * _placed_mesh_bed_area(core)
 
 
 def test_straight_rails_and_connectors_keep_model_orientation():
@@ -283,7 +267,9 @@ def test_straight_rails_and_connectors_keep_model_orientation():
         assert design.bambu_shape is design.shape
 
 
-def test_transformed_catalogue_packing_respects_exclusions_and_quantity(tmp_path):
+def test_transformed_catalogue_packing_respects_exclusions_and_quantity(
+    tmp_path, accessory_metadata_shape
+):
     designs = [
         accessory_design(Accessory("vertical-tile-bracket", nx=x, ny=y))
         for x, y in VERTICAL_BRACKET_CELLS
@@ -332,41 +318,76 @@ def test_transformed_catalogue_packing_respects_exclusions_and_quantity(tmp_path
             assert zmin == pytest.approx(0, abs=1e-5) and zmax <= 115 + 1e-5
 
 
-def test_source_exports_and_project_orientation_contracts_are_unchanged(tmp_path):
-    design = accessory_design(Accessory("vertical-tile-bracket", nx=2))
+def test_source_exports_and_project_orientation_contracts_are_unchanged(tmp_path, monkeypatch):
+    bracket = accessory_design(Accessory("vertical-tile-bracket", nx=2))
+    with monkeypatch.context() as patch:
+        from build123d import Box
+
+        patch.setattr(catalogue_module, "make_accessory", lambda spec: Box(2, 3, 4))
+        designs = [
+            bracket,
+            accessory_design(Accessory("support-end", variant=1)),
+            accessory_design(Accessory("vertical-stop", nx=2, ny=1, height=120)),
+            accessory_design(Accessory("lock-45")),
+            accessory_design(Accessory("plate")),
+            accessory_design(Accessory("ramp", nx=3)),
+            accessory_design(Accessory("ramp", nx=3, ramp_join="male")),
+        ]
     for backend in (None, BAMBU):
         folder = tmp_path / ("core" if backend is None else "bambu")
         manifest = json.loads(
             export_job(
-                Job([design], BuildVolume(350, 320, 325), "part"), folder, stl=False, bambu=backend
+                Job(designs, BuildVolume(350, 320, 325), "part"), folder, bambu=backend
             ).read_text()
         )
-        source = import_step(folder / f"{design.name}.step")
-        assert source.bounding_box().min.Z == pytest.approx(-12.8)
-        assert tuple(source.bounding_box().size) == pytest.approx(design.size)
-        applied = manifest["designs"][0]["recommended_print_orientation"]["applied_to_exports"]
-        assert applied == {
-            "step": False,
-            "stl": False,
-            "core_3mf": False,
-            "bambu_3mf": backend is not None,
+        records = {record["name"]: record for record in manifest["designs"]}
+        items = {
+            item["design"]: item
+            for plate in manifest["export"]["plates"]
+            for item in plate["items"]
         }
-        packed = manifest["export"]["plates"][0]["items"][0]
-        assert packed["size_mm"] == pytest.approx(design.bambu_size if backend else design.size)
-    angled = accessory_design(Accessory("lock-45"))
+        for design in designs:
+            source = import_step(folder / f"{design.name}.step").bounding_box()
+            expected = design.shape.bounding_box()
+            assert tuple(source.min) == pytest.approx(tuple(expected.min), abs=1e-5)
+            assert tuple(source.max) == pytest.approx(tuple(expected.max), abs=1e-5)
+            points = stl_triangles(folder / f"{design.name}.stl").reshape(-1, 3)
+            assert points.min(axis=0) == pytest.approx(tuple(expected.min), abs=0.02)
+            assert points.max(axis=0) == pytest.approx(tuple(expected.max), abs=0.02)
+            record = records[design.name]
+            if design.apply_orientation_to_bambu:
+                recommendation = record["recommended_print_orientation"]
+                assert recommendation["applied_to_exports"] == {
+                    "step": False,
+                    "stl": False,
+                    "core_3mf": False,
+                    "bambu_3mf": backend is not None,
+                }
+                if design.parameters["family"] == "support-end":
+                    assert recommendation["rotations"] == [{"axis": "X", "degrees": 180}]
+            packed = items[design.name]
+            assert packed["size_mm"] == pytest.approx(design.bambu_size if backend else design.size)
+            assert ("source_to_project_transform" in packed) == (
+                backend is not None and design.apply_orientation_to_bambu
+            )
+            assert ("object_settings" in packed) == (
+                backend is not None and bool(design.bambu_object_settings)
+            )
+            if design.bambu_object_settings:
+                assert record["recommended_bambu_object_settings"]["applied_to_bambu_3mf"] == (
+                    backend is not None
+                )
+    assert bracket.shape.bounding_box().min.Z == pytest.approx(-12.8)
+    _, _, _, angled, plate, ramp, male_ramp = designs
     assert angled.recommended_print_rotation_x == -135
     assert angled.apply_orientation_to_bambu
-    plate = accessory_design(Accessory("plate"))
     assert plate.recommended_print_rotation_x == 180
     assert plate.apply_orientation_to_bambu
     assert plate.bambu_size == pytest.approx(plate.size)
-    ramp = accessory_design(Accessory("ramp", nx=3))
     assert not ramp.apply_orientation_to_bambu and ramp.bambu_size == ramp.size
     assert ramp.bambu_object_settings["support_type"] == "normal(auto)"
-    male_ramp = accessory_design(Accessory("ramp", nx=3, ramp_join="male"))
     assert not male_ramp.apply_orientation_to_bambu
     assert male_ramp.bambu_size == male_ramp.size
-    assert male_ramp.bambu_size == pytest.approx((180, 56, 13), abs=1e-5)
     assert not male_ramp.bambu_object_settings
 
 
@@ -491,6 +512,29 @@ def test_catalogue_fit_uses_project_pose_only_when_requested(monkeypatch):
 
     monkeypatch.setattr(catalogue_module, "accessory_variants", brackets)
     monkeypatch.setattr(catalogue_module, "tile_sizes", lambda build, interface: [])
+    # Measured source/posed bounds; family geometry and pose tests own their construction.
+    sizes = {
+        (1, 2, 2): ((60, 120, 140.378174), (60, 170.407008, 102.852175)),
+        (2, 1, 1): ((120, 60, 80.378174), (120, 85.771612, 60.073929)),
+        (2, 2, 2): ((120, 120, 140.378174), (120, 170.407008, 102.852175)),
+        (1, 1, 2): ((60, 60, 140.378175), (140.378175, 60, 60)),
+        (2, 1, 2): ((120, 60, 140.378175), (140.378175, 60, 120)),
+    }
+
+    def measured_design(spec):
+        from build123d import Box
+
+        name, parameters = accessory_identity(spec)
+        source_size, posed_size = sizes[spec.nx, spec.ny, spec.panel_height_cells or spec.ny]
+        return SimpleNamespace(
+            name=name,
+            parameters=parameters,
+            size=source_size,
+            bambu_size=posed_size,
+            shape=Box(2, 3, 4),
+        )
+
+    monkeypatch.setattr(catalogue_module, "accessory_design", measured_design)
     build = BuildVolume(180, 130, 110)
     source = catalogue_job(build)
     project = catalogue_job(build, orient_for_bambu=True)

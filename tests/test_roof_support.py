@@ -4,7 +4,7 @@ import pytest
 from build123d import Vector
 
 from cargo_grid import BuildVolume, Tile, make_tile
-from cargo_grid.export import BambuSettings, Material, write_3mf
+from cargo_grid.export import BambuSettings, Material, _checked_step_roundtrip, write_3mf
 from cargo_grid.jobs import Job, tile_design
 from cargo_grid.roof_support import RoofSupportSettings
 from cargo_grid.stacking import StackSettings
@@ -12,7 +12,7 @@ from cargo_grid.tiles import hole_placements
 
 
 @pytest.mark.parametrize("nx,ny,expected", [(2, 3, 29), (4, 4, 65)])
-def test_full_scope_exact_lattice_and_bores(nx, ny, expected):
+def test_full_scope_exact_lattice_and_bores(nx, ny, expected, tmp_path):
     spec = Tile(nx, ny)
     holes = hole_placements(spec)
     assert len(holes) == expected and all(h.accepted for h in holes)
@@ -26,6 +26,12 @@ def test_full_scope_exact_lattice_and_bores(nx, ny, expected):
             assert not shape.is_inside(Vector(hole.x, hole.y, z))
     expected_volume = 146696.4078426918 if nx == 2 else 391727.15419238823
     assert shape.volume == pytest.approx(expected_volume, abs=0.002)
+    if (nx, ny) == (2, 3):
+        restored, _, _, _, _ = _checked_step_roundtrip(shape, tmp_path / "tile.step")
+        assert restored.is_valid and len(restored.solids()) == 1
+        assert tuple(restored.bounding_box().size) == pytest.approx(
+            tuple(shape.bounding_box().size), abs=1e-5
+        )
 
 
 def test_full_default_interior_override_and_terminated_fillers_are_preserved():

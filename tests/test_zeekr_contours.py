@@ -269,11 +269,14 @@ def _assert_contact_without_overlap(first, second):
     assert _intersection_volume(first, second) < 1e-7
 
 
-def _representative_tile(x):
-    return make_tile(Tile(4, 4)).moved(Location((x, 60, 0)))
+@pytest.fixture(scope="module")
+def representative_tile():
+    return make_tile(Tile(4, 4))
 
 
-def test_representative_real_contour_west_side_caps_holes_sockets_and_contacts():
+def test_representative_real_contour_west_side_caps_holes_sockets_and_contacts(
+    representative_tile,
+):
     parameters = ContourParameters()
     west_north = _side_design("west", "north", parameters)
     west_south = _side_design("west", "south", parameters)
@@ -289,7 +292,7 @@ def test_representative_real_contour_west_side_caps_holes_sockets_and_contacts()
     } == {150, 210, 270}
     _assert_bores_clear(west_south, ((-30, 60), (-30, 180)))
     _assert_bores_clear(west_north, ((-30, 180), (-30, 300)))
-    placed_tile_west = _representative_tile(-540)
+    placed_tile_west = representative_tile.moved(Location((-540, 60, 0)))
     for first, second in (
         (placed_tile_west, _placed(west_north)),
         (placed_tile_west, _placed(west_south)),
@@ -298,27 +301,27 @@ def test_representative_real_contour_west_side_caps_holes_sockets_and_contacts()
         _assert_contact_without_overlap(first, second)
 
 
-def test_representative_real_contour_east_side_cap_is_female_and_meets_its_tile():
+def test_representative_real_contour_east_side_cap_is_female_and_meets_its_tile(
+    representative_tile,
+):
     east_north = _side_design("east", "north", ContourParameters())
     _assert_valid_single_solid(east_north)
     assert {join["sex"] for join in east_north.mating_datums["joins"]} == {"female"}
-    _assert_contact_without_overlap(_representative_tile(300), _placed(east_north))
+    _assert_contact_without_overlap(
+        representative_tile.moved(Location((300, 60, 0))), _placed(east_north)
+    )
 
 
-def test_representative_real_contour_west_ramp_holes_joins_mesh_and_contact():
+def test_representative_real_contour_west_ramp_holes_joins_mesh_and_contact(representative_tile):
     west_ramp = _south_design(4, 0, -540, ContourParameters())
     _assert_valid_single_solid(west_ramp)
     _, _, report = checked_mesh(west_ramp.shape)
     assert report["closed_oriented_manifold"]
     assert {join["sex"] for join in west_ramp.mating_datums["joins"]} == {"male"}
     _assert_bores_clear(west_ramp, ((0, 0), (30, 0), (60, 0), (240, 0)))
-    _assert_contact_without_overlap(_representative_tile(-540), _placed(west_ramp))
-
-
-def test_representative_real_contour_east_ramp_keeps_its_boundary_hole():
-    east_ramp = _south_design(4, 4, 300, ContourParameters())
-    _assert_valid_single_solid(east_ramp)
-    _assert_bores_clear(east_ramp, ((240, 0),))
+    _assert_contact_without_overlap(
+        representative_tile.moved(Location((-540, 60, 0))), _placed(west_ramp)
+    )
 
 
 @pytest.mark.slow

@@ -344,7 +344,8 @@ def test_set_rejects_a_negative_gap():
         extras_job(H2D, gap=-1)
 
 
-def test_cli_h2d_pull_handle_extras_export_one_project(tmp_path):
+def test_cli_h2d_pull_handle_extras_export_one_project(tmp_path, monkeypatch):
+    monkeypatch.setattr(pull_handle_set, "pull_handle_design", _stand_in)
     output = tmp_path / "handles"
     assert main(["extras", "pull-handle", *H2D_OPTIONS, "--no-stl", "--output", str(output)]) == 0
     manifest = json.loads((output / "manifest.json").read_text())
@@ -396,7 +397,10 @@ AUTO_SUPPORT = [
 ]
 
 
-def test_cli_h2d_pull_handle_extras_inherit_global_support_with_a_pla_interface(tmp_path):
+def test_cli_h2d_pull_handle_extras_inherit_global_support_with_a_pla_interface(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(pull_handle_set, "pull_handle_design", _stand_in)
     output = tmp_path / "handles"
     arguments = ["extras", "pull-handle", *H2D_OPTIONS, *H2D_PLA, *AUTO_SUPPORT, "--no-stl"]
     assert main([*arguments, "--output", str(output)]) == 0
