@@ -122,7 +122,7 @@ def test_thumbnail_manifest_has_unique_rows_and_family_scale(gallery):
     assert all("provenance" in entry for entry in perimeters)
     assert "not a full-gallery" in manifest["provenance_scope"]
     round_parts = [entry for entry in entries if entry["family"] in ("rod", "rod-brace")]
-    assert len(round_parts) == 4
+    assert len(round_parts) == 6
     rod_overview = next(
         entry
         for entry in manifest["overview_images"]

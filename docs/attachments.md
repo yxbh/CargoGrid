@@ -1,12 +1,12 @@
 # Standard accessory gallery
 
-This page shows the 105 accessories in the standard 60 mm unit / 13 mm thickness catalogue for a 350 x 320 x 325 mm build volume. Each thumbnail comes from that part's STEP file. Custom unit size or thickness, or another build volume, can change dimensions and what fits.
+This page shows the 107 accessories in the standard 60 mm unit / 13 mm thickness catalogue for a 350 x 320 x 325 mm build volume. Each thumbnail comes from that part's STEP file. Custom unit size or thickness, or another build volume, can change dimensions and what fits.
 
 Click a thumbnail for the full-size image. The code name is the generator name. Parts in one family share a scale; different families use different scales so small details stay readable. Colour is only for the pictures.
 
 [Back to the beginner guide](../README.md) / [Thumbnail dimensions, hashes and source provenance](images/attachments/manifest.json)
 
-Round-hole rods stand 120 or 240 mm above the mat. Their Ø18 mm stop collar sits on the mat; the Ø10 mm shaft and the peg diameter don't change with unit size. The two catalogue upper braces use 10 mm bores to join the 10 mm shafts at 60 or 120 mm centres, whatever the unit size. The [rod and brace overview](images/rods-and-braces.png) shows all four catalogue parts.
+Round-hole rods stand 40, 60, 120 or 240 mm above the mat. Their Ø18 mm stop collar sits on the mat; the Ø10 mm shaft and the peg diameter don't change with unit size. The two catalogue upper braces use 10 mm bores to join the 10 mm shafts at 60 or 120 mm centres, whatever the unit size. The [rod and brace overview](images/rods-and-braces.png) shows all six catalogue parts.
 
 Keep bags resting on the mat. Braces are held only by friction and don't lock the height; they may slide or jam. These parts have no hooks and no load or crash rating. Bambu projects lay only the rods on their side (Y=90 degrees) with normal Auto support; braces stay flat with their bores upright and no support. Remove rod support before fitting.
 
@@ -27,6 +27,8 @@ Before packing, Bambu projects put plates broad-face-down at X=180, rail ends on
 ## Round-hole rods
 
 <table><thead><tr><th width="206">Thumbnail</th><th>Name</th><th>Size / variant</th><th>What it does</th></tr></thead><tbody>
+<tr><td width="206"><a href="images/attachments/rod-40.png"><img src="images/attachments/rod-40.png" alt="rod, 40 mm above mat / 10 mm peg: isometric STEP-derived render" width="180" height="113"></a></td><td><code>rod_<wbr>h40_<wbr>peg10</code><br>Key: <code>rod-40</code></td><td>40 mm above mat / 10 mm peg<br>Bounds: 18.0 x 18.0 x 52.0 mm</td><td>A 10 mm shaft with a stop collar and a round mat peg. Height is measured above the mat; Bambu projects lay rods horizontally at Y=90 with normal Auto support for these objects.</td></tr>
+<tr><td width="206"><a href="images/attachments/rod-60.png"><img src="images/attachments/rod-60.png" alt="rod, 60 mm above mat / 10 mm peg: isometric STEP-derived render" width="180" height="113"></a></td><td><code>rod_<wbr>h60_<wbr>peg10</code><br>Key: <code>rod-60</code></td><td>60 mm above mat / 10 mm peg<br>Bounds: 18.0 x 18.0 x 72.0 mm</td><td>A 10 mm shaft with a stop collar and a round mat peg. Height is measured above the mat; Bambu projects lay rods horizontally at Y=90 with normal Auto support for these objects.</td></tr>
 <tr><td width="206"><a href="images/attachments/rod-120.png"><img src="images/attachments/rod-120.png" alt="rod, 120 mm above mat / 10 mm peg: isometric STEP-derived render" width="180" height="113"></a></td><td><code>rod_<wbr>h120_<wbr>peg10</code><br>Key: <code>rod-120</code></td><td>120 mm above mat / 10 mm peg<br>Bounds: 18.0 x 18.0 x 132.0 mm</td><td>A 10 mm shaft with a stop collar and a round mat peg. Height is measured above the mat; Bambu projects lay rods horizontally at Y=90 with normal Auto support for these objects.</td></tr>
 <tr><td width="206"><a href="images/attachments/rod-240.png"><img src="images/attachments/rod-240.png" alt="rod, 240 mm above mat / 10 mm peg: isometric STEP-derived render" width="180" height="113"></a></td><td><code>rod_<wbr>h240_<wbr>peg10</code><br>Key: <code>rod-240</code></td><td>240 mm above mat / 10 mm peg<br>Bounds: 18.0 x 18.0 x 252.0 mm</td><td>A 10 mm shaft with a stop collar and a round mat peg. Height is measured above the mat; Bambu projects lay rods horizontally at Y=90 with normal Auto support for these objects.</td></tr>
 </tbody></table>
@@ -208,7 +210,7 @@ Use a CAD-Pilot checkout at the recorded workbench revision with its render depe
 PYTHONPATH=src <workbench-python> tools/render_docs.py --workbench <workbench-checkout> --geometry-revision <committed-generator-revision> --workbench-revision <recorded-workbench-revision>
 ```
 
-Use the workbench's Python interpreter with Pillow already available; paths are supplied locally, not committed. In PowerShell, set `$env:PYTHONPATH='src'` before invoking that interpreter. A full run checks geometry modules against the recorded commit, invokes STEP/inspection/render tools, then creates 7 overview PNGs and 105 family-scaled thumbnails. `--compose-only` reuses verified local STEP-derived renders; `--check` verifies the committed files and their one-to-one inventory mapping without Pillow. Intermediate STEP files and raw renders remain ignored. Layout is deterministic; raster bytes can depend on graphics/Pillow versions.
+Use the workbench's Python interpreter with Pillow already available; paths are supplied locally, not committed. In PowerShell, set `$env:PYTHONPATH='src'` before invoking that interpreter. A full run checks geometry modules against the recorded commit, invokes STEP/inspection/render tools, then creates 7 overview PNGs and 107 family-scaled thumbnails. `--compose-only` reuses verified local STEP-derived renders; `--check` verifies the committed files and their one-to-one inventory mapping without Pillow. Intermediate STEP files and raw renders remain ignored. Layout is deterministic; raster bytes can depend on graphics/Pillow versions.
 
 For a ramp-only update, add `--update-ramps --geometry-revision <committed-generator-revision> --workbench-revision <recorded-workbench-revision>`. This renders all ten ramps and recomposes only the ramp overview. Other pictures and their original provenance stay unchanged; no earlier render cache is needed.
 
@@ -216,8 +218,8 @@ For a perimeter-only update, use `--update-perimeters` with those two revision o
 
 For a repaired outer-corner-half update, use `--update-corner-halves` with those two revision options. This rerenders only the catalogue-selected variants 1, 2, 4 and 5 across their three outward widths, retaining the established outer-corner image scale and every unrelated image byte.
 
-For a rod-and-brace update, use `--update-rods` with those revision options. It renders only the two rods and two nominal 10 mm braces, then creates their four thumbnails and one overview. All other image bytes and provenance stay unchanged.
+For a rod-and-brace update, use `--update-rods` with those revision options. It renders only the four rods and two nominal 10 mm braces, then creates their six thumbnails and one overview. All other image bytes and provenance stay unchanged.
 
-The manifest's top-level provenance belongs to the retained baseline images. Incrementally rendered thumbnails and overviews each carry their own provenance; this is not a full-gallery rerender. edge-x, edge-y, corner-in and corner-out thumbnails source revision: <code>ba287aa1<wbr>3c6145ca<wbr>5270ec86<wbr>7730e4ae<wbr>a58a17f8</code>. Generator tree: <code>741fec25<wbr>929f7cf6<wbr>c540a0c1<wbr>59797274<wbr>b3e5e332</code>. Workbench revision: <code>d28b5e1b<wbr>97fc251d<wbr>dbc4ed96<wbr>7cc163f2<wbr>cb4656b0</code>.
+The manifest's top-level provenance belongs to the retained baseline images. Incrementally rendered thumbnails and overviews each carry their own provenance; this is not a full-gallery rerender. Rod and brace update source revision: <code>ff60ac12<wbr>22fb22a2<wbr>c592903b<wbr>9ad904c6<wbr>bcb5e088</code>. Generator tree: <code>9154f3d7<wbr>a39a1a12<wbr>fd53df81<wbr>9a96c3c9<wbr>35d9ac81</code>. Workbench revision: <code>96fe6a1a<wbr>50df362e<wbr>f5785e75<wbr>12812596<wbr>98df5339</code>.
 
 A clean render checks the picture and source inventory; it doesn't prove print quality or fit.
