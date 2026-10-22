@@ -151,21 +151,27 @@ def build(source, output, jobs):
 
 
 def guard(args):
-    base = git(ROOT, "merge-base", args.base, "HEAD").decode().strip()
+    head = git(ROOT, "rev-parse", "HEAD").decode().strip()
+    if git(ROOT, "diff", "--name-only", head).strip():
+        raise ValueError("commit source changes before running the publish guard")
+    base = git(ROOT, "merge-base", args.base, head).decode().strip()
+    recorded_environment = environment(ROOT)
     args.output.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="publish-", dir=args.output) as temporary:
         scratch = Path(temporary)
-        source = scratch / "base-source"
-        source.mkdir()
-        with tarfile.open(fileobj=io.BytesIO(git(ROOT, "archive", base))) as archive:
-            archive.extractall(source, filter="data")
-        build(source, scratch / "baseline", args.jobs)
-        build(ROOT, scratch / "candidate", args.jobs)
+        for label, commit in (("baseline", base), ("candidate", head)):
+            source = scratch / f"{label}-source"
+            source.mkdir()
+            with tarfile.open(fileobj=io.BytesIO(git(ROOT, "archive", commit))) as archive:
+                archive.extractall(source, filter="data")
+            build(source, scratch / label, args.jobs)
         changes = compare(scratch / "baseline", scratch / "candidate")
+        if recorded_environment != environment(ROOT):
+            raise ValueError("dependencies changed during the publish guard; rerun it")
         report = {
             "base": base,
-            "head": git(ROOT, "rev-parse", "HEAD").decode().strip(),
-            "environment": environment(ROOT),
+            "head": head,
+            "environment": recorded_environment,
             "baseline": fingerprints(scratch / "baseline"),
             "candidate": fingerprints(scratch / "candidate"),
             "changes": changes,
@@ -173,7 +179,10 @@ def guard(args):
         write_json(args.output / "report.json", report)
         validate_inventory(report["baseline"])
         validate_inventory(report["candidate"])
-    print(f"{len(changes)} changed deliverables; report: {args.output / 'report.json'}")
+    print(
+        f"{base}..{head}: {len(changes)} changed deliverables; "
+        f"report: {args.output / 'report.json'}"
+    )
     return 1 if changes else 0
 
 

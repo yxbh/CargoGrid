@@ -3,9 +3,12 @@
 import copy
 import io
 import json
-from zipfile import ZipFile
+import tarfile
+from types import SimpleNamespace
+from zipfile import ZipFile, ZipInfo
 
 import ci_tests
+import publish_guard
 import pytest
 from publish_guard import build, compare, manifest_changes, merge_fingerprints
 from test_selection import FORMAT_VERSION, digest, environment, load_map, write_json
@@ -242,6 +245,66 @@ def test_publish_source_isolation_uses_each_archived_source_not_the_editable_ins
         output = tmp_path / f"{label}-output"
         build(source, output, 1)
         assert (output / "source.txt").read_text() == label
+
+
+@pytest.mark.parametrize("environment_changed", [False, True])
+def test_publish_guard_snapshots_both_commits_and_rejects_dependency_drift(
+    tmp_path, monkeypatch, environment_changed
+):
+    source = tmp_path / "source.py"
+    source.write_text("committed")
+    state = {"head": "head-before", "built": 0}
+
+    def git(root, *arguments):
+        if arguments[0] == "rev-parse":
+            return state["head"].encode()
+        if arguments[0] == "diff":
+            return b"source.py" if state["built"] else b""
+        if arguments[0] == "merge-base":
+            return b"base"
+        assert arguments[0] == "archive"
+        assert arguments[1] in {"base", "head-before"}
+        archive = io.BytesIO()
+        with tarfile.open(fileobj=archive, mode="w") as packed:
+            member = tarfile.TarInfo("source.py")
+            member.size = len(b"committed")
+            packed.addfile(member, io.BytesIO(b"committed"))
+        return archive.getvalue()
+
+    def build(source, output, jobs):
+        output.mkdir()
+        content = (source / "source.py").read_text()
+        for index in range(24):
+            with ZipFile(output / f"variant-{index}.3mf", "w") as archive:
+                archive.writestr(ZipInfo("payload"), content)
+            write_json(output / f"variant-{index}.manifest.json", {"source": content})
+        state["built"] += 1
+        (tmp_path / "source.py").write_text("edits during the build")
+        state["head"] = "head-after"
+
+    monkeypatch.setattr(publish_guard, "ROOT", tmp_path)
+    monkeypatch.setattr(publish_guard, "git", git)
+    monkeypatch.setattr(publish_guard, "build", build)
+    monkeypatch.setattr(
+        publish_guard,
+        "environment",
+        lambda root: {"changed": environment_changed and state["built"] == 2},
+    )
+    output = tmp_path / "report"
+    arguments = SimpleNamespace(base="origin/main", output=output, jobs=1)
+    if environment_changed:
+        with pytest.raises(ValueError, match="dependencies changed"):
+            publish_guard.guard(arguments)
+        assert not (output / "report.json").exists()
+    else:
+        assert publish_guard.guard(arguments) == 0
+        report = json.loads((output / "report.json").read_text())
+        assert report["head"] == "head-before"
+        assert report["base"] == "base"
+        assert not report["changes"]
+    with pytest.raises(ValueError, match="commit source changes"):
+        publish_guard.guard(arguments)
+    assert state["built"] == 2
 
 
 def test_duration_gate_applies_to_portable_cases_without_reclassifying_slow_cases(
