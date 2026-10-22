@@ -23,6 +23,7 @@ from cargo_grid.cross_posts import (
     peg_sites_accepted,
     plan_face,
     tip_centers,
+    tip_peg_diameter_mm,
 )
 from cargo_grid.interfaces import make_plug, x_profile
 from cargo_grid.jobs import Design
@@ -128,13 +129,17 @@ def test_arm_faces_sit_seven_mm_from_the_grid_line_and_lean_in_at_the_top(design
 
 
 @pytest.mark.parametrize("arms", ARM_LAYOUTS)
-def test_pegs_sit_on_the_half_unit_hole_lattice(designs, arms):
+def test_pegs_sit_on_the_half_unit_hole_lattice_with_looser_tips(designs, arms):
     spec = CrossPost(arms)
     faces = section(designs[arms, "pegs", 60.0].shape, section_by=Plane.XY.offset(-6)).faces()
-    assert sorted((round(f.center().X, 5), round(f.center().Y, 5)) for f in faces) == sorted(
-        (x, y) for x, y, _ in peg_centers(spec)
-    )
-    assert [face.area for face in faces] == pytest.approx([pi * 25] * len(faces), rel=1e-6)
+    pegs = {(round(f.center().X, 5), round(f.center().Y, 5)): f.area for f in faces}
+    assert sorted(pegs) == sorted((x, y) for x, y, _ in peg_centers(spec))
+    # The centre peg is the nominal 10 mm hole size; tips leave 0.15 mm a side.
+    assert pegs.pop((0, 0)) == pytest.approx(pi * 5**2, rel=1e-6)
+    assert list(pegs.values()) == pytest.approx([pi * 4.85**2] * len(pegs), rel=1e-6)
+    assert tip_peg_diameter_mm(spec) == pytest.approx(9.7)
+    assert tip_peg_diameter_mm(CrossPost(arms, peg_diameter_mm=10.2)) == pytest.approx(9.9)
+    assert tip_peg_diameter_mm(CrossPost(arms, "x-plug")) is None
 
 
 @pytest.mark.parametrize("arms", ARM_LAYOUTS)

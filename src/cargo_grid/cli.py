@@ -623,7 +623,7 @@ def parser() -> argparse.ArgumentParser:
                 "--peg-diameter-mm",
                 type=_positive_mm,
                 metavar="MM",
-                help="rod or peg-mounted cross-post mounting peg diameter, not shaft diameter; defaults to 10 mm",
+                help="rod mounting peg diameter, not shaft diameter, or a peg-mounted cross post's centre peg (its tip pegs are 0.3 mm smaller); defaults to 10 mm",
             )
             p.add_argument(
                 "--post-arms",

@@ -12,7 +12,9 @@ mat right up to the post instead of riding up on a plate. Two mounts are availab
   centre, which is the full round-hole pattern's spacing, so the post fits at every half-unit
   point: cell corners, edge midpoints and over X sockets, where the centre peg only stands in the
   open socket and the tip pegs hold the post. That is twice as many positions along each grid
-  line as an X-plug post.
+  line as an X-plug post. The centre peg is the nominal hole size; the tip pegs leave a gap of
+  0.15 mm a side, about the X plug's 0.14 mm lobe-tip gap, so they locate the post without
+  several snug pegs fighting each other across a tile seam.
 - ``x-plug`` uses the shared X plug under the centre, for tiles without round holes. It fits over
   X sockets only.
 
@@ -58,12 +60,17 @@ LEAD_IN_INSET_MM = 3.0
 LEAD_IN_HEIGHT_MM = 12.0
 MIN_PEG_DIAMETER_MM = 9.0
 MAX_PEG_DIAMETER_MM = 10.5
+# Tip pegs only locate the post; this gap per side is about the X plug's 0.14 mm lobe-tip gap.
+TIP_PEG_CLEARANCE_MM = 0.15
 PLUG_ROOT_RADIUS_MM = 1.0
 
 
 @dataclass(frozen=True)
 class CrossPost:
-    """One post. ``peg_diameter_mm`` applies to pegs only and defaults to the 10 mm hole size."""
+    """One post. ``peg_diameter_mm`` is the centre peg, defaulting to the 10 mm hole size.
+
+    Tip pegs are ``2 * TIP_PEG_CLEARANCE_MM`` smaller. X-plug posts have no pegs.
+    """
 
     arms: Literal["cross", "tee", "corner", "x"] = "cross"
     mount: Literal["pegs", "x-plug"] = "pegs"
@@ -230,11 +237,17 @@ def _body(spec: CrossPost) -> Part:
     return result
 
 
+def tip_peg_diameter_mm(spec: CrossPost) -> float | None:
+    if spec.peg_diameter_mm is None:
+        return None
+    return spec.peg_diameter_mm - 2 * TIP_PEG_CLEARANCE_MM
+
+
 def _pegs(spec: CrossPost) -> list[Solid]:
-    radius = spec.peg_diameter_mm / 2
     depth = peg_insertion_mm(spec.interface)
     pegs = []
-    for x, y, _ in peg_centers(spec):
+    for index, (x, y, _) in enumerate(peg_centers(spec)):
+        radius = (spec.peg_diameter_mm if index == 0 else tip_peg_diameter_mm(spec)) / 2
         pegs.append(
             Solid.make_cylinder(radius, depth - PEG_LEAD_IN_MM).moved(
                 Location((x, y, PEG_LEAD_IN_MM - depth))
@@ -311,6 +324,8 @@ def cross_post_datums(spec: CrossPost) -> dict:
             ),
             peg_centers=peg_centers(spec),
             peg_diameter_mm=spec.peg_diameter_mm,
+            tip_peg_diameter_mm=tip_peg_diameter_mm(spec),
+            tip_peg_clearance_per_side_mm=TIP_PEG_CLEARANCE_MM,
             peg_insertion_mm=peg_insertion_mm(interface),
             peg_lead_in_mm=PEG_LEAD_IN_MM,
             tip_peg_distance_mm=tip_distance_mm(spec),
