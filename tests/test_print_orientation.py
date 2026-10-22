@@ -82,10 +82,13 @@ def test_bambu_mesh_has_broad_bed_contact_and_recorded_transform(
     from build123d import GeomType, Location
 
     design = accessory_design(Accessory(family, nx=nx, ny=ny, height=height))
+    posed = design.bambu_shape
+    bounds = posed.bounding_box()
+    posed_size = tuple(bounds.size)
     path = tmp_path / "job.3mf"
     result = write_3mf(Job([design], BuildVolume(350, 320, 325), "part"), path, bambu=BAMBU)
     item = result["plates"][0]["items"][0]
-    assert item["size_mm"] == pytest.approx(design.bambu_size)
+    assert item["size_mm"] == pytest.approx(posed_size)
     assert ("object_settings" in item) == (family == "vertical-stop")
     transform = item["source_to_project_transform"]
     assert transform["rotation_x_degrees"] == angle and transform["applied_to_mesh"]
@@ -104,26 +107,24 @@ def test_bambu_mesh_has_broad_bed_contact_and_recorded_transform(
         vertices = vertices @ placement[:9].reshape(3, 3) + placement[9:]
     assert vertices[:, 2].min() >= -1e-5
     assert vertices[:, 2].min() == pytest.approx(0, abs=1e-5)
-    mesh_points, _, mesh_report = checked_mesh(design.bambu_shape)
+    mesh_points, _, mesh_report = checked_mesh(posed)
     expected_top = mesh_points[:, 2].max() + transform["translation_mm"][2]
     assert vertices[:, 2].max() == pytest.approx(expected_top, abs=1e-5)
-    assert abs(vertices[:, 2].max() - design.bambu_size[2]) <= mesh_report["chord_tolerance_mm"]
+    assert abs(vertices[:, 2].max() - posed_size[2]) <= mesh_report["chord_tolerance_mm"]
     bed = vertices[triangles]
     bed = bed[np.max(np.abs(bed[:, :, 2]), axis=1) < 1e-5]
     area = np.linalg.norm(np.cross(bed[:, 1] - bed[:, 0], bed[:, 2] - bed[:, 0]), axis=1).sum() / 2
-    posed = design.bambu_shape
-    posed = posed.moved(Location(-posed.bounding_box().min))
+    posed = posed.moved(Location(-bounds.min))
     expected_area = sum(
         f.area
         for f in posed.faces()
-        if f.geom_type == GeomType.PLANE
-        and f.normal_at().Z < -0.99
-        and abs(f.bounding_box().min.Z) < 1e-5
-        and abs(f.bounding_box().max.Z) < 1e-5
+        if f.geom_type == GeomType.PLANE and f.normal_at().Z < -0.99
+        for face_bounds in [f.bounding_box()]
+        if abs(face_bounds.min.Z) < 1e-5 and abs(face_bounds.max.Z) < 1e-5
     )
     assert area == pytest.approx(expected_area, abs=0.002)
     if family == "vertical-tile-bracket":
-        assert area >= 0.65 * design.bambu_size[0] * design.bambu_size[1]
+        assert area >= 0.65 * posed_size[0] * posed_size[1]
     else:
         assert area > 1000 * nx
 
@@ -154,23 +155,23 @@ def test_shallow_brackets_apply_side_down_y_rotation_and_record_it(nx, tmp_path)
         "enable_support": "1",
         "support_type": "normal(auto)",
     }
-    posed = design.bambu_shape.moved(Location(-design.bambu_shape.bounding_box().min))
+    posed = design.bambu_shape
+    posed = posed.moved(Location(-posed.bounding_box().min))
     bed_area = sum(
         face.area
         for face in posed.faces()
-        if face.geom_type == GeomType.PLANE
-        and face.normal_at().Z < -0.99
-        and abs(face.bounding_box().min.Z) < 1e-5
-        and abs(face.bounding_box().max.Z) < 1e-5
+        if face.geom_type == GeomType.PLANE and face.normal_at().Z < -0.99
+        for bounds in [face.bounding_box()]
+        if abs(bounds.min.Z) < 1e-5 and abs(bounds.max.Z) < 1e-5
     )
     assert bed_area == pytest.approx(3136.052586000847, abs=0.002)
 
 
-def _section_area(shape, z, slab=0.001):
+def _section_area(shape, z, slab=0.001, *, bounds=None):
     """Horizontal cross-section area at height z, from a thin slab intersection."""
     from build123d import Box, Location
 
-    box = shape.bounding_box()
+    box = shape.bounding_box() if bounds is None else bounds
     cutter = Box(box.size.X + 2, box.size.Y + 2, slab).moved(
         Location((box.center().X, box.center().Y, z))
     )
@@ -209,10 +210,11 @@ def test_rail_ends_print_on_their_flat_bearing_face(variant, tmp_path):
     assert design.bambu_size == pytest.approx(design.size)
     posed = design.bambu_shape
     posed = posed.moved(Location(-posed.bounding_box().min))
-    height = posed.bounding_box().size.Z
+    bounds = posed.bounding_box()
+    height = bounds.size.Z
     first_layer = 0.2
     heights = (first_layer, *(height * k / 20 for k in range(1, 20)), height - first_layer)
-    sections = {z: _section_area(posed, z) for z in heights}
+    sections = {z: _section_area(posed, z, bounds=bounds) for z in heights}
     largest = max(sections.values())
     # The flip maps z to height - z, so height - 0.2 is the model-orientation first layer,
     # where the sloped underside leaves only 30-50% of the largest section on the bed.

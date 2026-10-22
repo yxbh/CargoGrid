@@ -233,29 +233,11 @@ def _blocked(
     )
 
 
-def _placement_geometries(
-    footprints: list[ProjectedFootprint],
-    placements: dict[int, tuple[float, float, int]],
-) -> list[BaseGeometry]:
-    return [
-        affinity.translate(
-            oriented_footprint(footprint, placements[index][2]).geometry,
-            placements[index][0],
-            placements[index][1],
-        )
-        for index, footprint in enumerate(footprints)
-    ]
-
-
 def _clearance_key(
-    geometries: list[BaseGeometry],
+    pairs: dict[tuple[int, int], float],
     target: float,
 ) -> tuple[tuple[float, ...], tuple[float, int, int]]:
-    distances = sorted(
-        (first.distance(second), index, other_index)
-        for index, first in enumerate(geometries)
-        for other_index, second in enumerate(geometries[index + 1 :], index + 1)
-    )
+    distances = sorted((distance, first, second) for (first, second), distance in pairs.items())
     return tuple(min(distance, target) for distance, _, _ in distances), distances[0]
 
 
@@ -274,9 +256,21 @@ def _refine_clearance(
 ) -> dict[int, tuple[float, float, int]]:
     if len(placements) < 2:
         return placements
+    oriented = [
+        oriented_footprint(footprint, placements[index][2]).geometry
+        for index, footprint in enumerate(footprints)
+    ]
+    geometries = [
+        affinity.translate(geometry, placements[index][0], placements[index][1])
+        for index, geometry in enumerate(oriented)
+    ]
+    pairs = {
+        (first, second): geometry.distance(geometries[second])
+        for first, geometry in enumerate(geometries)
+        for second in range(first + 1, len(geometries))
+    }
     for _ in range(max_refinements + 1):
-        geometries = _placement_geometries(footprints, placements)
-        baseline, minimum = _clearance_key(geometries, target)
+        baseline, minimum = _clearance_key(pairs, target)
         if minimum[0] >= target - tolerance:
             return placements
         options = []
@@ -305,15 +299,22 @@ def _refine_clearance(
                     )
                 ):
                     continue
-                key, moved_minimum = _clearance_key(
-                    _placement_geometries(footprints, moved),
-                    target,
-                )
+                geometry = affinity.translate(oriented[index], x + dx, y + dy)
+                moved_pairs = dict(pairs)
+                for first, second in pairs:
+                    if first == index:
+                        moved_pairs[first, second] = geometry.distance(geometries[second])
+                    elif second == index:
+                        moved_pairs[first, second] = geometries[first].distance(geometry)
+                key, moved_minimum = _clearance_key(moved_pairs, target)
                 if key > baseline:
-                    options.append((key, moved_minimum[0], moved))
+                    options.append((key, moved_minimum[0], moved, index, geometry, moved_pairs))
         if not options:
             break
-        placements = max(options, key=lambda option: (option[0], option[1]))[2]
+        best = max(options, key=lambda option: (option[0], option[1]))
+        placements = best[2]
+        geometries[best[3]] = best[4]
+        pairs = best[5]
     raise ValueError(f"could not refine projected-footprint placement to {target:g} mm clearance")
 
 

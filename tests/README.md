@@ -30,7 +30,8 @@ The CLI resolves a `Tile`, `Accessory`, `Rod` or `RodBrace` before calling a geo
 
 ## Geometry checks
 
-- Query geometry near the feature. Clip shapes to a small box around a hole before classifying points (`_local_assembly_contains` in `test_edge_variants.py`), and use `local_geometry.bounded_distance` for contact checks. Skip shapes whose bounding boxes can't reach the region. Point queries and distances against a whole tile can take seconds each.
+- Query geometry near the feature. Clip shapes to a small box around a hole before classifying points (`_local_assembly_contains` in `test_edge_variants.py`), and use `local_geometry.bounded_distance` for contact checks. Skip shapes whose bounding boxes can't reach the region. Prepare exact bounds and classifiers once after placing the shapes; never retain them across a move or geometry change. Point queries and distances against a whole tile can take seconds each.
+- Reuse a clipped pair for distance and intersection-volume checks: its region retains the whole intersection and every pair of points within the chosen distance margin. Keep the comparison against whole-solid queries. Reuse unchanged bounds, reference sections and STEP source measurements within a case without dropping sample points, section heights or exports.
 - Avoid whole-solid witness Booleans when a clipped or local check answers the same question, and keep a small test showing that the local check agrees with the whole-solid one.
 - Share an expensive input/export before splitting its assertions by responsibility. Splitting must not multiply construction or export work.
 - Whole catalogue and complete-package checks belong in integration or `slow`, not in default contracts. Reuse a read-only job when an export checks that same job.
