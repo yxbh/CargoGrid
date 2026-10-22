@@ -3,8 +3,9 @@
 Each variant is one ordinary ``cargo-grid`` command for every nozzle in
 the selected printer's profiles: the catalogue and the Zeekr 7X expansion set, with and
 without the 1.92 mm solid bottom and with auto roof support (PETG and a PLA interface), and
-the pull-handle set and the adjustable-stop kit with PETG and a PLA support interface. The
-handles have no tile-edge roofs or floor; both inherit the global Auto support and PLA interface.
+the pull-handle set, the adjustable-stop kit and the cross-post set with PETG and a PLA support
+interface. The handles and posts have no tile-edge roofs or floor; they inherit the global Auto
+support and PLA interface.
 Every project is generated in a temporary folder first; the
 output folder only receives ``<name>.3mf`` and ``<name>.manifest.json`` after every variant
 has succeeded. Names put underscores between their parts and hyphens inside a part, for
@@ -27,7 +28,8 @@ with ``--printer h2d --printer x2d`` to build both.
 
     uv run python tools/makerworld_exports.py --output FOLDER [--replace] [--jobs N]
         [--printer h2d|x2d ...]
-        [--set Full-Catalogue|Zeekr-7X-Expansion-Set|Pull-Handle-Set|Adjustable-Stop ...]
+        [--set Full-Catalogue|Zeekr-7X-Expansion-Set|Pull-Handle-Set|Adjustable-Stop|
+               Cross-Post-Set ...]
         [--bambu-studio /Applications/BambuStudio.app/Contents/MacOS/BambuStudio]
 """
 
@@ -54,7 +56,9 @@ SOLID_BOTTOM_MM = 1.92
 SETS = ((("catalogue",), "Full-Catalogue"), (("extras", "zeekr-7x"), "Zeekr-7X-Expansion-Set"))
 HANDLE_SET = (("extras", "pull-handle"), "Pull-Handle-Set")
 ADJUSTABLE_STOP_SET = (("extras", "adjustable-stop"), "Adjustable-Stop")
-SET_NAMES = tuple(title for _, title in (*SETS, HANDLE_SET, ADJUSTABLE_STOP_SET))
+CROSS_POST_SET = (("extras", "cross-post"), "Cross-Post-Set")
+EXTRA_SETS = (HANDLE_SET, ADJUSTABLE_STOP_SET, CROSS_POST_SET)
+SET_NAMES = tuple(title for _, title in (*SETS, *EXTRA_SETS))
 SUFFIXES = {"job.3mf": ".3mf", "manifest.json": ".manifest.json"}
 PROCESS_MEMORY_BYTES = 3 * 1024**3
 
@@ -140,7 +144,7 @@ def variants(printers: tuple[str, ...] = ("h2d",)) -> list[Variant]:
     for key in dict.fromkeys(printers):
         printer = PRINTERS[key]
         for nozzle, profiles in sorted(printer.profiles.items(), reverse=True):
-            for command, title in (*SETS, HANDLE_SET, ADJUSTABLE_STOP_SET):
+            for command, title in (*SETS, *EXTRA_SETS):
                 tiled_set = (command, title) in SETS
                 for bottom in (0.0, SOLID_BOTTOM_MM) if tiled_set else (0.0,):
                     floor = f"_Solid-Bottom-{bottom:g}mm" if bottom else ""
