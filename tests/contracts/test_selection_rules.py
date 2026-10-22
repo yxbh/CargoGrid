@@ -270,6 +270,92 @@ def test_definition_constants_reach_callers_when_a_decorator_replaces_the_origin
     assert "tests/test_body.py::test_body" in selection(mapping, current)["selected"]
 
 
+@pytest.mark.parametrize(
+    "change", ("decorator-body", "decorator-constant", "module-factory", "module-factory-chain")
+)
+def test_definition_time_calls_select_users_without_runtime_body_coverage(mapping, change):
+    if change.startswith("module-factory"):
+        factory = "\ndef value_factory():\n    return 10\n"
+        if change.endswith("chain"):
+            factory = "\ndef leaf():\n    return 10\ndef value_factory():\n    return leaf()\n"
+        source = SOURCES["src/example/body.py"] + factory + "CAPTURED = value_factory()\n"
+        test = "from example.body import CAPTURED\ndef test_body():\n    assert CAPTURED\n"
+        current = source.replace("return 10", "return 11")
+    else:
+        source = SOURCES["src/example/body.py"].replace(
+            "def body():",
+            "def replacement(function):\n    return third_party_wrapper(VALUE)\n"
+            "@replacement\ndef body():",
+        )
+        test = SOURCES["tests/test_body.py"]
+        before, after = (
+            ("VALUE = 10", "VALUE = 11")
+            if change == "decorator-constant"
+            else ("third_party_wrapper(VALUE)", "third_party_wrapper(VALUE + 1)")
+        )
+        current = source.replace(before, after)
+    original = {**SOURCES, "src/example/body.py": source, "tests/test_body.py": test}
+    mapping["snapshot"] = state(original)
+    mapping["tests"]["tests/test_body.py::test_body"]["functions"] = {
+        "tests/test_body.py": ["test_body"]
+    }
+    assert (
+        "tests/test_body.py::test_body"
+        in selection(mapping, {**original, "src/example/body.py": current})["selected"]
+    )
+
+
+def test_body_changes_follow_import_aliases_without_selecting_unrelated_factory_branches(mapping):
+    original = {
+        **SOURCES,
+        "src/example/factory.py": (
+            "from .body import body as make_body, unrelated\nCURRENT = unrelated()\n"
+            "def factory(kind):\n    return make_body() if kind == 'body' else 1\n"
+        ),
+    }
+    mapping["snapshot"] = state(original)
+    mapping["tests"]["tests/test_unrelated.py::test_other"]["functions"][
+        "src/example/factory.py"
+    ] = ["factory"]
+    current = {
+        **original,
+        "src/example/body.py": original["src/example/body.py"].replace(
+            "return cached()", "return cached() + 1"
+        ),
+    }
+    result = selection(mapping, current)
+    assert "tests/test_body.py::test_body" in result["selected"]
+    assert "tests/test_unrelated.py::test_other" not in result["selected"]
+
+
+@pytest.mark.parametrize("entrypoint", ("guard", "module"))
+def test_runtime_entrypoints_are_not_import_time_initializers(mapping, entrypoint):
+    entry = (
+        "if __name__ == '__main__':\n    body()\n"
+        if entrypoint == "guard"
+        else "from .body import body\nraise SystemExit(body())\n"
+    )
+    original = {
+        **SOURCES,
+        **(
+            {"src/example/body.py": SOURCES["src/example/body.py"] + entry}
+            if entrypoint == "guard"
+            else {"src/example/__main__.py": entry}
+        ),
+    }
+    mapping["snapshot"] = state(original)
+    current = {
+        **original,
+        "src/example/body.py": original["src/example/body.py"].replace(
+            "return cached()", "return cached() + 1"
+        ),
+    }
+    result = selection(mapping, current)
+    assert result["mode"] == "selected"
+    assert "tests/test_body.py::test_body" in result["selected"]
+    assert "tests/test_unrelated.py::test_other" not in result["selected"]
+
+
 def test_property_getter_and_setter_both_contribute_to_the_function_digest():
     source = (
         "class Value:\n"

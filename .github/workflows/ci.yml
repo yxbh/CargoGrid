@@ -23,7 +23,7 @@ on:
         type: string
         default: ""
       benchmark_case:
-        description: Measurement only (docs/test/cli/tower/stop/ramp/handle/rod-brace/adjustable-stop/planner/assembly/core/infrastructure); not merge qualification
+        description: Measurement only (docs/test/cli/tower/stop/ramp/handle/rod-brace/adjustable-stop/planner/export/packing/assembly/core/infrastructure); not merge qualification
         type: string
         default: ""
       benchmark_run:

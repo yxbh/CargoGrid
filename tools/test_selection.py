@@ -21,7 +21,7 @@ from collections import Counter, defaultdict
 from copy import deepcopy
 from pathlib import Path
 
-FORMAT_VERSION = 2
+FORMAT_VERSION = 3
 ROOT = Path(__file__).resolve().parents[1]
 INFRASTRUCTURE = {
     "tests/selection.py",
@@ -37,16 +37,18 @@ INFRASTRUCTURE = {
 CONFIG_SECTIONS = ("project", "dependency-groups", "build-system")
 BENCHMARK_CASES = {
     "docs": ("README.md", None),
-    "test": ("tests/test_ramp.py", None),
+    "test": ("tests/test_ramp.py", "test_ramp_width_run_rise_rounding_step_and_mesh"),
     "cli": ("src/cargo_grid/cli.py", "parser"),
-    "tower": ("src/cargo_grid/plates.py", "_bambu_min_tower_depth"),
+    "tower": ("src/cargo_grid/plates.py", "dual_nozzle_tower_reservation"),
     "stop": ("src/cargo_grid/accessories.py", "_vertical_stop"),
     "ramp": ("src/cargo_grid/accessories.py", "_ramp"),
-    "handle": ("src/cargo_grid/pull_handles.py", "make_pull_handle"),
+    "handle": ("src/cargo_grid/pull_handles.py", "_body"),
     "rod-brace": ("src/cargo_grid/rods.py", "make_rod_brace"),
-    "adjustable-stop": ("src/cargo_grid/adjustable_stop.py", "_make_pusher_body"),
+    "adjustable-stop": ("src/cargo_grid/adjustable_stop.py", "_make_pusher"),
     "planner": ("src/cargo_grid/plates.py", "plan_plates"),
-    "assembly": ("src/cargo_grid/vehicles/zeekr_7x_contours.py", "_south_ramp_shape"),
+    "export": ("src/cargo_grid/export.py", "_write_3mf"),
+    "packing": ("src/cargo_grid/footprints.py", "_pack_order"),
+    "assembly": ("src/cargo_grid/vehicles/zeekr_7x_contours.py", "_south_design"),
     "core": ("src/cargo_grid/tiles.py", "make_tile"),
     "infrastructure": ("tests/conftest.py", None),
 }
@@ -138,8 +140,17 @@ def defined_names(node):
 
 def analyse(source, path):
     tree = ast.parse(source)
-    functions, items, imports = {}, [], set()
+    functions, items, imports, eager = {}, [], set(), set()
     module = module_name(path)
+
+    def record_eager(node):
+        for child in ast.walk(node):
+            if isinstance(child, ast.Call):
+                eager.update(references(child))
+        for decorator in getattr(node, "decorator_list", []):
+            eager.update(references(decorator))
+        for base in getattr(node, "bases", []):
+            eager.update(references(base))
 
     def add_function(node, name):
         signature = digest(ast.dump(node).encode())
@@ -154,6 +165,7 @@ def analyse(source, path):
         ]
         definition = digest(ast.dump(header).encode())
         definition_refs = references(header)
+        record_eager(header)
         if name in functions:
             signature = digest((functions[name]["digest"] + signature).encode())
             names.update(functions[name]["refs"])
@@ -186,8 +198,10 @@ def analyse(source, path):
                         "digest": digest((prefix + ast.dump(header)).encode()),
                         "names": [owner or node.name],
                         "refs": sorted(references(header)),
+                        "bindings": {},
                     }
                 )
+                record_eager(header)
                 walk(node.body, prefix + node.name + ".", owner or node.name)
             elif not (
                 isinstance(node, ast.Expr)
@@ -199,8 +213,22 @@ def analyse(source, path):
                         "digest": digest((prefix + ast.dump(node)).encode()),
                         "names": [owner] if owner else sorted(defined_names(node)),
                         "refs": sorted(references(node)),
+                        "bindings": {
+                            alias.asname or alias.name.split(".")[0]: sorted(
+                                references(ast.Import(names=[alias]))
+                            )
+                            for alias in node.names
+                        }
+                        if isinstance(node, (ast.Import, ast.ImportFrom))
+                        else {},
                     }
                 )
+                if not path.endswith("/__main__.py") and not (
+                    isinstance(node, ast.If)
+                    and ast.unparse(node.test)
+                    in {"__name__ == '__main__'", "'__main__' == __name__"}
+                ):
+                    record_eager(node)
 
     def nested(node, prefix):
         for child in ast.iter_child_nodes(node):
@@ -226,7 +254,12 @@ def analyse(source, path):
             )
             imports.add(base)
             imports.update(f"{base}.{alias.name}".strip(".") for alias in node.names)
-    return {"functions": functions, "items": items, "imports": sorted(imports)}
+    return {
+        "functions": functions,
+        "items": items,
+        "imports": sorted(imports),
+        "eager": sorted(eager),
+    }
 
 
 def source_files(root, ref=None):
@@ -293,6 +326,7 @@ def valid_snapshot(value):
             not isinstance(analysis.get("functions"), dict)
             or not isinstance(analysis.get("items"), list)
             or not strings(analysis.get("imports"))
+            or not strings(analysis.get("eager"))
         ):
             return False
         for item in [*analysis["functions"].values(), *analysis["items"]]:
@@ -307,7 +341,14 @@ def valid_snapshot(value):
             for function in analysis["functions"].values()
         ):
             return False
-        if not all(strings(item.get("names")) for item in analysis["items"]):
+        if not all(
+            strings(item.get("names"))
+            and isinstance(item.get("bindings"), dict)
+            and all(
+                isinstance(name, str) and strings(refs) for name, refs in item["bindings"].items()
+            )
+            for item in analysis["items"]
+        ):
             return False
     return True
 
@@ -414,6 +455,53 @@ def dependencies(mapping):
     return records
 
 
+def visible_from(path, analysis, module):
+    aliases = {module}
+    if module.startswith(("tests.", "tools.")):
+        aliases.update((module.split(".", 1)[1], module.rsplit(".", 1)[-1]))
+    return module_name(path) == module or any(
+        name == alias or name.startswith(alias + ".")
+        for name in analysis["imports"]
+        for alias in aliases
+    )
+
+
+def dependent_names(item, names):
+    if item["bindings"]:
+        return {name for name, refs in item["bindings"].items() if names.intersection(refs)}
+    return set(item["names"]) if names.intersection(item["refs"]) else set()
+
+
+def definition_time_dependency(old, new, affected):
+    """Import/default/decorator calls lack a test context; qualify them with a full run."""
+    pending, seen = defaultdict(set), defaultdict(set)
+    for path, name in affected:
+        if name != "<module>":
+            pending[module_name(path)].update((name.split(".")[0], name.split(".")[-1]))
+    while pending:
+        module, names = pending.popitem()
+        names -= seen[module]
+        if not names:
+            continue
+        seen[module].update(names)
+        for path in old["python"].keys() | new["python"].keys():
+            for analysis in (old["python"].get(path), new["python"].get(path)):
+                if not analysis:
+                    continue
+                if "error" in analysis:
+                    return True
+                if not visible_from(path, analysis, module):
+                    continue
+                if names.intersection(analysis["eager"]):
+                    return True
+                for name, function in analysis["functions"].items():
+                    if names.intersection(function["refs"]):
+                        pending[module_name(path)].update((name.split(".")[0], name.split(".")[-1]))
+                for item in analysis["items"]:
+                    pending[module_name(path)].update(dependent_names(item, names))
+    return False
+
+
 def affected_functions(old, new, changed):
     affected = set()
     pending = defaultdict(set)
@@ -447,9 +535,6 @@ def affected_functions(old, new, changed):
         if not names:
             continue
         seen[module].update(names)
-        module_aliases = {module}
-        if module.startswith(("tests.", "tools.")):
-            module_aliases.update((module.split(".", 1)[1], module.rsplit(".", 1)[-1]))
         for path in old["python"].keys() | new["python"].keys():
             analyses = [
                 value for value in (old["python"].get(path), new["python"].get(path)) if value
@@ -457,12 +542,7 @@ def affected_functions(old, new, changed):
             for analysis in analyses:
                 if "error" in analysis:
                     return None
-                visible = module_name(path) == module or any(
-                    name == alias or name.startswith(alias + ".")
-                    for name in analysis["imports"]
-                    for alias in module_aliases
-                )
-                if not visible:
+                if not visible_from(path, analysis, module):
                     continue
                 for name, function in analysis["functions"].items():
                     if names.intersection(function["refs"]):
@@ -470,9 +550,8 @@ def affected_functions(old, new, changed):
                     if names.intersection(function["definition_refs"]):
                         pending[module_name(path)].update((name.split(".")[0], name.split(".")[-1]))
                 for item in analysis["items"]:
-                    if names.intersection(item["refs"]):
-                        pending[module_name(path)].update(item["names"])
-    return affected
+                    pending[module_name(path)].update(dependent_names(item, names))
+    return None if definition_time_dependency(old, new, affected) else affected
 
 
 def select(mapping, current, collection, *, current_environment=None, full_reason=None):
@@ -505,7 +584,7 @@ def select(mapping, current, collection, *, current_environment=None, full_reaso
         full_reason = full_reason or "no dependency map"
     affected = affected_functions(mapping["snapshot"], current, changed) if mapping else set()
     if affected is None:
-        full_reason = "unresolved module side effects or Python syntax"
+        full_reason = "module/definition-time dependencies or Python syntax need a full run"
     if full_reason:
         selected = universe
         reasons["full"].append(full_reason)
@@ -670,13 +749,6 @@ def benchmark_snapshot(mapping, current, current_environment, case):
     changed["files"][path] = digest((current["files"][path] + case).encode())
     if name:
         function = changed["python"][path]["functions"][name]
-        function["digest"] = digest((function["digest"] + case).encode())
-    elif case == "test":
-        function = next(
-            function
-            for name, function in changed["python"][path]["functions"].items()
-            if name.startswith("test_")
-        )
         function["digest"] = digest((function["digest"] + case).encode())
     return changed
 
