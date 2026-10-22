@@ -231,6 +231,24 @@ jobs:
           NOZZLE: ${{ matrix.nozzle }}
           VARIANT: ${{ matrix.name }}
         run: uv run --no-sync python tools/publish_guard.py fingerprints --printer "$PRINTER" --nozzle "$NOZZLE" --variant "$VARIANT" --output ".local/publish/$VARIANT"
+      - name: Diagnose failed native export without recording
+        if: failure()
+        env:
+          PRINTER: ${{ matrix.printer }}
+          VARIANT: ${{ matrix.name }}
+        run: |
+          uv run --no-sync python - <<'PY'
+          import os
+          import sys
+          from pathlib import Path
+          from tempfile import TemporaryDirectory
+          sys.path.insert(0, "tools")
+          from makerworld_exports import generate, variants
+          variant = next(v for v in variants((os.environ["PRINTER"],)) if v.name == os.environ["VARIANT"])
+          print("Repeating the original CLI in a clean process without coverage", flush=True)
+          with TemporaryDirectory(dir=".local") as folder:
+              generate(variant, Path(folder), packing_workers=2)
+          PY
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: publish-${{ matrix.name }}
