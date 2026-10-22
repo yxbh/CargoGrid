@@ -2,7 +2,7 @@
 
 import pytest
 from build123d import Axis, Edge, GeomType, Location, Solid, Wire
-from local_geometry import bounded_distance
+from local_geometry import bounded_distance, clipped_pair
 from OCP.BRepAdaptor import BRepAdaptor_Surface
 from zeekr_assembly import assemble_rear_panel
 
@@ -22,6 +22,9 @@ from cargo_grid.vehicles.zeekr_7x_contours import (
     _crown_coefficients,
     _merged_taper_stations,
     _north_corner_geometry,
+    _profile_face,
+    _ramp_carrier_run_mm,
+    _ramp_raw_tip,
     _side_design,
     _south_design,
     _tail_slope_dy_dx,
@@ -36,6 +39,48 @@ from cargo_grid.vehicles.zeekr_7x_contours import (
 def _placed(design):
     assert len(design.assembly_frames) == 1
     return design.shape.moved(Location(design.assembly_frames[0]))
+
+
+@pytest.mark.parametrize(
+    "x,run,height,y_offset",
+    [
+        (0.0, 50.0, 13.0, 0.0),
+        (-0.0, 50.0, 13.0, 0.0),
+        (240.0, 72.132711096, 13.0, 0.0),
+        (-540.0, 85.0, 13.0, 0.0),
+        (14.3, 100.0, 14.92, 0.0),
+        (0.0, 100.0, 6.0, 1.92),
+        (38.7, 18.3, 18.0, 0.0),
+        (20.0, 60.0, 60.0, 0.0),
+        (3.0, 0.4, 8.0, 0.0),
+        (50.0, 81.64739400638041, 13.0, 0.0),
+        (115.0, 75.6196438890014, 13.0, 0.0),
+        (0.0, 94.63797003325476, 13.0, 0.0),
+        (7.5, 94.54149666252044, 13.0, 0.0),
+    ],
+)
+def test_trial_ramp_solver_preserves_the_wire_fillet_result(x, run, height, y_offset):
+    radius = min(2, max(0.02, run * 0.15))
+    carrier = _ramp_carrier_run_mm(run)
+
+    def extent(tip):
+        face = _profile_face(x, tip, carrier, height, y_offset)
+        nose = max(face.vertices(), key=lambda vertex: vertex.Y)
+        return face.fillet_2d(radius, [nose]).bounding_box().max.Y - y_offset
+
+    low, high = run, run + 4 * height
+    while extent(high) < run:
+        high += max(10, height)
+    for _ in range(48):
+        middle = (low + high) / 2
+        if extent(middle) < run:
+            low = middle
+        else:
+            high = middle
+    expected = (low + high) / 2
+    assert _ramp_raw_tip.__wrapped__(x, run, carrier, height, y_offset, radius).hex() == (
+        expected.hex()
+    )
 
 
 def _intersection_volume(first, second):
@@ -265,8 +310,10 @@ def _assert_bores_clear(design, centers):
 
 
 def _assert_contact_without_overlap(first, second):
-    assert bounded_distance(first, second) < 1e-6
-    assert _intersection_volume(first, second) < 1e-7
+    pair = clipped_pair(first, second)
+    assert pair is not None
+    assert pair[0].distance_to(pair[1]) < 1e-6
+    assert _intersection_volume(*pair) < 1e-7
 
 
 @pytest.fixture(scope="module")

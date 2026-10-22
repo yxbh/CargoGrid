@@ -71,6 +71,7 @@ def seam_shapes(name, thickness, holes):
     raise ValueError(name)
 
 
+@lru_cache(maxsize=None)
 def reference_area(kind, band, thickness, holes):
     """Two tiles meeting on the same seam line with a mirrored band of the same length."""
     t = tile(thickness, holes)
