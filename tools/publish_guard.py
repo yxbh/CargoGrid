@@ -179,7 +179,8 @@ def guard(args):
 
 def record_fingerprints(args):
     import coverage
-    from makerworld_exports import destinations, generate, variants
+    from makerworld_exports import main as makerworld_main
+    from makerworld_exports import variants
 
     args.output.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="fingerprints-", dir=args.output) as temporary:
@@ -187,7 +188,7 @@ def record_fingerprints(args):
         config = scratch / "coverage.ini"
         config.write_text(
             "[run]\ncore = ctrace\nparallel = true\n"
-            "concurrency = multiprocessing\npatch = subprocess, _exit\n"
+            "concurrency = thread, multiprocessing\npatch = subprocess, _exit\n"
             f"data_file = {scratch / '.coverage'}\n"
             f"source =\n    {ROOT / 'src'}\n    {ROOT / 'tools'}\n",
             encoding="utf-8",
@@ -207,14 +208,13 @@ def record_fingerprints(args):
                 raise ValueError(
                     "unexpected authoritative inventory for this printer/nozzle/variant"
                 )
-            for variant in selected:
-                folder = generate(variant, scratch, packing_workers=1)
-                hashes.update(
-                    {
-                        target.name: digest((folder / source).read_bytes())
-                        for source, target in destinations(scratch, variant).items()
-                    }
-                )
+            folder = scratch / "published"
+            folder.mkdir()
+            makerworld_main(
+                ["--printer", args.printer, "--output", str(folder), "--jobs", "1"],
+                _variant_names=tuple(variant.name for variant in selected),
+            )
+            hashes = fingerprints(folder)
         finally:
             measured.stop()
             measured.save()

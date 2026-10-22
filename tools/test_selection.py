@@ -21,7 +21,7 @@ from collections import Counter, defaultdict
 from copy import deepcopy
 from pathlib import Path
 
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
 ROOT = Path(__file__).resolve().parents[1]
 INFRASTRUCTURE = {
     "tests/selection.py",
@@ -144,10 +144,27 @@ def analyse(source, path):
     def add_function(node, name):
         signature = digest(ast.dump(node).encode())
         names = references(node)
+        header = deepcopy(node)
+        header.body = [
+            statement
+            for statement in node.body[:1]
+            if isinstance(statement, ast.Expr)
+            and isinstance(statement.value, ast.Constant)
+            and isinstance(statement.value.value, str)
+        ]
+        definition = digest(ast.dump(header).encode())
+        definition_refs = references(header)
         if name in functions:
             signature = digest((functions[name]["digest"] + signature).encode())
             names.update(functions[name]["refs"])
-        functions[name] = {"digest": signature, "refs": sorted(names)}
+            definition = digest((functions[name]["definition"] + definition).encode())
+            definition_refs.update(functions[name]["definition_refs"])
+        functions[name] = {
+            "digest": signature,
+            "refs": sorted(names),
+            "definition": definition,
+            "definition_refs": sorted(definition_refs),
+        }
 
     def walk(body, prefix="", owner=None):
         for node in body:
@@ -285,6 +302,11 @@ def valid_snapshot(value):
                 or not strings(item.get("refs"))
             ):
                 return False
+        if not all(
+            isinstance(function.get("definition"), str) and strings(function.get("definition_refs"))
+            for function in analysis["functions"].values()
+        ):
+            return False
         if not all(strings(item.get("names")) for item in analysis["items"]):
             return False
     return True
@@ -401,8 +423,10 @@ def affected_functions(old, new, changed):
         if "error" in before or "error" in after:
             return None
         for name in before["functions"].keys() | after["functions"].keys():
-            if before["functions"].get(name) != after["functions"].get(name):
+            first, second = before["functions"].get(name), after["functions"].get(name)
+            if first != second:
                 affected.add((path, name))
+            if not first or not second or first["definition"] != second["definition"]:
                 pending[module_name(path)].update((name.split(".")[0], name.split(".")[-1]))
         first = Counter(item["digest"] for item in before["items"])
         second = Counter(item["digest"] for item in after["items"])
@@ -443,6 +467,8 @@ def affected_functions(old, new, changed):
                 for name, function in analysis["functions"].items():
                     if names.intersection(function["refs"]):
                         affected.add((path, name))
+                    if names.intersection(function["definition_refs"]):
+                        pending[module_name(path)].update((name.split(".")[0], name.split(".")[-1]))
                 for item in analysis["items"]:
                     if names.intersection(item["refs"]):
                         pending[module_name(path)].update(item["names"])

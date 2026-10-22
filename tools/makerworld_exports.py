@@ -359,7 +359,7 @@ def bambu_problems(
     ]
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, *, _variant_names: tuple[str, ...] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--output", type=Path, required=True, help="folder for the named files")
     parser.add_argument(
@@ -400,6 +400,13 @@ def main(argv: list[str] | None = None) -> int:
         for variant in variants(tuple(args.printers or ("h2d",)))
         if not args.sets or variant.set_name in args.sets
     ]
+    if _variant_names is not None:
+        if not _variant_names or len(set(_variant_names)) != len(_variant_names):
+            parser.error("variant selection must be nonempty and contain no duplicates")
+        unknown = set(_variant_names) - {variant.name for variant in selected}
+        if unknown:
+            parser.error(f"unknown selected variants: {sorted(unknown)}")
+        selected = [variant for variant in selected if variant.name in _variant_names]
     if args.dry_run:
         for variant in selected:
             print(f"{variant.name}: cargo-grid {' '.join(variant.arguments)}")

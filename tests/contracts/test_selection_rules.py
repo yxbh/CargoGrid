@@ -231,6 +231,45 @@ def test_decorator_replacement_selects_static_callers_even_without_original_body
     assert "tests/test_body.py::test_body" in selection(mapping, sources)["selected"]
 
 
+def test_a_body_change_does_not_select_unrelated_branches_of_a_shared_factory(mapping):
+    original = {
+        **SOURCES,
+        "src/example/body.py": SOURCES["src/example/body.py"]
+        + "\ndef factory(kind):\n    return body() if kind == 'body' else unrelated()\n",
+    }
+    mapping["snapshot"] = state(original)
+    mapping["tests"]["tests/test_unrelated.py::test_other"]["functions"][
+        "src/example/body.py"
+    ].append("factory")
+    current = {
+        **original,
+        "src/example/body.py": original["src/example/body.py"].replace(
+            "return cached()", "return cached() + 1"
+        ),
+    }
+    result = selection(mapping, current)
+    assert "tests/test_body.py::test_body" in result["selected"]
+    assert "tests/test_unrelated.py::test_other" not in result["selected"]
+
+
+def test_definition_constants_reach_callers_when_a_decorator_replaces_the_original_body(mapping):
+    original = {
+        **SOURCES,
+        "src/example/body.py": SOURCES["src/example/body.py"].replace(
+            "def body():", "@replacement(VALUE)\ndef body():"
+        ),
+    }
+    mapping["snapshot"] = state(original)
+    mapping["tests"]["tests/test_body.py::test_body"]["functions"] = {
+        "tests/test_body.py": ["test_body"]
+    }
+    current = {
+        **original,
+        "src/example/body.py": original["src/example/body.py"].replace("VALUE = 10", "VALUE = 11"),
+    }
+    assert "tests/test_body.py::test_body" in selection(mapping, current)["selected"]
+
+
 def test_property_getter_and_setter_both_contribute_to_the_function_digest():
     source = (
         "class Value:\n"
