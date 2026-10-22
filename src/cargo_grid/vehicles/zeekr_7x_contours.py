@@ -21,7 +21,9 @@ from build123d import (
     Wire,
     section,
 )
+from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet2d
 from OCP.BRepTools import BRepTools
+from OCP.Precision import Precision
 from scipy.interpolate import CubicHermiteSpline, PchipInterpolator
 
 from cargo_grid.accessories import (
@@ -669,7 +671,17 @@ def _ramp_raw_tip(
     def nose_extent(raw_tip: float) -> float:
         face = _profile_face(x, raw_tip, carrier, height, y_offset)
         nose = max(face.vertices(), key=lambda vertex: vertex.Y)
-        return face.fillet_2d(nose_radius, [nose]).bounding_box().max.Y - y_offset
+        # Trial sections need only the extent, not wire relocation and shape history.
+        builder = BRepFilletAPI_MakeFillet2d(face.wrapped)
+        builder.AddFillet(nose.wrapped, nose_radius)
+        builder.Build()
+        if not builder.IsDone():
+            raise ValueError("could not round the trial ramp profile nose")
+        extent = Face(builder.Shape()).bounding_box().max.Y - y_offset
+        # The two solvers can differ by ulps. Keep the original decision near the target.
+        if abs(extent - run) <= Precision.Confusion_s():
+            return face.fillet_2d(nose_radius, [nose]).bounding_box().max.Y - y_offset
+        return extent
 
     low, high = run, run + 4 * height
     while nose_extent(high) < run:

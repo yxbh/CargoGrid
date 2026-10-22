@@ -284,6 +284,39 @@ def test_refinement_keeps_cad_bounds_inside_the_envelope_and_clear_of_obstacles(
         _refine_clearance(footprints, placements, bounding_sizes=[(9.1, 9.1)] * 2, **options)
 
 
+def test_refinement_remeasures_only_pairs_of_the_moved_part(monkeypatch):
+    from shapely.geometry.base import BaseGeometry
+
+    from cargo_grid.footprints import _clearance_key, _refine_clearance
+
+    footprints = [ProjectedFootprint(box(0, 0, 4, 4)) for _ in range(4)]
+    placements = {index: (x, 0, 0) for index, x in enumerate((0, 4.5, 20, 30))}
+    calls = []
+    distance = BaseGeometry.distance
+
+    def measure(first, second):
+        calls.append((first, second))
+        return distance(first, second)
+
+    monkeypatch.setattr(BaseGeometry, "distance", measure)
+    result = _refine_clearance(
+        footprints,
+        placements,
+        width=50,
+        depth=20,
+        target=1.5,
+        grid=1,
+        tolerance=1e-6,
+        max_refinements=20,
+    )
+    assert result == {**placements, 1: (5.5, 0, 0)}
+    assert len(calls) == 6 + 5 * 3
+    assert _clearance_key({(1, 2): 0.5, (0, 2): 0.5, (0, 1): 8}, 1.5) == (
+        (0.5, 0.5, 1.5),
+        (0.5, 0, 2),
+    )
+
+
 def test_projected_packer_is_deterministic_and_bounded():
     footprints = [
         ProjectedFootprint(box(0, 0, 8, 8)),

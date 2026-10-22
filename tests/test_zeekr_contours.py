@@ -2,7 +2,7 @@
 
 import pytest
 from build123d import Axis, Edge, GeomType, Location, Solid, Wire
-from local_geometry import bounded_distance
+from local_geometry import bounded_distance, clipped_pair
 from OCP.BRepAdaptor import BRepAdaptor_Surface
 from zeekr_assembly import assemble_rear_panel
 
@@ -22,6 +22,9 @@ from cargo_grid.vehicles.zeekr_7x_contours import (
     _crown_coefficients,
     _merged_taper_stations,
     _north_corner_geometry,
+    _profile_face,
+    _ramp_carrier_run_mm,
+    _ramp_raw_tip,
     _side_design,
     _south_design,
     _tail_slope_dy_dx,
@@ -36,6 +39,48 @@ from cargo_grid.vehicles.zeekr_7x_contours import (
 def _placed(design):
     assert len(design.assembly_frames) == 1
     return design.shape.moved(Location(design.assembly_frames[0]))
+
+
+@pytest.mark.parametrize(
+    "x,run,height,y_offset",
+    [
+        (0.0, 50.0, 13.0, 0.0),
+        (-0.0, 50.0, 13.0, 0.0),
+        (240.0, 72.132711096, 13.0, 0.0),
+        (-540.0, 85.0, 13.0, 0.0),
+        (14.3, 100.0, 14.92, 0.0),
+        (0.0, 100.0, 6.0, 1.92),
+        (38.7, 18.3, 18.0, 0.0),
+        (20.0, 60.0, 60.0, 0.0),
+        (3.0, 0.4, 8.0, 0.0),
+        (50.0, 81.64739400638041, 13.0, 0.0),
+        (115.0, 75.6196438890014, 13.0, 0.0),
+        (0.0, 94.63797003325476, 13.0, 0.0),
+        (7.5, 94.54149666252044, 13.0, 0.0),
+    ],
+)
+def test_trial_ramp_solver_preserves_the_wire_fillet_result(x, run, height, y_offset):
+    radius = min(2, max(0.02, run * 0.15))
+    carrier = _ramp_carrier_run_mm(run)
+
+    def extent(tip):
+        face = _profile_face(x, tip, carrier, height, y_offset)
+        nose = max(face.vertices(), key=lambda vertex: vertex.Y)
+        return face.fillet_2d(radius, [nose]).bounding_box().max.Y - y_offset
+
+    low, high = run, run + 4 * height
+    while extent(high) < run:
+        high += max(10, height)
+    for _ in range(48):
+        middle = (low + high) / 2
+        if extent(middle) < run:
+            low = middle
+        else:
+            high = middle
+    expected = (low + high) / 2
+    assert _ramp_raw_tip.__wrapped__(x, run, carrier, height, y_offset, radius).hex() == (
+        expected.hex()
+    )
 
 
 def _intersection_volume(first, second):
@@ -265,15 +310,20 @@ def _assert_bores_clear(design, centers):
 
 
 def _assert_contact_without_overlap(first, second):
-    assert bounded_distance(first, second) < 1e-6
-    assert _intersection_volume(first, second) < 1e-7
+    pair = clipped_pair(first, second)
+    assert pair is not None
+    assert pair[0].distance_to(pair[1]) < 1e-6
+    assert _intersection_volume(*pair) < 1e-7
 
 
-def _representative_tile(x):
-    return make_tile(Tile(4, 4)).moved(Location((x, 60, 0)))
+@pytest.fixture(scope="module")
+def representative_tile():
+    return make_tile(Tile(4, 4))
 
 
-def test_representative_real_contour_west_side_caps_holes_sockets_and_contacts():
+def test_representative_real_contour_west_side_caps_holes_sockets_and_contacts(
+    representative_tile,
+):
     parameters = ContourParameters()
     west_north = _side_design("west", "north", parameters)
     west_south = _side_design("west", "south", parameters)
@@ -289,7 +339,7 @@ def test_representative_real_contour_west_side_caps_holes_sockets_and_contacts()
     } == {150, 210, 270}
     _assert_bores_clear(west_south, ((-30, 60), (-30, 180)))
     _assert_bores_clear(west_north, ((-30, 180), (-30, 300)))
-    placed_tile_west = _representative_tile(-540)
+    placed_tile_west = representative_tile.moved(Location((-540, 60, 0)))
     for first, second in (
         (placed_tile_west, _placed(west_north)),
         (placed_tile_west, _placed(west_south)),
@@ -298,27 +348,27 @@ def test_representative_real_contour_west_side_caps_holes_sockets_and_contacts()
         _assert_contact_without_overlap(first, second)
 
 
-def test_representative_real_contour_east_side_cap_is_female_and_meets_its_tile():
+def test_representative_real_contour_east_side_cap_is_female_and_meets_its_tile(
+    representative_tile,
+):
     east_north = _side_design("east", "north", ContourParameters())
     _assert_valid_single_solid(east_north)
     assert {join["sex"] for join in east_north.mating_datums["joins"]} == {"female"}
-    _assert_contact_without_overlap(_representative_tile(300), _placed(east_north))
+    _assert_contact_without_overlap(
+        representative_tile.moved(Location((300, 60, 0))), _placed(east_north)
+    )
 
 
-def test_representative_real_contour_west_ramp_holes_joins_mesh_and_contact():
+def test_representative_real_contour_west_ramp_holes_joins_mesh_and_contact(representative_tile):
     west_ramp = _south_design(4, 0, -540, ContourParameters())
     _assert_valid_single_solid(west_ramp)
     _, _, report = checked_mesh(west_ramp.shape)
     assert report["closed_oriented_manifold"]
     assert {join["sex"] for join in west_ramp.mating_datums["joins"]} == {"male"}
     _assert_bores_clear(west_ramp, ((0, 0), (30, 0), (60, 0), (240, 0)))
-    _assert_contact_without_overlap(_representative_tile(-540), _placed(west_ramp))
-
-
-def test_representative_real_contour_east_ramp_keeps_its_boundary_hole():
-    east_ramp = _south_design(4, 4, 300, ContourParameters())
-    _assert_valid_single_solid(east_ramp)
-    _assert_bores_clear(east_ramp, ((240, 0),))
+    _assert_contact_without_overlap(
+        representative_tile.moved(Location((-540, 60, 0))), _placed(west_ramp)
+    )
 
 
 @pytest.mark.slow

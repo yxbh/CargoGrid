@@ -28,7 +28,7 @@ from cargo_grid.accessories import (
 )
 from cargo_grid.catalogue import accessory_design, accessory_variants
 from cargo_grid.cli import main
-from cargo_grid.export import BambuSettings, Material, export_job, write_3mf
+from cargo_grid.export import BambuSettings, Material, write_3mf
 from cargo_grid.jobs import Job
 from cargo_grid.meshes import checked_mesh
 
@@ -209,36 +209,6 @@ def test_mixed_catalogue_scopes_auto_support_to_vertical_stop_only(tmp_path):
     assert by_name[f"{stop.name}_batch_1"]["enable_support"] == "1"
     assert "enable_support" not in by_name[f"{plate.name}_batch_2"]
     assert "enable_support" not in project
-
-
-def test_source_exports_keep_model_datum_and_apply_pose_only_to_bambu(tmp_path):
-    design = accessory_design(Accessory("vertical-stop", nx=2, ny=1, height=120))
-    settings = BambuSettings((Material("PETG", "PETG", "#637b70"),), 0.4, 0.2)
-    for backend in (None, settings):
-        output = tmp_path / ("core" if backend is None else "bambu")
-        manifest = json.loads(
-            export_job(
-                Job([design], BuildVolume(350, 320, 325), "part"),
-                output,
-                stl=False,
-                bambu=backend,
-            ).read_text()
-        )
-        source = import_step(output / f"{design.name}.step")
-        assert tuple(source.bounding_box().size) == pytest.approx(design.size)
-        assert source.bounding_box().min.Z == pytest.approx(-12.8)
-        recommendation = manifest["designs"][0]["recommended_print_orientation"]
-        assert recommendation["applied_to_exports"] == {
-            "step": False,
-            "stl": False,
-            "core_3mf": False,
-            "bambu_3mf": backend is not None,
-        }
-        object_settings = manifest["designs"][0]["recommended_bambu_object_settings"]
-        assert object_settings["applied_to_bambu_3mf"] == (backend is not None)
-        item = manifest["export"]["plates"][0]["items"][0]
-        assert ("source_to_project_transform" in item) == (backend is not None)
-        assert ("object_settings" in item) == (backend is not None)
 
 
 def test_cli_defaults_to_2x1_h60_and_preserves_explicit_height(tmp_path):

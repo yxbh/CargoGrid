@@ -115,9 +115,10 @@ def _ratchet_ramp_faces(part: Part, *, moving: bool) -> list[Face]:
         face
         for face in part.faces()
         if face.geom_type == GeomType.PLANE
-        and abs(face.bounding_box().size.X - expected_x) < CONNECTOR_PROOF_TOLERANCE_MM
-        and (abs(face.bounding_box().size.Y - expected_y) < CONNECTOR_PROOF_TOLERANCE_MM)
-        and (abs(face.bounding_box().size.Z - expected_z) < CONNECTOR_PROOF_TOLERANCE_MM)
+        for bounds in [face.bounding_box()]
+        if abs(bounds.size.X - expected_x) < CONNECTOR_PROOF_TOLERANCE_MM
+        and abs(bounds.size.Y - expected_y) < CONNECTOR_PROOF_TOLERANCE_MM
+        and abs(bounds.size.Z - expected_z) < CONNECTOR_PROOF_TOLERANCE_MM
     ]
 
 
@@ -136,9 +137,10 @@ def _ratchet_lock_faces(part: Part, *, moving: bool) -> list[Face]:
         face
         for face in part.faces()
         if face.geom_type == GeomType.PLANE
-        and abs(face.bounding_box().size.X - expected_x) < CONNECTOR_PROOF_TOLERANCE_MM
-        and (face.bounding_box().size.Y < CONNECTOR_PROOF_TOLERANCE_MM)
-        and (abs(face.bounding_box().size.Z - expected_z) < CONNECTOR_PROOF_TOLERANCE_MM)
+        for bounds in [face.bounding_box()]
+        if abs(bounds.size.X - expected_x) < CONNECTOR_PROOF_TOLERANCE_MM
+        and bounds.size.Y < CONNECTOR_PROOF_TOLERANCE_MM
+        and abs(bounds.size.Z - expected_z) < CONNECTOR_PROOF_TOLERANCE_MM
     ]
 
 
@@ -147,9 +149,10 @@ def _face_ramp_angle(face: Face) -> float:
     return degrees(atan2(abs(normal.Y), abs(normal.X)))
 
 
-def _projected_xz_overlap_area(first: Face, second: Face) -> float:
-    first_bounds = first.bounding_box()
-    second_bounds = second.bounding_box()
+def _projected_xz_overlap_area(first: Face, second: Face, *, bounds=None) -> float:
+    first_bounds, second_bounds = (
+        (first.bounding_box(), second.bounding_box()) if bounds is None else bounds
+    )
     x_overlap = max(
         0.0,
         min(first_bounds.max.X, second_bounds.max.X) - max(first_bounds.min.X, second_bounds.min.X),

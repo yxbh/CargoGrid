@@ -133,6 +133,25 @@ def _size(design):
     return (box.size.X, box.size.Y, box.size.Z)
 
 
+@pytest.mark.parametrize("auto", [False, True])
+def test_group_sizes_are_measured_once_and_do_not_survive_the_request(auto):
+    designs = [_design(str(index), (10, 20, 3)) for index in range(2)]
+    groups = [PlateGroup("Small", designs, 4)]
+    calls = []
+
+    def size(design):
+        calls.append(design)
+        return _size(design)
+
+    options = dict(size=size, auto_roof_support=auto, layer_height_mm=0.32)
+    first = plan_plates(groups, H2D.common_build(), **options)
+    assert not first.unfit and calls == designs
+    calls.clear()
+    designs[0].shape = Box(400, 20, 3)
+    second = plan_plates(groups, H2D.common_build(), **options)
+    assert second.unfit == designs[:1] and calls == designs
+
+
 def test_diagonal_fallback_is_opt_in_and_keeps_the_horizontal_pose_and_source():
     rod = Design(
         "long",

@@ -541,6 +541,9 @@ def test_job_exports_roundtripped_step_and_honest_manifest(box_job, tmp_path):
 
 def test_invalid_default_step_reimport_uses_strict_precision_fallback(tmp_path):
     design = tile_design(Tile(4, 3, hole_diameter=10, hole_scope="full"))
+    assert design.shape.is_valid and len(design.shape.solids()) == 1
+    source_size = design.size
+    assert source_size == pytest.approx((246, 186, 13), abs=1e-5)
     manifest = json.loads(
         export_job(
             Job([design], BuildVolume(300, 250, 20), "part"),
@@ -551,6 +554,7 @@ def test_invalid_default_step_reimport_uses_strict_precision_fallback(tmp_path):
     record = manifest["designs"][0]
     restored = import_step(tmp_path / "full-hole" / f"{design.name}.step")
     assert restored.is_valid and len(restored.solids()) == 1
+    assert tuple(restored.bounding_box().size) == pytest.approx(source_size, abs=1e-5)
     assert record["step_precision_mode"] in {"average", "least"}
     assert record["step_volume_delta_mm3"] <= record["step_volume_budget_mm3"]
     assert record["step_bounds_delta_mm"] <= 1e-5

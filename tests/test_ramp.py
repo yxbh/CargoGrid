@@ -1,6 +1,7 @@
 """Approved ramp geometry and joins; print and physical performance remain unverified."""
 
 import json
+from copy import deepcopy
 from dataclasses import replace
 from math import atan
 from xml.etree import ElementTree as ET
@@ -27,7 +28,13 @@ from cargo_grid.accessories import (
 )
 from cargo_grid.catalogue import accessory_design, accessory_variants
 from cargo_grid.cli import main
-from cargo_grid.export import BambuSettings, Material, _checked_step_roundtrip, write_3mf
+from cargo_grid.export import (
+    BambuSettings,
+    Material,
+    _checked_step_roundtrip,
+    _StepSource,
+    write_3mf,
+)
 from cargo_grid.interfaces import tile_join_tool
 from cargo_grid.jobs import Job
 from cargo_grid.meshes import checked_mesh
@@ -35,6 +42,18 @@ from cargo_grid.meshes import checked_mesh
 
 def volume(shape) -> float:
     return sum(solid.volume for solid in shape.solids()) if shape else 0
+
+
+@pytest.fixture(scope="module")
+def ramp_shape():
+    shapes = {}
+
+    def get(spec):
+        if spec not in shapes:
+            shapes[spec] = make_accessory(spec)
+        return deepcopy(shapes[spec])
+
+    return get
 
 
 # Bodies and joins repeat once per cell; portable runs keep one cell and the largest width.
@@ -46,12 +65,12 @@ RAMP_JOIN_CELLS = [1, *(pytest.param(cells, marks=pytest.mark.slow) for cells in
 def test_ramp_width_run_rise_rounding_step_and_mesh(cells, ramp_join, tmp_path):
     spec = Accessory("ramp", nx=cells, ramp_join=ramp_join)
     shape = make_accessory(spec)
+    source = _StepSource.measure(shape)
+    bounds = source.bounds
     projection = 6 if ramp_join == "male" else 0
     assert shape.is_valid and len(shape.solids()) == 1 and shape.volume > 0
-    assert tuple(shape.bounding_box().min) == pytest.approx((0, -projection, 0), abs=1e-5)
-    assert tuple(shape.bounding_box().size) == pytest.approx(
-        (60 * cells, RAMP_RUN_MM + projection, 13), abs=1e-5
-    )
+    assert bounds.minimum == pytest.approx((0, -projection, 0), abs=1e-5)
+    assert tuple(bounds.size) == pytest.approx((60 * cells, RAMP_RUN_MM + projection, 13), abs=1e-5)
     radii = [
         BRepAdaptor_Surface(face.wrapped).Cylinder().Radius()
         for face in shape.faces()
@@ -60,21 +79,21 @@ def test_ramp_width_run_rise_rounding_step_and_mesh(cells, ramp_join, tmp_path):
     assert sum(radius == pytest.approx(RAMP_FREE_EDGE_RADIUS_MM) for radius in radii) == 7
     assert sum(radius == pytest.approx(RAMP_SHELF_RADIUS_MM) for radius in radii) == 1
     path = tmp_path / f"ramp-{ramp_join}-{cells}.step"
-    restored, _, _, _, _ = _checked_step_roundtrip(shape, path)
+    restored, _, _, _, _ = _checked_step_roundtrip(shape, path, _source=source)
     budget = max(1e-6, shape.area * Precision.Confusion_s())
     assert restored.is_valid and len(restored.solids()) == 1
     assert abs(restored.volume - shape.volume) <= budget
-    assert tuple(restored.bounding_box().size) == pytest.approx(tuple(shape.bounding_box().size))
+    assert tuple(restored.bounding_box().size) == pytest.approx(tuple(bounds.size))
     _, _, mesh = checked_mesh(shape)
     assert mesh["closed_oriented_manifold"] and mesh["mesh_volume_mm3"] > 0
 
 
 @pytest.mark.parametrize("cells", RAMP_JOIN_CELLS)
-def test_ramp_uses_exact_existing_female_join_and_mates_north_tile_edge(cells):
+def test_ramp_uses_exact_existing_female_join_and_mates_north_tile_edge(cells, ramp_shape):
     interface = Interface()
     spec = Accessory("ramp", nx=cells, interface=interface)
     uncut = _ramp(spec, cut_joins=False)
-    ramp = make_accessory(spec)
+    ramp = ramp_shape(spec)
     cutters = [
         tile_join_tool(interface, depth=6.1, male=False).moved(Location(((cell + 0.5) * 60, 0, 0)))
         for cell in range(cells)
@@ -97,10 +116,10 @@ def test_ramp_uses_exact_existing_female_join_and_mates_north_tile_edge(cells):
 
 
 @pytest.mark.parametrize("cells", RAMP_JOIN_CELLS)
-def test_male_ramp_repeats_exact_shared_tabs_and_mates_both_female_tile_sides(cells):
+def test_male_ramp_repeats_exact_shared_tabs_and_mates_both_female_tile_sides(cells, ramp_shape):
     interface = Interface()
     spec = Accessory("ramp", nx=cells, ramp_join="male")
-    ramp = make_accessory(spec)
+    ramp = ramp_shape(spec)
     outside = Solid.make_box(cells * 60, 6, 13).moved(Location((0, -6, 0)))
     expected = Part(
         [
@@ -222,9 +241,9 @@ def test_scaled_ramps_match_real_tiles_keep_run_and_export(
     [(1, 60, 13), (5, 60, 13), (2, 30, 6), (2, 90, 18), (1, 60, 60)],
 )
 def test_finished_shelf_slope_round_has_broad_radius_and_is_tangent_across_its_width(
-    ramp_join, cells, unit, thickness
+    ramp_join, cells, unit, thickness, ramp_shape
 ):
-    shape = make_accessory(
+    shape = ramp_shape(
         Accessory("ramp", nx=cells, interface=Interface(unit, thickness), ramp_join=ramp_join)
     )
     radius = _ramp_shelf_radius(thickness)

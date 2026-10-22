@@ -6,11 +6,10 @@ from math import cos, pi, sin, sqrt
 
 import pytest
 from build123d import Axis, Box, GeomType, Location, Part, Vector
-from local_geometry import bounded_distance
+from local_geometry import bounded_distance, clipped_pair
+from local_geometry import prepared_contains as _prepared_assembly_contains
 from OCP.BRepAdaptor import BRepAdaptor_Surface
 from OCP.BRepClass3d import BRepClass3d_SolidClassifier
-from OCP.gp import gp_Pnt
-from OCP.TopAbs import TopAbs_IN
 
 from cargo_grid import BuildVolume, Interface, Tile, make_tile
 from cargo_grid.accessories import Accessory, accessory_datums, make_accessory
@@ -62,33 +61,9 @@ def _assembly_contains(shapes_and_bounds, point):
     )
 
 
-def _prepared_assembly_contains(shapes):
-    """Keep query state local to one case, after its shapes stop changing."""
-    queries = []
-    for shape in shapes:
-        bounds = shape.bounding_box()
-        queries.append(
-            (tuple(bounds.min), tuple(bounds.max), BRepClass3d_SolidClassifier(shape.wrapped))
-        )
-
-    def contains(point):
-        coordinates = tuple(Vector(point))
-        for lower, upper, classifier in queries:
-            if all(
-                minimum - _POINT_CLASSIFIER_TOLERANCE
-                <= value
-                <= maximum + _POINT_CLASSIFIER_TOLERANCE
-                for minimum, maximum, value in zip(lower, upper, coordinates)
-            ):
-                classifier.Perform(gp_Pnt(*coordinates), _POINT_CLASSIFIER_TOLERANCE)
-                if classifier.State() == TopAbs_IN or classifier.IsOnAFace():
-                    return True
-        return False
-
-    return contains
-
-
-def _local_assembly_contains(shapes, center, height, half_width=_LOCAL_CLIP_HALF_WIDTH):
+def _local_assembly_contains(
+    shapes, center, height, half_width=_LOCAL_CLIP_HALF_WIDTH, *, bounds=None
+):
     """Classify points near one hole against the shapes clipped to a small box around it.
 
     A point strictly inside the clip box is inside a shape exactly when it is inside the shape's
@@ -101,11 +76,12 @@ def _local_assembly_contains(shapes, center, height, half_width=_LOCAL_CLIP_HALF
         Location((center[0], center[1], height / 2))
     )
     pieces = []
-    for shape in shapes:
-        bounds = shape.bounding_box()
+    if bounds is None:
+        bounds = tuple(shape.bounding_box() for shape in shapes)
+    for shape, box in zip(shapes, bounds, strict=True):
         if any(
             maximum < low or minimum > high
-            for minimum, maximum, low, high in zip(bounds.min, bounds.max, lower, upper)
+            for minimum, maximum, low, high in zip(box.min, box.max, lower, upper)
         ):
             continue
         common = shape.intersect(clip)
@@ -134,19 +110,15 @@ def _part(shape):
     return shape if isinstance(shape, Part) else Part(shape.solids())
 
 
-def _clipped_volume(shape, clip):
-    intersection = shape.intersect(clip)
-    return sum(solid.volume for solid in intersection.solids()) if intersection else 0
-
-
 def _pair_target_symmetric_difference(parts, target, clip):
-    pair_volume = sum(_clipped_volume(part, clip) for part in parts)
+    clipped_parts = [part.intersect(clip) for part in parts]
+    pair_volume = sum(solid.volume for part in clipped_parts if part for solid in part.solids())
     target_clipped = target.intersect(clip)
     target_volume = sum(solid.volume for solid in target_clipped.solids()) if target_clipped else 0
     common_volume = sum(
-        _solid_intersection_volume(_part(part.intersect(clip)), _part(target_clipped))
-        for part in parts
-        if part.intersect(clip) and target_clipped
+        _solid_intersection_volume(_part(part), _part(target_clipped))
+        for part in clipped_parts
+        if part and target_clipped
     )
     return pair_volume + target_volume - 2 * common_volume
 
@@ -394,33 +366,21 @@ def test_completed_miter_terminations_cut_the_tile_corner_site(outward):
                 assert not part.is_inside(Vector(x, y, z))
 
 
-@pytest.mark.parametrize(
-    "outward,complete",
-    [
-        (10, False),
-        (10, True),
-        pytest.param(20, False, marks=pytest.mark.slow),
-        pytest.param(20, True, marks=pytest.mark.slow),
-        (30, False),
-        (30, True),
-    ],
-)
-def test_outer_corner_half_pairs_close_without_overlap(outward, complete):
-    pitch = 60
+def _assert_half_pair_closure(pairs, outward, complete, interface):
+    pitch, height = interface.pitch, interface.height
     diagonal = outward / sqrt(2)
-    pairs = _corner_half_pairs(outward, complete)
     for (first, second), seam_point, expected_min, expected_max in zip(
         pairs,
         (
             lambda fraction: Vector(
                 -diagonal * fraction,
                 pitch + diagonal * fraction,
-                6.5,
+                height / 2,
             ),
             lambda fraction: Vector(
                 pitch + diagonal * fraction,
                 -diagonal * fraction,
-                6.5,
+                height / 2,
             ),
         ),
         (
@@ -428,8 +388,8 @@ def test_outer_corner_half_pairs_close_without_overlap(outward, complete):
             (0, -outward, 0),
         ),
         (
-            (pitch, pitch + outward, 13),
-            (pitch + outward, pitch, 13),
+            (pitch, pitch + outward, height),
+            (pitch + outward, pitch, height),
         ),
     ):
         assert first.distance_to(second) < 1e-6
@@ -473,6 +433,7 @@ def test_outer_corner_pairs_match_whole_l_exterior_sections(
     pitch = interface.pitch
     height = interface.height
     northwest, southeast = _corner_half_pairs(outward, complete, interface)
+    _assert_half_pair_closure((northwest, southeast), outward, complete, interface)
     whole_northeast = _accessory_shape(
         Accessory(
             "corner-out",
@@ -561,6 +522,17 @@ def test_bounded_distance_matches_whole_solid_distance(first, second, offset):
         assert bounded >= 1
 
 
+@pytest.mark.parametrize("offset", [0, 3, 7])
+def test_clipped_pair_retains_the_whole_solid_intersection(offset):
+    first = Box(10, 10, 10)
+    second = Box(8, 8, 8).rotate(Axis.Z, 15).moved(Location((offset, 0, 0)))
+    pair = clipped_pair(first, second)
+    assert pair is not None
+    assert _solid_intersection_volume(*pair) == pytest.approx(
+        _solid_intersection_volume(first, second), abs=1e-7
+    )
+
+
 @pytest.mark.parametrize("name", sorted(_REAL_PERIMETER_CORNERS))
 def test_real_perimeter_corners_join_the_opposite_tile_sex(name):
     assembly = _three_by_three_perimeter(_REAL_PERIMETER_OUTWARD, True)
@@ -585,6 +557,7 @@ def test_real_perimeter_corners_join_the_opposite_tile_sex(name):
 
 def test_real_perimeter_completes_representative_boundary_holes():
     shapes = tuple(_three_by_three_perimeter(_REAL_PERIMETER_OUTWARD, True).values())
+    bounds = tuple(shape.bounding_box() for shape in shapes)
     boundary_holes = [
         (hole.x, hole.y)
         for hole in hole_placements(Tile(3, 3))
@@ -608,6 +581,7 @@ def test_real_perimeter_completes_representative_boundary_holes():
             center,
             13,
             minimum_ring_samples=59 if center in {(60, 0), (180, 60)} else 62,
+            contains=_local_assembly_contains(shapes, center, 13, bounds=bounds),
         )
 
 
@@ -667,14 +641,6 @@ def test_outer_corner_halves_keep_rounds_step_and_mesh(
     )
     _, _, report = checked_mesh(part)
     assert report["closed_oriented_manifold"]
-
-
-def test_outer_corner_half_pair_scales_unit_and_thickness_independently():
-    interface = Interface(45, 8)
-    for first, second in _corner_half_pairs(20, False, interface):
-        assert first.distance_to(second) < 1e-6
-        assert _solid_intersection_volume(first, second) < 1e-7
-        assert max(first.bounding_box().size.Z, second.bounding_box().size.Z) == pytest.approx(8)
 
 
 def test_custom_unit_completion_uses_only_tile_accepted_boundary_sites():
@@ -1100,7 +1066,7 @@ def test_prepared_queries_are_case_local_and_preserve_pristine_templates(monkeyp
         return original_bounds(shape, *args, **kwargs)
 
     with monkeypatch.context() as context:
-        context.setattr(f"{__name__}.BRepClass3d_SolidClassifier", classifier)
+        context.setattr("local_geometry.BRepClass3d_SolidClassifier", classifier)
         context.setattr(shape_type, "bounding_box", bounds)
         query_first = _prepared_assembly_contains((first,))
         query_second = _prepared_assembly_contains((second,))

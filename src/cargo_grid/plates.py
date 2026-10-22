@@ -431,11 +431,12 @@ def plan_plates(
     towered_groups, towered_gaps = [], []
     for group in groups:
         positive("plate group gap", group.gap, zero=True)
+        measured_sizes = {id(design): size(design) for design in group.designs}
         towered = tower is not None and bool(group.designs)
         gap = group.gap + AUTO_SUPPORT_FOOT_ALLOWANCE_MM if towered else group.gap
         reservation = (
             tower.reserve(
-                max(size(design)[2] for design in group.designs),
+                max(measured_sizes[id(design)][2] for design in group.designs),
                 front_left=group.front_left_tower,
             )
             if towered
@@ -460,7 +461,7 @@ def plan_plates(
         plan.group_gaps[group.title] = gap
         members = []
         for design in group.designs:
-            if group_build.placement(size(design)) is None:
+            if group_build.placement(measured_sizes[id(design)]) is None:
                 rotated = diagonal_fit(design, group_build) if diagonal_fallback else None
                 if rotated is None:
                     plan.unfit.append(design)
@@ -474,14 +475,12 @@ def plan_plates(
             towered_groups.append(group.title)
             towered_gaps.append(gap)
 
-        def placed_size(design):
-            return (
-                design.bambu_size
-                if design.recommended_print_rotation_z is not None
-                else size(design)
-            )
-
-        sizes = [placed_size(d) for d in members]
+        sizes = [
+            design.bambu_size
+            if design.recommended_print_rotation_z is not None
+            else measured_sizes[id(design)]
+            for design in members
+        ]
         rectangular = pack_sizes(sizes, group_build, gap=gap, pack=True)
         packed, footprints, nested = rectangular, [None] * len(members), False
         rectangle_score = packing_score(rectangular, sizes)

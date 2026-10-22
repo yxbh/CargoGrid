@@ -1,6 +1,7 @@
 """Approved reference-space geometry, not a physical load or fit certification."""
 
 import json
+from copy import deepcopy
 
 import pytest
 from build123d import (
@@ -37,6 +38,18 @@ from cargo_grid.interfaces import make_plug, x_profile
 from cargo_grid.tiles import hole_placements
 
 
+@pytest.fixture(scope="module")
+def bracket_shape():
+    shapes = {}
+
+    def get(spec):
+        if spec not in shapes:
+            shapes[spec] = make_accessory(spec)
+        return deepcopy(shapes[spec])
+
+    return get
+
+
 def volume(shape):
     return sum(s.volume for s in shape.solids()) if shape and shape.solids() else 0
 
@@ -54,10 +67,9 @@ def contact_faces(shape, z, sign):
     return [
         f
         for f in shape.faces()
-        if f.geom_type == GeomType.PLANE
-        and sign * f.normal_at().Z > 0.99
-        and abs(f.bounding_box().min.Z - z) < 1e-5
-        and abs(f.bounding_box().max.Z - z) < 1e-5
+        if f.geom_type == GeomType.PLANE and sign * f.normal_at().Z > 0.99
+        for bounds in [f.bounding_box()]
+        if abs(bounds.min.Z - z) < 1e-5 and abs(bounds.max.Z - z) < 1e-5
     ]
 
 
@@ -65,10 +77,11 @@ def contact_faces(shape, z, sign):
 def test_bracket_solid_datums_and_actual_step_roundtrip(nx, ny, tmp_path):
     spec = Accessory("vertical-tile-bracket", nx=nx, ny=ny)
     part = make_accessory(spec)
+    bounds = part.bounding_box()
     datums = accessory_datums(spec)
     assert part.is_valid and len(part.solids()) == 1
-    assert tuple(part.bounding_box().min) == pytest.approx((0, 0, -12.8), abs=1e-5)
-    assert tuple(part.bounding_box().max) == pytest.approx(
+    assert tuple(bounds.min) == pytest.approx((0, 0, -12.8), abs=1e-5)
+    assert tuple(bounds.max) == pytest.approx(
         (60 * nx, 60 * ny, 60 * ny + 7.578174593052), abs=1e-5
     )
     assert len(datums["mount_centers"]) == nx * ny
@@ -89,7 +102,7 @@ def test_bracket_solid_datums_and_actual_step_roundtrip(nx, ny, tmp_path):
     assert restored.is_valid and len(restored.solids()) == 1
     volume_budget = max(1e-6, part.area * Precision.Confusion_s())
     assert abs(restored.volume - part.volume) <= volume_budget
-    assert tuple(restored.bounding_box().size) == pytest.approx(tuple(part.bounding_box().size))
+    assert tuple(restored.bounding_box().size) == pytest.approx(tuple(bounds.size))
 
 
 @pytest.mark.parametrize(
@@ -100,10 +113,10 @@ def test_bracket_solid_datums_and_actual_step_roundtrip(nx, ny, tmp_path):
         (2, 2, 1124551.6313881178),
     ],
 )
-def test_bracket_volume_fixture_and_mixed_free_edge_radii(nx, ny, expected):
+def test_bracket_volume_fixture_and_mixed_free_edge_radii(nx, ny, expected, bracket_shape):
     spec = Accessory("vertical-tile-bracket", nx=nx, ny=ny)
     core = _vertical_bracket(spec, round_lip=False)
-    rounded = make_accessory(spec)
+    rounded = bracket_shape(spec)
     assert rounded.volume == pytest.approx(expected, abs=1e-5)
     assert volume(rounded.cut(core)) > 0
     assert volume(core.cut(rounded)) > 0
@@ -133,8 +146,9 @@ def test_all_five_brackets_have_one_g1_r3_front_to_slope_transition(
     nx,
     base_y,
     panel_z,
+    bracket_shape,
 ):
-    shape = make_accessory(
+    shape = bracket_shape(
         Accessory(
             "vertical-tile-bracket",
             nx=nx,
@@ -171,9 +185,9 @@ def test_approved_unrounded_core_metrics(nx, ny):
 
 
 @pytest.mark.parametrize("nx,ny", VERTICAL_BRACKET_CELLS)
-def test_original_lower_base_and_both_plug_sets_are_retained(nx, ny):
+def test_original_lower_base_and_both_plug_sets_are_retained(nx, ny, bracket_shape):
     spec = Accessory("vertical-tile-bracket", nx=nx, ny=ny)
-    part = make_accessory(spec)
+    part = bracket_shape(spec)
     base = _mounted_base(spec, root_radius=1)
     assert (
         difference(
@@ -250,9 +264,9 @@ PORTABLE_INSERTION_CASES = {(True, 2, 2), (False, 1, 2), (True, 2, 1)}
         for holes in (False, True)
     ],
 )
-def test_separate_tile_insertion_bearing_and_solid_backing(holes, nx, ny):
+def test_separate_tile_insertion_bearing_and_solid_backing(holes, nx, ny, bracket_shape):
     spec = Accessory("vertical-tile-bracket", nx=nx, ny=ny)
-    part = make_accessory(spec)
+    part = bracket_shape(spec)
     core = _vertical_bracket(spec, round_lip=False)
     tile_spec = Tile(
         nx, ny, hole_diameter=10 if holes else None, hole_scope="full" if holes else "interior"
@@ -262,10 +276,11 @@ def test_separate_tile_insertion_bearing_and_solid_backing(holes, nx, ny):
     for offset in (0, 1, 4, 8, 12.8, 15):
         placed = tile.moved(Location((0, offset, 0)))
         assert abs(volume(part.intersect(placed)) - volume(core.intersect(placed))) < 1e-4
+    bottom_faces = contact_faces(tile, 6.1, -1)
     bearing = sum(
         sum(f.area for f in q.faces()) if q else 0
         for top in contact_faces(part, 6.1, 1)
-        for bottom in contact_faces(tile, 6.1, -1)
+        for bottom in bottom_faces
         for q in [top.intersect(bottom)]
     )
     expected_bearing = (
@@ -281,7 +296,7 @@ def test_separate_tile_insertion_bearing_and_solid_backing(holes, nx, ny):
     core_bearing = sum(
         sum(f.area for f in q.faces()) if q else 0
         for top in contact_faces(core, 6.1, 1)
-        for bottom in contact_faces(tile, 6.1, -1)
+        for bottom in bottom_faces
         for q in [top.intersect(bottom)]
     )
     assert bearing >= core_bearing - 1e-9
@@ -342,7 +357,7 @@ def test_bracket_variants_and_scaled_interface_policy():
     [(1, 281317.69598481583), (2, 563188.0488542926)],
 )
 def test_shallow_brackets_round_free_body_and_preserve_mating_regions(
-    nx, expected_volume, tmp_path
+    nx, expected_volume, tmp_path, bracket_shape
 ):
     spec = Accessory(
         "vertical-tile-bracket",
@@ -350,14 +365,13 @@ def test_shallow_brackets_round_free_body_and_preserve_mating_regions(
         ny=1,
         panel_height_cells=2,
     )
-    shape = make_accessory(spec)
+    shape = bracket_shape(spec)
+    bounds = shape.bounding_box()
     datums = accessory_datums(spec)
     assert shape.is_valid and len(shape.solids()) == 1
     assert shape.volume == pytest.approx(expected_volume, abs=1e-5)
-    assert tuple(shape.bounding_box().min) == pytest.approx((0, 0, -12.8), abs=1e-5)
-    assert tuple(shape.bounding_box().max) == pytest.approx(
-        (60 * nx, 60, 127.578174593052), abs=1e-5
-    )
+    assert tuple(bounds.min) == pytest.approx((0, 0, -12.8), abs=1e-5)
+    assert tuple(bounds.max) == pytest.approx((60 * nx, 60, 127.578174593052), abs=1e-5)
     assert datums["base_cells_x_y"] == (nx, 1)
     assert datums["panel_cells_x_z"] == (nx, 2)
     assert len(datums["mount_centers"]) == nx

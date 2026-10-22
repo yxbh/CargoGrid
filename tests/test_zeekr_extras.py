@@ -9,10 +9,10 @@ from xml.etree import ElementTree as ET
 from zipfile import ZipFile
 
 import pytest
-from build123d import Box
+from build123d import Align, Box
 from tower_checks import assert_towers_stay_where_bambu_keeps_them
 
-from cargo_grid import cli
+from cargo_grid import catalogue, cli
 from cargo_grid.accessories import EDGE_OUTWARD_OPTIONS_MM, Accessory, tile_matched_perimeter
 from cargo_grid.catalogue import (
     accessory_design,
@@ -133,10 +133,26 @@ def contour_stand_ins(monkeypatch):
     monkeypatch.setattr(zeekr_7x_contours, "rear_panel_designs", _stand_in_contours())
 
 
+def _straight_shape(spec):
+    depth = spec.edge_outward + (spec.interface.male_join_depth if spec.family == "edge-x" else 0)
+    return Box(
+        spec.nx * spec.interface.pitch,
+        depth,
+        spec.interface.body_height,
+        align=(Align.MIN, Align.MIN, Align.MIN),
+    )
+
+
+@pytest.fixture
+def straight_stand_ins(monkeypatch):
+    monkeypatch.setattr(catalogue, "make_accessory", _straight_shape)
+
+
 @pytest.fixture(scope="module")
 def expansion_plan():
-    """Real 40 mm edges with contour stand-ins, planned once for read-only checks."""
+    """Measured-size boxes for inventory, plate planning and export plumbing."""
     with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(catalogue, "make_accessory", _straight_shape)
         patch.setattr(zeekr_7x_contours, "rear_panel_designs", _stand_in_contours())
         job = extras_job(
             H2D,
@@ -215,7 +231,9 @@ def test_standard_catalogue_inventory_and_all_accessory_ids_stay_unchanged(
 
 
 @pytest.mark.parametrize("layer", [0.24, 0.32])
-def test_x2d_expansion_set_keeps_all_required_pairs_and_contours(contour_stand_ins, layer):
+def test_x2d_expansion_set_keeps_all_required_pairs_and_contours(
+    contour_stand_ins, straight_stand_ins, layer
+):
     job = extras_job(
         X2D.build,
         placement_build=X2D.common_build(),
@@ -353,7 +371,7 @@ def test_expansion_set_rejects_nonstandard_settings_before_building(
         extras_job(H2D, **settings)
 
 
-def test_custom_build_keeps_the_same_complete_inventory(contour_stand_ins):
+def test_custom_build_keeps_the_same_complete_inventory(contour_stand_ins, straight_stand_ins):
     build = BuildVolume(305, 290, 13, exclusions=(Exclusion(0, 0, 10, 290),))
     job = extras_job(build)
     assert job.omitted == []
@@ -366,7 +384,9 @@ def test_custom_build_keeps_the_same_complete_inventory(contour_stand_ins):
     assert job.manifest_metadata["straight_edges"]["lengths_cells"] == [2, 3, 4]
 
 
-def test_expansion_set_refuses_an_envelope_too_small_for_a_contour_piece(contour_stand_ins):
+def test_expansion_set_refuses_an_envelope_too_small_for_a_contour_piece(
+    contour_stand_ins, straight_stand_ins
+):
     with pytest.raises(ValueError, match="edge-x_3x1.*actual bounds"):
         extras_job(BuildVolume(179, 120, 13))
     with pytest.raises(ValueError, match="edge-x_2x1.*actual bounds"):
@@ -652,7 +672,9 @@ def test_cli_extras_rejects_patterns_the_contour_pieces_cannot_match(
 
 @pytest.mark.parametrize("family", ["edge-x", "edge-y"])
 @pytest.mark.parametrize("cells", [1, 4, 5])
-def test_cli_standalone_forty_mm_straight_and_corner_rejection(tmp_path, capsys, family, cells):
+def test_cli_standalone_forty_mm_straight_and_corner_rejection(
+    tmp_path, capsys, family, cells, straight_stand_ins
+):
     args = [
         "part",
         "--edge-outward-mm",

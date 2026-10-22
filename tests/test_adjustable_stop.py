@@ -2,6 +2,7 @@
 
 import json
 from collections import Counter
+from copy import deepcopy
 from dataclasses import replace
 from math import degrees, floor
 from xml.etree import ElementTree as ET
@@ -86,6 +87,21 @@ from cargo_grid.plates import (
 )
 from cargo_grid.printers import H2D, X2D
 from cargo_grid.tiles import make_tile
+
+
+@pytest.fixture(scope="module")
+def stop_parts():
+    return make_adjustable_stop_parts()
+
+
+@pytest.fixture(scope="module")
+def compact_stop_parts():
+    return make_adjustable_stop_parts(AdjustableStopSpec(extension_mm=0))
+
+
+@pytest.fixture(scope="module")
+def released_stop_parts():
+    return make_adjustable_stop_parts(AdjustableStopSpec(released_illustration=True))
 
 
 def _overlap_volume(first, second) -> float:
@@ -217,24 +233,20 @@ def test_adjustable_stop_x2d_uses_the_shared_profiles_and_tower_reservation(nozz
     assert job.tower_bounds(0)[2] == 256
 
 
-@pytest.mark.parametrize(
-    "nozzle_diameter_mm",
-    [pytest.param(0.8, id="real-kit"), pytest.param(0.4, id="profile-stand-in")],
-)
+@pytest.mark.parametrize("nozzle_diameter_mm", [0.8, 0.4])
 def test_complete_print_project_uses_shared_h2d_support_conventions(
     tmp_path, nozzle_diameter_mm, monkeypatch
 ):
-    if nozzle_diameter_mm == 0.4:
-        monkeypatch.setattr(
-            adjustable_stop_export,
-            "make_adjustable_stop_parts",
-            lambda spec: (Box(20, 20, 10), Box(20, 10, 15), Box(20, 10, 5)),
-        )
-        monkeypatch.setattr(
-            adjustable_stop_export,
-            "make_adjustable_stop_prong_lock_clip",
-            lambda spec: Box(8, 10, 5),
-        )
+    monkeypatch.setattr(
+        adjustable_stop_export,
+        "make_adjustable_stop_parts",
+        lambda spec: (Box(20, 20, 10), Box(20, 10, 15), Box(20, 10, 5)),
+    )
+    monkeypatch.setattr(
+        adjustable_stop_export,
+        "make_adjustable_stop_prong_lock_clip",
+        lambda spec: Box(8, 10, 5),
+    )
     job = adjustable_stop_print_job(nozzle_diameter_mm)
     assert [design.name for design in job.designs] == [
         "fixed_base",
@@ -369,8 +381,8 @@ def test_complete_print_project_uses_shared_h2d_support_conventions(
     )
 
 
-def test_approved_parts_are_three_valid_native_solids():
-    base, pusher, keeper = make_adjustable_stop_parts()
+def test_approved_parts_are_three_valid_native_solids(stop_parts):
+    base, pusher, keeper = stop_parts
     assert [part.label for part in (base, pusher, keeper)] == [
         "fixed_base",
         "moving_wall",
@@ -383,16 +395,17 @@ def test_approved_parts_are_three_valid_native_solids():
         )
     )
     assert DIMENSIONS.wall_thickness == 8
-    assert tuple(pusher.bounding_box().size) == pytest.approx((60, 138.3, 120.25))
-    assert pusher.bounding_box().min.Y == pytest.approx(-38.3)
-    assert pusher.bounding_box().min.Z == pytest.approx(5.1)
-    assert pusher.bounding_box().max.Z == pytest.approx(125.35)
-    assert base.bounding_box().min.Z == pytest.approx(-12.8)
-    assert tuple(base.bounding_box().size)[:2] == pytest.approx((60, 120))
-    assert base.bounding_box().min.Y == pytest.approx(10)
-    assert base.bounding_box().max.Y == pytest.approx(130)
-    assert keeper.bounding_box().min.Y == pytest.approx(31)
-    assert keeper.bounding_box().max.Y == pytest.approx(49)
+    base_bounds, pusher_bounds, keeper_bounds = (part.bounding_box() for part in stop_parts)
+    assert tuple(pusher_bounds.size) == pytest.approx((60, 138.3, 120.25))
+    assert pusher_bounds.min.Y == pytest.approx(-38.3)
+    assert pusher_bounds.min.Z == pytest.approx(5.1)
+    assert pusher_bounds.max.Z == pytest.approx(125.35)
+    assert base_bounds.min.Z == pytest.approx(-12.8)
+    assert tuple(base_bounds.size)[:2] == pytest.approx((60, 120))
+    assert base_bounds.min.Y == pytest.approx(10)
+    assert base_bounds.max.Y == pytest.approx(130)
+    assert keeper_bounds.min.Y == pytest.approx(31)
+    assert keeper_bounds.max.Y == pytest.approx(49)
     assert DIMENSIONS.extension == pytest.approx(48)
     assert DIMENSIONS.prong_shortening == pytest.approx(6.5)
     assert DIMENSIONS.flexible_beam_length == pytest.approx(65.5)
@@ -401,8 +414,8 @@ def test_approved_parts_are_three_valid_native_solids():
     assert _overlap_volume(base, keeper) < 1e-06
 
 
-def test_base_has_two_identical_60_mm_pitch_underbody_anchors():
-    base, _, _ = make_adjustable_stop_parts()
+def test_base_has_two_identical_60_mm_pitch_underbody_anchors(stop_parts):
+    base, _, _ = stop_parts
     assert BASE_ANCHOR_CENTRES_Y_MM == (40, 100)
     anchors = []
     for centre_y in BASE_ANCHOR_CENTRES_Y_MM:
@@ -424,11 +437,12 @@ def test_base_has_two_identical_60_mm_pitch_underbody_anchors():
     )
 
 
-def test_front_connectors_reuse_shared_native_panel_brep():
-    _, pusher, _ = make_adjustable_stop_parts(AdjustableStopSpec(extension_mm=0))
+def test_front_connectors_reuse_shared_native_panel_brep(compact_stop_parts):
+    _, pusher, _ = compact_stop_parts
     source = make_bidirectional_panel_connector()
-    assert source.bounding_box().min.Z == pytest.approx(-12.8)
-    assert source.bounding_box().max.Z == pytest.approx(2)
+    bounds = source.bounding_box()
+    assert bounds.min.Z == pytest.approx(-12.8)
+    assert bounds.max.Z == pytest.approx(2)
     front_y = -DIMENSIONS.wall_thickness + DIMENSIONS.pusher_y_offset
     for height in CONNECTOR_CENTRES_ABOVE_PUSHER_FLOOR_MM:
         connector = source.rotate(Axis.X, -90).moved(
@@ -440,13 +454,14 @@ def test_front_connectors_reuse_shared_native_panel_brep():
                 )
             )
         )
-        assert front_y - connector.bounding_box().min.Y == pytest.approx(12.8)
-        assert connector.bounding_box().max.Y == pytest.approx(front_y + 2)
+        bounds = connector.bounding_box()
+        assert front_y - bounds.min.Y == pytest.approx(12.8)
+        assert bounds.max.Y == pytest.approx(front_y + 2)
         assert _overlap_volume(connector, pusher) == pytest.approx(connector.volume)
 
 
-def test_compact_pusher_offset_preserves_wall_thickness():
-    _, pusher, _ = make_adjustable_stop_parts(AdjustableStopSpec(extension_mm=0))
+def test_compact_pusher_offset_preserves_wall_thickness(compact_stop_parts):
+    _, pusher, _ = compact_stop_parts
     wall_only = pusher.intersect(
         Location((20, -2, 64)) * Box(5, 10, 2, align=(Align.MIN, Align.MIN, Align.MIN))
     )
@@ -456,8 +471,8 @@ def test_compact_pusher_offset_preserves_wall_thickness():
     assert bounds.size.Y == pytest.approx(DIMENSIONS.wall_thickness)
 
 
-def test_outer_fingers_have_three_equal_pitch_exposed_teeth():
-    _, pusher, _ = make_adjustable_stop_parts(AdjustableStopSpec(extension_mm=0))
+def test_outer_fingers_have_three_equal_pitch_exposed_teeth(compact_stop_parts):
+    _, pusher, _ = compact_stop_parts
     assert MOVING_TOOTH_STATIONS_MM == (97.5, 105.5, 113.5)
     outer_edge = DIMENSIONS.outer_centre + DIMENSIONS.outer_width / 2
     for side in (-1, 1):
@@ -473,8 +488,8 @@ def test_outer_fingers_have_three_equal_pitch_exposed_teeth():
         assert all((solid.bounding_box().size.Z == pytest.approx(14) for solid in exposed.solids()))
 
 
-def test_centre_squeeze_tab_continues_centre_prong_and_clip_has_one_side_bed_face():
-    _, pusher, _ = make_adjustable_stop_parts()
+def test_centre_squeeze_tab_continues_centre_prong_and_clip_has_one_side_bed_face(stop_parts):
+    _, pusher, _ = stop_parts
     for side in (-1, 1):
         side_x = side * DIMENSIONS.centre_width / 2
         continuous_side_faces = []
@@ -566,8 +581,8 @@ def test_centre_squeeze_tab_continues_centre_prong_and_clip_has_one_side_bed_fac
 
 
 @pytest.mark.slow
-def test_matched_ratchet_ramps_contact_and_clear_through_one_pitch():
-    parts = make_adjustable_stop_parts()
+def test_matched_ratchet_ramps_contact_and_clear_through_one_pitch(stop_parts):
+    parts = stop_parts
     spec = AdjustableStopSpec()
     base, pusher, keeper = parts
     base_ramps = _ratchet_ramp_faces(base, moving=False)
@@ -586,6 +601,7 @@ def test_matched_ratchet_ramps_contact_and_clear_through_one_pitch():
     )
     base_locks = _ratchet_lock_faces(base, moving=False)
     moving_locks = _ratchet_lock_faces(contact_pusher, moving=True)
+    base_lock_bounds = [(face, face.bounding_box()) for face in base_locks]
     if len(base_locks) != 2 * (DIMENSIONS.positions + 2) or len(moving_locks) != 6:
         raise ValueError("ratchet proof could not identify every locking face")
     positions = []
@@ -605,18 +621,19 @@ def test_matched_ratchet_ramps_contact_and_clear_through_one_pitch():
         contact_distances = []
         for moving_face in moving_locks:
             moved = moving_face.moved(Location((0, translation_y, 0)))
-            moved_y = moved.bounding_box().min.Y
-            side = -1 if moved.bounding_box().max.X < 0 else 1
+            moved_bounds = moved.bounding_box()
+            moved_y = moved_bounds.min.Y
+            side = -1 if moved_bounds.max.X < 0 else 1
             candidates = [
-                face
-                for face in base_locks
-                if (-1 if face.bounding_box().max.X < 0 else 1) == side
-                and abs(face.bounding_box().min.Y - moved_y) < CONNECTOR_PROOF_TOLERANCE_MM
+                (face, bounds)
+                for face, bounds in base_lock_bounds
+                if (-1 if bounds.max.X < 0 else 1) == side
+                and abs(bounds.min.Y - moved_y) < CONNECTOR_PROOF_TOLERANCE_MM
             ]
             if len(candidates) != 1:
                 raise ValueError("could not pair a moving lock face with its rack face")
-            fixed = candidates[0]
-            area = _projected_xz_overlap_area(moved, fixed)
+            fixed, fixed_bounds = candidates[0]
+            area = _projected_xz_overlap_area(moved, fixed, bounds=(moved_bounds, fixed_bounds))
             distance = moved.distance_to(fixed)
             if area <= 0 or distance > CONNECTOR_PROOF_TOLERANCE_MM:
                 raise ValueError("ratchet locking faces lost positive-area surface contact")
@@ -716,12 +733,12 @@ def test_approved_outer_assembly_shift_preserves_released_clearances():
     assert DIMENSIONS.rack_carrier_outer - DIMENSIONS.rack_carrier_inner == pytest.approx(2.8)
 
 
-def test_plain_front_centre_guides_bound_rigid_yaw_without_preloading_fingers():
-    parts = make_adjustable_stop_parts()
+def test_plain_front_centre_guides_bound_rigid_yaw_without_preloading_fingers(stop_parts):
+    parts = stop_parts
     _, pusher, _ = parts
     base, pusher, keeper = parts
     ununified_base = _make_base(unify_same_domain=False)
-    reunified_base = _unify_same_domain(base)
+    reunified_base = _unify_same_domain(deepcopy(base))
     unification = {
         "before_face_count": len(ununified_base.faces()),
         "before_edge_count": len(ununified_base.edges()),
@@ -1163,9 +1180,11 @@ def test_plain_front_centre_guides_bound_rigid_yaw_without_preloading_fingers():
 
 
 @pytest.mark.parametrize("released", [False, True])
-def test_pusher_bed_facing_underside_is_coplanar_with_fingers(released):
+def test_pusher_bed_facing_underside_is_coplanar_with_fingers(
+    released, stop_parts, released_stop_parts
+):
     spec = AdjustableStopSpec(released_illustration=released)
-    parts = make_adjustable_stop_parts(spec)
+    parts = released_stop_parts if released else stop_parts
     _, pusher, _ = parts
     bed_z = DIMENSIONS.finger_bottom_z
     nearby_downward_faces = []
@@ -1238,9 +1257,9 @@ def test_pusher_bed_facing_underside_is_coplanar_with_fingers(released):
 
 
 @pytest.mark.slow
-def test_tall_squeeze_pads_clear_normal_travel_and_require_keeper_off_for_removal():
+def test_tall_squeeze_pads_clear_normal_travel_and_require_keeper_off_for_removal(stop_parts):
     spec = AdjustableStopSpec()
-    parts = make_adjustable_stop_parts(spec)
+    parts = stop_parts
     base, pusher, keeper = parts
     released_pusher = _make_pusher(replace(spec, released_illustration=True))
     normal_positions = []
@@ -1441,8 +1460,8 @@ def test_tooth_carriers_stop_overtravel_even_when_released():
         assert _overlap_volume(beyond, stop) > 0.01
 
 
-def test_obsolete_mini_removal_shoulders_are_absent():
-    _, pusher, _ = make_adjustable_stop_parts(AdjustableStopSpec(0))
+def test_obsolete_mini_removal_shoulders_are_absent(compact_stop_parts):
+    _, pusher, _ = compact_stop_parts
     probes = [
         Location((x0, 94.5, DIMENSIONS.finger_top_z + 0.01))
         * Box(x1 - x0, 2.5, 4, align=(Align.MIN, Align.MIN, Align.MIN))
@@ -1460,8 +1479,8 @@ def test_obsolete_mini_removal_shoulders_are_absent():
     assert all((_overlap_volume(pusher, probe) < 1e-06 for probe in probes))
 
 
-def test_keeper_and_base_preserve_requested_fastener_geometry():
-    base, _, keeper = make_adjustable_stop_parts()
+def test_keeper_and_base_preserve_requested_fastener_geometry(stop_parts):
+    base, _, keeper = stop_parts
     cones = [face for face in keeper.faces() if face.geom_type == GeomType.CONE]
     assert len(cones) == 4
     bottom_faces = [
@@ -1504,9 +1523,9 @@ def test_keeper_and_base_preserve_requested_fastener_geometry():
     assert DIMENSIONS.screw_pilot_boss_radius - DIMENSIONS.screw_pilot / 2 == pytest.approx(2.0)
 
 
-def test_feature_ordered_rounding_preserves_working_regions_and_finger_sections():
+def test_feature_ordered_rounding_preserves_working_regions_and_finger_sections(stop_parts):
     spec = AdjustableStopSpec()
-    parts = make_adjustable_stop_parts(spec)
+    parts = stop_parts
     unrounded = (
         _make_base(round_edges=False),
         _make_pusher(spec, round_edges=False),
@@ -1667,7 +1686,7 @@ def test_feature_ordered_rounding_preserves_working_regions_and_finger_sections(
     assert "R0.05" in exceptions["moving_wall", "six wall-root side transitions"]
 
 
-def test_native_connector_composition_preserves_backing_and_roots():
+def test_native_connector_composition_preserves_backing_and_roots(stop_parts):
     spec = AdjustableStopSpec()
-    _, pusher, _ = make_adjustable_stop_parts(spec)
+    _, pusher, _ = stop_parts
     _native_connector_proofs(pusher, spec)
