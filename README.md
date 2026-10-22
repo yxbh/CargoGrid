@@ -450,7 +450,9 @@ export_adjustable_stop_print_project(
 )
 ```
 
-Contributor checks and release steps are in the [release checklist](docs/release-checklist.md). The accessory page has separate [gallery reproduction instructions](docs/attachments.md#reproduce-the-images).
+For development, `uv run pytest -q` runs the small contract checks. Seed a local dependency map with `uv run python tools/test_selection.py run --full`, then use `uv run python tools/test_selection.py run` for affected checks, including selected slow cases. The [test guide](tests/README.md) explains full-run fallbacks, PR selection and the local publish guard required for changes that reach published files.
+
+Release steps are in the [release checklist](docs/release-checklist.md). The accessory page has separate [gallery reproduction instructions](docs/attachments.md#reproduce-the-images).
 
 ## License and reference boundary
 

@@ -63,24 +63,27 @@ def test_default_and_full_portable_collections_have_distinct_complete_boundaries
     assert any(node.startswith("tests/test_zeekr_contours.py::") for node in complete)
 
 
-def test_slow_runner_partitions_cover_every_collected_test_once():
-    from ci_partition import partition_files
+def test_planned_shards_cover_every_collected_test_once():
+    from test_selection import shards
 
-    arguments = ("tests", "-m", "slow and not native")
-    complete, *parts = map(
-        set,
-        _collect(arguments, *(arguments + (f"--ci-partition={index}/3",) for index in range(3))),
-    )
+    complete = set(_collect(("tests", "-m", "not native"))[0])
+    collection = [{"nodeid": node, "slow": False} for node in complete]
+    plan = {"selected": sorted(complete)}
+    parts = list(map(set, shards(plan, collection, None, count=4)))
     assert all(parts)
     assert sum(map(len, parts)) == len(set.union(*parts))
     assert set.union(*parts) == complete
     paths = {node.split("::", 1)[0] for node in complete}
-    allocations = partition_files(paths | {"tests/test_new_slow_family.py"}, 3)
-    assert sum(map(len, allocations)) == len(set.union(*allocations))
-    assert set.union(*allocations) == paths | {"tests/test_new_slow_family.py"}
-    assert allocations == partition_files(
-        set(reversed(sorted(paths))) | {"tests/test_new_slow_family.py"}, 3
+    for path in paths:
+        assert sum(any(node.startswith(path + "::") for node in part) for part in parts) == 1
+    assert shards(plan, list(reversed(collection)), None, count=4) == [
+        sorted(part) for part in parts
+    ]
+    new = {"nodeid": "tests/test_new_slow_family.py::test_new", "slow": True}
+    extended = shards(
+        {"selected": [*plan["selected"], new["nodeid"]]}, [*collection, new], None, count=4
     )
+    assert set.union(*map(set, extended)) == complete | {new["nodeid"]}
 
 
 def test_grouped_workers_construct_a_shared_plan_once(tmp_path):
@@ -122,7 +125,9 @@ def test_plan(expansion_set_job, case):
         env={
             **os.environ,
             "PYTEST_ADDOPTS": "",
-            "PYTHONPATH": os.pathsep.join((str(ROOT / "tests"), os.environ.get("PYTHONPATH", ""))),
+            "PYTHONPATH": os.pathsep.join(
+                (str(ROOT / "tests"), str(ROOT / "tools"), os.environ.get("PYTHONPATH", ""))
+            ),
         },
         text=True,
         capture_output=True,
