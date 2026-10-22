@@ -262,8 +262,19 @@ def complete(args):
             args.approve,
             args.output.parent / "fingerprint-report.json",
         )
-        if any(
-            mapping["publish"][key] != plan[key] for key in ("commit", "environment", "snapshot")
+        published_environment = mapping["publish"]["environment"]
+        planned_environment = plan["environment"]
+        if (
+            any(mapping["publish"][key] != plan[key] for key in ("commit", "snapshot"))
+            or any(
+                published_environment[key] != planned_environment[key]
+                for key in ("python", "implementation", "lock")
+            )
+            or any(
+                version != planned_environment["packages"][name]
+                for name, version in published_environment["packages"].items()
+                if name in planned_environment["packages"]
+            )
         ):
             raise ValueError("publish fingerprints belong to another source or environment")
     write_json(args.output / "map.json", mapping)
@@ -281,7 +292,9 @@ def resources():
                 for line in cpuinfo.read_text().splitlines()
                 if line.startswith("model name")
             ),
-            platform.processor(),
+            subprocess.check_output(["sysctl", "-n", "machdep.cpu.brand_string"], text=True).strip()
+            if platform.system() == "Darwin"
+            else platform.processor(),
         )
         if cpuinfo.is_file()
         else platform.processor(),

@@ -230,6 +230,56 @@ def test_weekly_parts_need_complete_inventory_and_exact_reviewed_fingerprints(
         merge_fingerprints([], None, "", report)
 
 
+@pytest.mark.parametrize("drift", ["none", "commit", "snapshot", "lock", "python", "package"])
+def test_weekly_completion_retains_the_publish_platform_and_rejects_provenance_drift(
+    tmp_path, monkeypatch, artifact_map, drift
+):
+    plan = {
+        **copy.deepcopy(artifact_map),
+        "weekly": True,
+        "ci": {"pr": 7},
+    }
+    plan["environment"].update(platform="Linux", machine="x86_64")
+    plan["environment"]["packages"].pop("appnope", None)
+    publication = copy.deepcopy(artifact_map)
+    publication["environment"].update(platform="Darwin", machine="arm64")
+    publication["environment"]["packages"]["appnope"] = "0.1.4"
+    if drift == "commit":
+        publication["commit"] = "different"
+    elif drift == "snapshot":
+        publication["snapshot"]["files"]["src/changed.py"] = "different"
+    elif drift in {"lock", "python"}:
+        publication["environment"][drift] = "different"
+    elif drift == "package":
+        publication["environment"]["packages"]["coverage"] = "different"
+    monkeypatch.setattr(ci_tests, "snapshot", lambda root: plan["snapshot"])
+    monkeypatch.setattr(
+        ci_tests,
+        "merge_parts",
+        lambda *args: copy.deepcopy({**artifact_map, "environment": plan["environment"]}),
+    )
+    monkeypatch.setattr(publish_guard, "merge_fingerprints", lambda *args: publication)
+    args = SimpleNamespace(
+        plan=tmp_path / "plan",
+        parts=tmp_path / "parts",
+        publish=tmp_path / "publish",
+        output=tmp_path / "result",
+        approve="",
+    )
+    write_json(args.plan / "plan.json", plan)
+    (args.plan / "uv.lock").write_bytes(b"locked")
+    if drift != "none":
+        with pytest.raises(ValueError, match="another source or environment"):
+            ci_tests.complete(args)
+        assert not (args.output / "map.json").exists()
+    else:
+        ci_tests.complete(args)
+        result = json.loads((args.output / "map.json").read_text())
+        assert result["environment"]["platform"] == "Linux"
+        assert result["publish"]["environment"]["platform"] == "Darwin"
+        assert result["publish"]["environment"]["machine"] == "arm64"
+
+
 def test_publish_source_isolation_uses_each_archived_source_not_the_editable_install(tmp_path):
     for label in ("baseline", "candidate"):
         source = tmp_path / label

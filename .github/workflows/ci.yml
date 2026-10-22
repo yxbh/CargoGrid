@@ -125,52 +125,6 @@ jobs:
           sudo apt-get install --no-install-recommends -y libgl1 libglu1-mesa
       - name: Install dependencies
         run: uv sync --frozen --group dev
-      - name: Diagnose STEP ownership before and after meshing
-        if: github.event_name == 'workflow_dispatch'
-        run: |
-          uv run --no-sync python - <<'PY'
-          import subprocess
-          import sys
-          code = """
-          import sys
-          from pathlib import Path
-          from build123d import export_step, import_step, PrecisionMode
-          from OCP.BRepBuilderAPI import BRepBuilderAPI_Copy
-          from OCP.Interface import Interface_Static
-          from OCP.ShapeAnalysis import ShapeAnalysis_ShapeTolerance
-          from cargo_grid.adjustable_stop import make_adjustable_stop_parts
-          from cargo_grid.export import _checked_step_roundtrip, _StepSource, _adaptive_volume
-          from cargo_grid.meshes import checked_mesh
-          stage = sys.argv[1]
-          base, *_ = make_adjustable_stop_parts()
-          if stage != "fresh":
-              target = base if stage == "meshed" else type(base)(BRepBuilderAPI_Copy(base.wrapped, True, False).Shape())
-              checked_mesh(target)
-          source = _StepSource.measure(base)
-          print(stage, "source", source.adaptive_volume, "budget", source.volume_budget,
-                "max tolerance", ShapeAnalysis_ShapeTolerance().Tolerance(base.wrapped, 1), flush=True)
-          try:
-              _, mode, delta, budget, bounds = _checked_step_roundtrip(base, Path(".local") / (stage + ".step"))
-          except ValueError as error:
-              print(stage, "REJECTED", error, flush=True)
-          else:
-              print(stage, "ACCEPTED", mode, delta, budget, bounds, flush=True)
-          tolerance = ShapeAnalysis_ShapeTolerance().Tolerance(base.wrapped, 1)
-          previous = Interface_Static.RVal_s("write.precision.val")
-          path = Path(".local/source-tolerance.step")
-          try:
-              assert Interface_Static.SetRVal_s("write.precision.val", tolerance)
-              assert export_step(base, path, precision_mode=PrecisionMode.SESSION)
-          finally:
-              assert Interface_Static.SetRVal_s("write.precision.val", previous)
-          restored = import_step(path)
-          print("SOURCE-MAXIMUM", tolerance, "delta", abs(_adaptive_volume(restored) - source.adaptive_volume),
-                "budget", source.volume_budget, "valid", restored.is_valid, "solids", len(restored.solids()), flush=True)
-          """
-          import textwrap
-          for stage in ("fresh",):
-              subprocess.run([sys.executable, "-c", textwrap.dedent(code), stage], check=True)
-          PY
       - name: Lint and format
         run: |
           uv run --no-sync ruff check .
@@ -253,7 +207,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.publish_matrix) }}
-    runs-on: ubuntu-latest
+    runs-on: macos-15
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -265,10 +219,6 @@ jobs:
       - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
         with:
           python-version: ${{ needs.plan.outputs.python }}
-      - name: Install CAD runtime libraries
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install --no-install-recommends -y libgl1 libglu1-mesa
       - run: uv sync --frozen --group dev
       - run: uv run --no-sync python tools/ci_tests.py resources
       - name: Fresh source-derived fingerprints and publish dependencies
@@ -277,24 +227,6 @@ jobs:
           NOZZLE: ${{ matrix.nozzle }}
           VARIANT: ${{ matrix.name }}
         run: uv run --no-sync python tools/publish_guard.py fingerprints --printer "$PRINTER" --nozzle "$NOZZLE" --variant "$VARIANT" --output ".local/publish/$VARIANT"
-      - name: Diagnose failed native export without recording
-        if: failure()
-        env:
-          PRINTER: ${{ matrix.printer }}
-          VARIANT: ${{ matrix.name }}
-        run: |
-          uv run --no-sync python - <<'PY'
-          import os
-          import sys
-          from pathlib import Path
-          from tempfile import TemporaryDirectory
-          sys.path.insert(0, "tools")
-          from makerworld_exports import generate, variants
-          variant = next(v for v in variants((os.environ["PRINTER"],)) if v.name == os.environ["VARIANT"])
-          print("Repeating the original CLI in a clean process without coverage", flush=True)
-          with TemporaryDirectory(dir=".local") as folder:
-              generate(variant, Path(folder), packing_workers=2)
-          PY
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: publish-${{ matrix.name }}
