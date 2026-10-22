@@ -409,6 +409,7 @@ def test_shared_lazy_fixture_dependencies_include_transitive_peers_and_data(mapp
 def test_published_functions_use_their_own_snapshot_until_refreshed(mapping):
     mapping["publish"] = {
         "snapshot": state(SOURCES),
+        "environment": mapping["environment"],
         "functions": {"src/example/body.py": ["body"]},
     }
     sources = {
@@ -429,6 +430,22 @@ def test_published_functions_use_their_own_snapshot_until_refreshed(mapping):
     }
     assert selection(mapping, latest)["publish_guard"]
     assert not selection(mapping, {**earlier, "README.md": "words"})["publish_guard"]
+
+
+def test_dependency_drift_cannot_narrow_the_guard_with_an_old_publish_graph(mapping):
+    mapping["publish"] = {
+        "snapshot": state(SOURCES),
+        "environment": mapping["environment"],
+        "functions": {"src/example/body.py": ["body"]},
+    }
+    mapping["environment"] = {"packages": {"coverage": "8"}}
+    sources = {
+        **SOURCES,
+        "src/example/body.py": SOURCES["src/example/body.py"].replace("return 42", "return 43"),
+    }
+    result = selection(mapping, sources, current_environment=mapping["environment"])
+    assert result["mode"] == "selected"
+    assert result["publish_guard"]
 
 
 def test_map_corruption_is_reported_and_requests_a_full_run(tmp_path):

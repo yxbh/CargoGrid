@@ -366,6 +366,7 @@ def load_map(path):
             or "publish" in mapping
             and (
                 not valid_snapshot(mapping["publish"]["snapshot"])
+                or not isinstance(mapping["publish"].get("environment"), dict)
                 or not isinstance(mapping["publish"]["functions"], dict)
                 or not all(strings(names) for names in mapping["publish"]["functions"].values())
             )
@@ -622,7 +623,9 @@ def select(mapping, current, collection, *, current_environment=None, full_reaso
     publish = bool(full_reason)
     recorded_publish = mapping.get("publish") if mapping else None
     if source_changed and not publish:
-        if not recorded_publish:
+        if not recorded_publish or recorded_publish.get("environment") != (
+            current_environment if current_environment is not None else mapping["environment"]
+        ):
             publish = True
         else:
             published = affected_functions(
