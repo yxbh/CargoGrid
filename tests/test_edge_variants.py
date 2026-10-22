@@ -394,33 +394,21 @@ def test_completed_miter_terminations_cut_the_tile_corner_site(outward):
                 assert not part.is_inside(Vector(x, y, z))
 
 
-@pytest.mark.parametrize(
-    "outward,complete",
-    [
-        (10, False),
-        (10, True),
-        pytest.param(20, False, marks=pytest.mark.slow),
-        pytest.param(20, True, marks=pytest.mark.slow),
-        (30, False),
-        (30, True),
-    ],
-)
-def test_outer_corner_half_pairs_close_without_overlap(outward, complete):
-    pitch = 60
+def _assert_half_pair_closure(pairs, outward, complete, interface):
+    pitch, height = interface.pitch, interface.height
     diagonal = outward / sqrt(2)
-    pairs = _corner_half_pairs(outward, complete)
     for (first, second), seam_point, expected_min, expected_max in zip(
         pairs,
         (
             lambda fraction: Vector(
                 -diagonal * fraction,
                 pitch + diagonal * fraction,
-                6.5,
+                height / 2,
             ),
             lambda fraction: Vector(
                 pitch + diagonal * fraction,
                 -diagonal * fraction,
-                6.5,
+                height / 2,
             ),
         ),
         (
@@ -428,8 +416,8 @@ def test_outer_corner_half_pairs_close_without_overlap(outward, complete):
             (0, -outward, 0),
         ),
         (
-            (pitch, pitch + outward, 13),
-            (pitch + outward, pitch, 13),
+            (pitch, pitch + outward, height),
+            (pitch + outward, pitch, height),
         ),
     ):
         assert first.distance_to(second) < 1e-6
@@ -473,6 +461,7 @@ def test_outer_corner_pairs_match_whole_l_exterior_sections(
     pitch = interface.pitch
     height = interface.height
     northwest, southeast = _corner_half_pairs(outward, complete, interface)
+    _assert_half_pair_closure((northwest, southeast), outward, complete, interface)
     whole_northeast = _accessory_shape(
         Accessory(
             "corner-out",
@@ -667,14 +656,6 @@ def test_outer_corner_halves_keep_rounds_step_and_mesh(
     )
     _, _, report = checked_mesh(part)
     assert report["closed_oriented_manifold"]
-
-
-def test_outer_corner_half_pair_scales_unit_and_thickness_independently():
-    interface = Interface(45, 8)
-    for first, second in _corner_half_pairs(20, False, interface):
-        assert first.distance_to(second) < 1e-6
-        assert _solid_intersection_volume(first, second) < 1e-7
-        assert max(first.bounding_box().size.Z, second.bounding_box().size.Z) == pytest.approx(8)
 
 
 def test_custom_unit_completion_uses_only_tile_accepted_boundary_sites():

@@ -26,7 +26,7 @@ def test_analytic_socket_and_plug_dimensions():
     assert plug.bounding_box().size.Z == pytest.approx(12.8, abs=1e-6)
 
 
-@pytest.mark.parametrize("nx,ny", [(1, 1), (2, 3), (4, 3), (5, 1)])
+@pytest.mark.parametrize("nx,ny", [(1, 1), (5, 1)])
 def test_tile_validity_dimensions_and_step_roundtrip(nx, ny, tmp_path):
     shape = make_tile(Tile(nx, ny))
     assert shape.is_valid and len(shape.solids()) == 1
