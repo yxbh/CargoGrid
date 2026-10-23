@@ -36,6 +36,7 @@ INFRASTRUCTURE = {
 }
 CONFIG_SECTIONS = ("project", "dependency-groups", "build-system")
 BENCHMARK_CASES = {
+    "contracts": (None, None),
     "docs": ("README.md", None),
     "test": ("tests/test_ramp.py", "test_ramp_width_run_rise_rounding_step_and_mesh"),
     "cli": ("src/cargo_grid/cli.py", "parser"),
@@ -571,7 +572,7 @@ def select(mapping, current, collection, *, current_environment=None, full_reaso
             for path in changed
             if Path(path).name == "conftest.py"
             or path in INFRASTRUCTURE
-            or path.startswith(".github/workflows/")
+            or path.startswith((".github/workflows/", ".github/actions/"))
             or path.startswith("src/")
             and not path.endswith(".py")
         ]
@@ -744,11 +745,13 @@ def collect(root, destination):
 
 
 def benchmark_snapshot(mapping, current, current_environment, case):
-    """Measure selected unchanged tests using a virtual one-function/input edit."""
+    """Measure unchanged contracts or the selection for a virtual one-function/input edit."""
     if mapping["snapshot"] != current or mapping["environment"] != current_environment:
         raise ValueError("benchmark needs a complete map of the exact current tree and environment")
     changed = deepcopy(current)
     path, name = BENCHMARK_CASES[case]
+    if path is None:
+        return changed
     changed["files"][path] = digest((current["files"][path] + case).encode())
     if name:
         function = changed["python"][path]["functions"][name]

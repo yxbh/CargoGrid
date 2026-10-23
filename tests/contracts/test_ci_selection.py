@@ -3,7 +3,10 @@
 import copy
 import io
 import json
+import subprocess
+import sys
 import tarfile
+from pathlib import Path
 from types import SimpleNamespace
 from zipfile import ZipFile, ZipInfo
 
@@ -25,6 +28,153 @@ def artifact_map(tmp_path):
         "fixtures": {},
         "ci": {"main_commit": "a" * 40},
     }
+
+
+@pytest.mark.parametrize("selection", ["contracts", "mixed", "geometry", "empty", "weekly"])
+def test_ci_planning_routes_only_complete_contract_selections_into_checks(
+    tmp_path, monkeypatch, artifact_map, selection
+):
+    nodes = [
+        "tests/contracts/test_example.py::test_first",
+        "tests/contracts/test_example.py::test_second",
+        "tests/test_geometry.py::test_geometry",
+    ]
+    selected = {
+        "contracts": nodes[:2],
+        "mixed": nodes,
+        "geometry": nodes[2:],
+        "empty": [],
+        "weekly": nodes,
+    }[selection]
+    collection = [{"nodeid": node, "slow": False} for node in nodes]
+    plan = {
+        **copy.deepcopy(artifact_map),
+        "mode": "full" if selection == "weekly" else "selected",
+        "selected": selected,
+        "changed": [],
+        "publish_guard": False,
+        "collection": collection,
+        "shards": [[node] for node in selected],
+    }
+    calls = []
+    monkeypatch.setattr(ci_tests, "ROOT", tmp_path)
+    monkeypatch.setattr(ci_tests, "load_map", lambda path: (artifact_map, None))
+    monkeypatch.setattr(ci_tests, "collect", lambda *args: calls.append("collect") or collection)
+
+    def make_plan(root, baseline, actual_collection, **kwargs):
+        assert calls == ["collect"] and actual_collection == collection
+        calls.append("plan")
+        return copy.deepcopy(plan)
+
+    monkeypatch.setattr(ci_tests, "make_plan", make_plan)
+    if selection == "weekly":
+        variant = SimpleNamespace(
+            name="named",
+            arguments=["--printer", "h2d", "--nozzle-diameter-mm", "0.8"],
+        )
+        monkeypatch.setitem(
+            sys.modules,
+            "makerworld_exports",
+            SimpleNamespace(variants=lambda printers: [variant]),
+        )
+    else:
+        monkeypatch.setitem(sys.modules, "makerworld_exports", None)
+    github_output = tmp_path / "github-output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(github_output))
+    (tmp_path / "uv.lock").write_bytes(b"locked")
+    args = SimpleNamespace(
+        mode="weekly" if selection == "weekly" else "selected",
+        baseline=tmp_path / "baseline",
+        output=tmp_path / "plan",
+        benchmark="",
+        head="head",
+        base="base",
+        pr=7,
+    )
+    ci_tests.ci_plan(args)
+    result = json.loads((args.output / "plan.json").read_text())
+    outputs = dict(line.split("=", 1) for line in github_output.read_text().splitlines())
+    assert result["selected"] == selected and result["collection"] == collection
+    assert result["contracts_only"] == (selection == "contracts")
+    assert outputs["contracts_only"] == str(selection == "contracts").lower()
+    assert result["shards"] == ([selected] if selection == "contracts" else plan["shards"])
+    assert bool(json.loads(outputs["publish_matrix"])["include"]) == (selection == "weekly")
+    assert (args.output / "uv.lock").read_bytes() == b"locked"
+
+
+@pytest.mark.parametrize("weekly", [False, True])
+def test_ci_completion_needs_only_the_pinned_python_standard_library(
+    tmp_path, artifact_map, weekly
+):
+    node = "tests/contracts/test_example.py::test_example"
+    plan = {
+        **copy.deepcopy(artifact_map),
+        "ci": {"pr": 0},
+        "selected": [node],
+        "collection": [{"nodeid": node, "slow": False}],
+        "weekly": weekly,
+    }
+    part = {
+        **copy.deepcopy(artifact_map),
+        "tests": {
+            node: {
+                "functions": {},
+                "fixtures": [],
+                "data": [],
+                "process": False,
+                "outcome": "passed",
+                "duration": 0.1,
+            }
+        },
+    }
+    write_json(tmp_path / "plan/plan.json", plan)
+    (tmp_path / "plan/uv.lock").write_bytes(b"locked")
+    write_json(tmp_path / "parts/part-main.json", part)
+    if weekly:
+        publication = {
+            **copy.deepcopy(artifact_map),
+            "functions": {},
+            "fingerprints": {
+                f"variant-{index}{suffix}": "unchanged"
+                for index in range(24)
+                for suffix in (".3mf", ".manifest.json")
+            },
+        }
+        publication["environment"].update(platform="Darwin", machine="arm64")
+        write_json(tmp_path / "publish/fingerprints.json", publication)
+    script = (
+        "import json, sys\n"
+        "from pathlib import Path\n"
+        "from types import SimpleNamespace\n"
+        "sys.path.insert(0, sys.argv[1])\n"
+        "import ci_tests\n"
+        "root = Path(sys.argv[2])\n"
+        "plan = json.loads((root / 'plan/plan.json').read_text())\n"
+        "ci_tests.snapshot = lambda root: plan['snapshot']\n"
+        "ci_tests.complete(SimpleNamespace(plan=root / 'plan', parts=root / 'parts', "
+        "publish=root / 'publish', output=root / 'result', approve=''))\n"
+        "assert not any(name == 'build123d' or name.startswith('OCP') for name in sys.modules)\n"
+    )
+    subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-S",
+            "-c",
+            script,
+            str(Path(ci_tests.__file__).parent),
+            str(tmp_path),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    result, error = load_map(tmp_path / "result/map.json")
+    assert not error, error
+    assert result["tests"] == part["tests"]
+    assert result["ci"]["main_commit"] == artifact_map["commit"]
+    assert (tmp_path / "result/uv.lock").read_bytes() == b"locked"
+    assert bool(result.get("publish")) == weekly
 
 
 def test_artifact_discovery_accepts_only_successful_owned_workflow_runs(monkeypatch):
