@@ -30,9 +30,23 @@ from adjustable_stop_checks import (
     _shape_volume,
     _symmetric_difference_volume,
 )
-from build123d import Align, Axis, Box, Compound, GeomType, Location, Part, Pos, ShapeList
+from build123d import (
+    Align,
+    Axis,
+    Box,
+    Compound,
+    Face,
+    GeomType,
+    Location,
+    Part,
+    Plane,
+    Pos,
+    ShapeList,
+)
+from OCP.Adaptor3d import Adaptor3d_CurveOnSurface
 from OCP.BRep import BRep_Tool
-from OCP.BRepAdaptor import BRepAdaptor_Surface
+from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Curve2d, BRepAdaptor_Surface
+from OCP.GeomLib import GeomLib_CheckCurveOnSurface
 from OCP.OCP.collections import (
     IndexedDataMap_TopoDS_Shape_List_TopoDS_Shape_TopTools_ShapeMapHasher,
 )
@@ -73,7 +87,7 @@ from cargo_grid.adjustable_stop_export import (
     prepare_adjustable_stop_print_job,
     write_adjustable_stop_print_project,
 )
-from cargo_grid.export import BAMBU_PROCESS_DEFAULTS, write_3mf
+from cargo_grid.export import BAMBU_PROCESS_DEFAULTS, _checked_step_roundtrip, write_3mf
 from cargo_grid.jobs import Design, Job
 from cargo_grid.packing import PrimeTower, PrintPlacement, TowerClearance
 from cargo_grid.parameters import Tile
@@ -102,6 +116,71 @@ def compact_stop_parts():
 @pytest.fixture(scope="module")
 def released_stop_parts():
     return make_adjustable_stop_parts(AdjustableStopSpec(released_illustration=True))
+
+
+def test_outer_guide_corner_trims_preserve_radii_and_keeper_seating(stop_parts):
+    base = stop_parts[0]
+    corners = [
+        face
+        for face in base.faces()
+        if face.geom_type == GeomType.BSPLINE
+        for centre in [face.center()]
+        if 22 < abs(centre.X) < 25 and 47 < centre.Y < 51 and 15 < centre.Z < 18
+    ]
+    assert len(corners) == 2
+    edge_faces = IndexedDataMap_TopoDS_Shape_List_TopoDS_Shape_TopTools_ShapeMapHasher()
+    TopExp.MapShapesAndAncestors_s(base.wrapped, TopAbs_EDGE, TopAbs_FACE, edge_faces)
+    for corner in corners:
+        assert len(corner.edges()) == 3
+        for edge in corner.edges():
+            adjacent = edge_faces.FindFromKey(edge.wrapped)
+            assert adjacent.Size() == 2
+            for support in (adjacent.First(), adjacent.Last()):
+                checker = GeomLib_CheckCurveOnSurface(BRepAdaptor_Curve(edge.wrapped))
+                checker.Perform(
+                    Adaptor3d_CurveOnSurface(
+                        BRepAdaptor_Curve2d(edge.wrapped, TopoDS.Face(support)),
+                        BRepAdaptor_Surface(TopoDS.Face(support)),
+                    )
+                )
+                assert checker.IsDone()
+                # Original fillet approximation precision, not its enlarged edge tolerance.
+                assert checker.MaxDistance() <= 1e-4
+    radii = _cylindrical_radius_counts(base)
+    assert radii["1"] == 12
+    assert radii["2"] == 52
+    top_faces = [
+        face
+        for face in base.faces()
+        if face.geom_type == GeomType.PLANE
+        and abs(face.bounding_box().min.Z - DIMENSIONS.keeper_seat) < 1e-6
+        and abs(face.bounding_box().max.Z - DIMENSIONS.keeper_seat) < 1e-6
+    ]
+    keeper_footprint = Face.make_rect(
+        DIMENSIONS.keeper_width,
+        DIMENSIONS.keeper_length,
+        Plane(
+            origin=(
+                0,
+                (DIMENSIONS.keeper_start + DIMENSIONS.keeper_end) / 2,
+                DIMENSIONS.keeper_seat,
+            )
+        ),
+    )
+    contact = Compound(top_faces).intersect(keeper_footprint)
+    assert contact is not None
+    assert sum(face.area for face in contact.faces()) == pytest.approx(
+        310.2129939588169, abs=1e-6, rel=0
+    )
+
+
+def test_fixed_base_step_roundtrip_preserves_volume_and_bounds(stop_parts, tmp_path):
+    restored, _, volume_delta, volume_budget, bounds_delta = _checked_step_roundtrip(
+        stop_parts[0], tmp_path / "fixed-base.step"
+    )
+    assert restored.is_valid and len(restored.solids()) == 1
+    assert volume_delta <= volume_budget
+    assert bounds_delta <= 1e-5
 
 
 def _overlap_volume(first, second) -> float:
