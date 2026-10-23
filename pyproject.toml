@@ -44,6 +44,9 @@ include = [
     "/tools/check_test_durations.py",
     "/tools/ci_memory_sampler.py",
     "/tools/makerworld_exports.py",
+    "/tools/test_selection.py",
+    "/tools/ci_tests.py",
+    "/tools/publish_guard.py",
     "/tools/render_docs.py",
     "/.github/workflows/ci.yml",
     "/.gitignore",
@@ -57,15 +60,15 @@ include = [
 cargo-grid = "cargo_grid.cli:main"
 
 [dependency-groups]
-dev = ["pytest>=8", "pytest-xdist>=3", "ruff>=0.11"]
+dev = ["coverage>=7.10", "pytest>=8", "pytest-xdist>=3", "ruff>=0.11"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests/contracts"]
-pythonpath = ["src", "tests"]
+pythonpath = ["src", "tests", "tools"]
 addopts = "-m 'not native'"
 markers = [
     "native: requires an explicitly supplied local Bambu Studio executable",
-    "slow: exhaustive CAD and assembled geometry checks run outside portable CI",
+    "slow: exhaustive CAD and assembled geometry checks, selected by change on PRs",
 ]
 
 [tool.ruff]

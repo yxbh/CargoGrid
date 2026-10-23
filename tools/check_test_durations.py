@@ -2,12 +2,13 @@
 
 Each test's reported time covers its setup, call and teardown, including any module fixture
 it is the first to request. A portable test over the budget fails the check unless it is in
-the reviewed allowlist below, which gives it its own upper limit. Mark genuinely exhaustive
-checks ``slow`` instead of adding entries. A pytest session longer than the target only
-produces a warning, because hosted-runner speed varies between runs.
+the reviewed allowlist below, which gives it its own upper limit. An all-tier selection plan
+identifies existing slow cases, which have never had this portable-only budget. A pytest
+session longer than the target only produces a warning because hosted-runner speed varies.
 """
 
 import argparse
+import json
 import os
 import sys
 import xml.etree.ElementTree as ET
@@ -59,21 +60,34 @@ def main() -> int:
     parser.add_argument("--target-seconds", type=float, default=DEFAULT_TARGET_SECONDS)
     parser.add_argument("--show", type=int, default=15, help="slowest tests to list")
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="repository root")
+    parser.add_argument("--selection-plan", type=Path, help="identify existing slow cases")
     args = parser.parse_args()
     session, cases = read_report(args.report, args.root)
     if not cases:
         parser.error(f"no executed tests found in {args.report}")
+    slow = set()
+    if args.selection_plan:
+        plan = json.loads(args.selection_plan.read_text())
+        known = {record["nodeid"] for record in plan["collection"]}
+        unknown = {name for name, _ in cases} - known
+        if unknown:
+            parser.error(f"report contains cases outside the selection plan: {sorted(unknown)}")
+        slow = {record["nodeid"] for record in plan["collection"] if record["slow"]}
+        cases = [(name, seconds) for name, seconds in cases if name not in slow]
     seen = {name for name, _ in cases}
     failures = []
     for name, seconds in cases:
         limit, _ = ALLOWLIST.get(name, (args.budget_seconds, ""))
         if seconds > limit:
             failures.append((name, seconds, limit))
-    stale = sorted(set(ALLOWLIST) - seen)
+    stale = sorted(
+        (set(ALLOWLIST) & set(plan["selected"]) if args.selection_plan else set(ALLOWLIST)) - seen
+    )
     slowest = sorted(cases, key=lambda case: -case[1])[: args.show]
     lines = [
         f"Portable tests: {len(cases)}, pytest session {session:.0f} s "
         f"(target {args.target_seconds:.0f} s), per-test budget {args.budget_seconds:.0f} s",
+        f"Existing slow cases are outside this portable-only budget ({len(slow)} in the full plan).",
         "Slowest setup+call+teardown times:",
         *(
             f"  {seconds:7.1f} s  {name}" + ("  [allowlisted]" if name in ALLOWLIST else "")
@@ -95,8 +109,8 @@ def main() -> int:
     for name, seconds, limit in failures:
         print(
             f"::error title=Test over duration budget::{name} took {seconds:.1f} s, over its "
-            f"{limit:.0f} s limit. Speed it up with representative sites, local clipped "
-            "Booleans or a shared fixture, or mark exhaustive coverage slow."
+            f"{limit:.0f} s limit. Speed it up without weakening its assertions, witnesses "
+            "or tolerances; do not move it to another tier to meet the budget."
         )
     return 1 if failures else 0
 

@@ -5,81 +5,142 @@ on:
     branches:
       - main
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   schedule:
-    # Weekly slow tier (Saturday 17:23 UTC): exhaustive CAD sweeps left out of portable CI.
+    # Full suite and fresh-dependency publish fingerprints, Saturday 17:23 UTC.
     - cron: "23 17 * * 6"
   workflow_dispatch:
     inputs:
-      tier:
-        description: Test tier to run
+      mode:
+        description: Full suite, or full suite plus publish fingerprints
         type: choice
         options:
-          - portable
-          - slow
-        default: portable
+          - full
+          - weekly
+        default: full
+      approve_fingerprints:
+        description: Reviewed exact fingerprint digest, only when accepting a reported change
+        type: string
+        default: ""
+      benchmark_case:
+        description: Measurement only (docs/test/cli/tower/stop/ramp/handle/rod-brace/adjustable-stop/planner/export/packing/assembly/core/infrastructure); not merge qualification
+        type: string
+        default: ""
+      benchmark_run:
+        description: Successful CI run providing an exact-tree map and lock for measurement
+        type: string
+        default: ""
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name }}-${{ inputs.tier }}
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name }}-${{ inputs.mode }}
   cancel-in-progress: true
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
-  portable:
-    if: github.event_name != 'schedule' && inputs.tier != 'slow'
+  plan:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 10
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      python: ${{ steps.plan.outputs.python }}
+      wheel: ${{ steps.plan.outputs.wheel }}
+      weekly: ${{ steps.plan.outputs.weekly }}
+      publish_matrix: ${{ steps.plan.outputs.publish_matrix }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+      - name: Fetch a trusted main map and lock, then an eligible green PR map
+        id: fetch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number || 0 }}
+          BENCHMARK_CASE: ${{ inputs.benchmark_case }}
+          BENCHMARK_RUN: ${{ inputs.benchmark_run }}
+        run: |
+          if [ -n "$BENCHMARK_CASE" ]; then
+            test -n "$BENCHMARK_RUN"
+            python3 tools/ci_tests.py fetch --repo "$GITHUB_REPOSITORY" --benchmark-run "$BENCHMARK_RUN" --output .local/baseline
+          else
+            test -z "$BENCHMARK_RUN"
+            python3 tools/ci_tests.py fetch --repo "$GITHUB_REPOSITORY" --head "$HEAD_SHA" --base "$BASE_SHA" --pr "$PR_NUMBER" --output .local/baseline
+          fi
       - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
         with:
-          python-version: "3.12"
+          python-version: ${{ (github.event_name == 'pull_request' || inputs.benchmark_case != '') && steps.fetch.outputs.python || '3.12' }}
+      - name: Install CAD runtime libraries
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install --no-install-recommends -y libgl1 libglu1-mesa
+      - name: Resolve fresh on main and backstops; pin PRs to main's lock
+        env:
+          PINNED: ${{ steps.fetch.outputs.pinned }}
+          EVENT: ${{ github.event_name }}
+          BENCHMARK_CASE: ${{ inputs.benchmark_case }}
+        run: |
+          if { [ "$EVENT" = pull_request ] || [ -n "$BENCHMARK_CASE" ]; } && [ "$PINNED" = true ]; then
+            cp .local/baseline/uv.lock uv.lock
+          else
+            uv lock --upgrade
+          fi
+          uv sync --frozen --group dev
+      - name: Collect everything before selecting
+        id: plan
+        env:
+          MODE: ${{ github.event_name == 'schedule' && 'weekly' || inputs.mode || (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-tests')) && 'full' || 'selected' }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number || 0 }}
+          BENCHMARK_CASE: ${{ inputs.benchmark_case }}
+        run: uv run --no-sync python tools/ci_tests.py plan --baseline .local/baseline --output .local/ci-plan --mode "$MODE" --head "$HEAD_SHA" --base "$BASE_SHA" --pr "$PR_NUMBER" --benchmark "$BENCHMARK_CASE"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: test-plan
+          path: .local/ci-plan
+          include-hidden-files: true
+          retention-days: 14
+
+  checks:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: test-plan
+          path: .local/ci-plan
+      - run: cp .local/ci-plan/uv.lock uv.lock
+      - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
+        with:
+          python-version: ${{ needs.plan.outputs.python }}
       - name: Install CAD runtime libraries
         run: |
           sudo apt-get update -qq
           sudo apt-get install --no-install-recommends -y libgl1 libglu1-mesa
       - name: Install dependencies
-        run: uv sync --group dev
+        run: uv sync --frozen --group dev
       - name: Lint and format
         run: |
           uv run --no-sync ruff check .
           uv run --no-sync ruff format --check .
-      - name: Record runner resources
-        run: |
-          uv run --no-sync python - <<'PY'
-          import importlib.metadata
-          import os
-          import platform
-          from pathlib import Path
-
-          print("Platform:", platform.platform())
-          print("CPU:", next((line.split(":", 1)[1].strip() for line in Path("/proc/cpuinfo").read_text().splitlines() if line.startswith("model name")), "unknown"))
-          print("Logical CPUs:", os.cpu_count())
-          print("Allowed CPUs:", sorted(os.sched_getaffinity(0)))
-          siblings = Path("/sys/devices/system/cpu/cpu0/topology/thread_siblings_list")
-          print("CPU 0 thread siblings:", siblings.read_text().strip() if siblings.exists() else "unavailable")
-          print("Load:", os.getloadavg())
-          print("\n".join(line for line in Path("/proc/meminfo").read_text().splitlines() if line.startswith(("MemTotal:", "MemAvailable:"))))
-          for name in ("cpu.max", "memory.max", "memory.current"):
-              path = Path("/sys/fs/cgroup") / name
-              print(name, path.read_text().strip() if path.exists() else "unavailable")
-          for package in ("build123d", "cadquery-ocp-novtk", "numpy", "scipy", "pytest", "pytest-xdist"):
-              print(package, importlib.metadata.version(package))
-          PY
-      - name: Portable geometry and export tests
-        run: uv run --no-sync python tools/ci_memory_sampler.py -- /usr/bin/time -v uv run --no-sync pytest -q tests -n 4 --dist worksteal -m "not native and not slow" --durations=0 --durations-min=0 --junitxml=.local/portable-junit.xml
-      - name: Check portable test durations
-        if: ${{ !cancelled() && hashFiles('.local/portable-junit.xml') != '' }}
-        run: uv run --no-sync python tools/check_test_durations.py .local/portable-junit.xml
+          git diff --check
       - name: Build and inspect distributions
+        if: needs.plan.outputs.wheel == 'true'
         run: |
-          uv build
-          uv run --no-sync python tools/check_distributions.py dist
+          uv build --out-dir .local/dist
+          uv run --no-sync python tools/check_distributions.py .local/dist
       - name: Installed wheel smoke test
+        if: needs.plan.outputs.wheel == 'true'
         run: |
-          uv venv --python 3.12 .local/wheel-smoke
-          uv pip install --python .local/wheel-smoke/bin/python dist/*.whl
+          uv venv --python "${{ needs.plan.outputs.python }}" .local/wheel-smoke
+          uv export --frozen --no-dev --no-emit-project --no-hashes --format requirements-txt --output-file .local/runtime-requirements.txt
+          uv pip install --python .local/wheel-smoke/bin/python -r .local/runtime-requirements.txt .local/dist/*.whl
           cd .local
           env -u PYTHONPATH wheel-smoke/bin/python -m cargo_grid --version
           env -u PYTHONPATH wheel-smoke/bin/cargo-grid --help
@@ -100,39 +161,134 @@ jobs:
           env -u PYTHONPATH wheel-smoke/bin/cargo-grid part --family rod-brace --brace-spacing-mm 120 --build-width-mm 150 --build-depth-mm 30 --build-height-mm 10 --no-stl --output wheel-rod-brace
           env -u PYTHONPATH wheel-smoke/bin/python -c 'import json; d=json.load(open("wheel-rod-brace/manifest.json"))["designs"][0]; assert d["parameters"]["bore_diameter_mm"] == 10; assert d["mating_datums"]["center_spacing_mm"] == 120; assert abs(d["mating_datums"]["straight_bore_length_mm"] - 5.6) < 1e-9; e=d["fit_evidence"]; assert e["status"] == "user-reported-fit" and e["scope"] == "bore-to-shaft fit only"; assert e["physical_test_pending"] is False and e["tested_center_spacings_mm"] is None and e["spacing_specific_fit_verified"] is False'
 
-  slow:
-    if: github.event_name == 'schedule' || inputs.tier == 'slow'
+  tests:
+    needs: plan
     strategy:
       fail-fast: false
-      matrix:
-        partition: [0, 1, 2]
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: test-plan
+          path: .local/ci-plan
+      - run: cp .local/ci-plan/uv.lock uv.lock
       - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
         with:
-          python-version: "3.12"
+          python-version: ${{ needs.plan.outputs.python }}
       - name: Install CAD runtime libraries
         run: |
           sudo apt-get update -qq
           sudo apt-get install --no-install-recommends -y libgl1 libglu1-mesa
       - name: Install dependencies
-        run: uv sync --group dev
+        run: uv sync --frozen --group dev
       - name: Record runner resources
-        run: |
-          uv run --no-sync python - <<'PY'
-          import importlib.metadata
-          import os
-          import platform
-          from pathlib import Path
+        run: uv run --no-sync python tools/ci_tests.py resources
+      - name: Run selected cases, including selected slow cases
+        run: uv run --no-sync python tools/ci_memory_sampler.py -- /usr/bin/time -v uv run --no-sync pytest -q tests -n 4 --dist loadgroup -m "not native" --select-tests .local/ci-plan/plan.json --test-shard "${{ matrix.shard }}" --record-test-map .local/parts --durations=0 --durations-min=0 --junitxml=.local/selected-junit.xml
+      - name: Check the unchanged portable per-case budget
+        if: ${{ !cancelled() && hashFiles('.local/selected-junit.xml') != '' }}
+        run: uv run --no-sync python tools/check_test_durations.py .local/selected-junit.xml --selection-plan .local/ci-plan/plan.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: ${{ !cancelled() }}
+        with:
+          name: test-parts-${{ matrix.shard }}
+          path: |
+            .local/parts
+            .local/selected-junit.xml
+          include-hidden-files: true
+          retention-days: 14
 
-          print("Platform:", platform.platform())
-          print("CPU:", next((line.split(":", 1)[1].strip() for line in Path("/proc/cpuinfo").read_text().splitlines() if line.startswith("model name")), "unknown"))
-          print("Logical CPUs:", os.cpu_count())
-          print("\n".join(line for line in Path("/proc/meminfo").read_text().splitlines() if line.startswith(("MemTotal:", "MemAvailable:"))))
-          for package in ("build123d", "cadquery-ocp-novtk", "numpy", "scipy", "pytest", "pytest-xdist"):
-              print(package, importlib.metadata.version(package))
-          PY
-      - name: Slow geometry and export tests
-        run: uv run --no-sync python tools/ci_memory_sampler.py -- /usr/bin/time -v uv run --no-sync pytest -q tests -n 4 --dist loadgroup -m "slow and not native" --ci-partition=${{ matrix.partition }}/3 --durations=0 --durations-min=0 --junitxml=.local/slow-junit.xml
+  publish:
+    needs: plan
+    if: needs.plan.outputs.weekly == 'true'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.publish_matrix) }}
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: test-plan
+          path: .local/ci-plan
+      - run: cp .local/ci-plan/uv.lock uv.lock
+      - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
+        with:
+          python-version: ${{ needs.plan.outputs.python }}
+      - run: uv sync --frozen --group dev
+      - run: uv run --no-sync python tools/ci_tests.py resources
+      - name: Fresh source-derived fingerprints and publish dependencies
+        env:
+          PRINTER: ${{ matrix.printer }}
+          NOZZLE: ${{ matrix.nozzle }}
+          VARIANT: ${{ matrix.name }}
+        run: uv run --no-sync python tools/publish_guard.py fingerprints --printer "$PRINTER" --nozzle "$NOZZLE" --variant "$VARIANT" --output ".local/publish/$VARIANT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: publish-${{ matrix.name }}
+          path: .local/publish
+          include-hidden-files: true
+          retention-days: 90
+
+  CI:
+    name: ${{ inputs.benchmark_case != '' && 'Benchmark (not merge qualification)' || 'CI' }}
+    if: ${{ always() && !cancelled() }}
+    needs: [plan, checks, tests, publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Require every selected check and backstop
+        env:
+          PLAN: ${{ needs.plan.result }}
+          CHECKS: ${{ needs.checks.result }}
+          TESTS: ${{ needs.tests.result }}
+          PUBLISH: ${{ needs.publish.result }}
+        run: |
+          test "$PLAN" = success
+          test "$CHECKS" = success
+          test "$TESTS" = success
+          test "$PUBLISH" = success || test "$PUBLISH" = skipped
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: test-plan
+          path: .local/ci-plan
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          pattern: test-parts-*
+          path: .local/parts
+          merge-multiple: true
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        if: needs.plan.outputs.weekly == 'true'
+        with:
+          pattern: publish-*
+          path: .local/publish
+          merge-multiple: true
+      - run: cp .local/ci-plan/uv.lock uv.lock
+      - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
+        with:
+          python-version: ${{ needs.plan.outputs.python }}
+      - run: uv sync --frozen --group dev
+      - name: Validate exact coverage and refresh the map only after success
+        if: inputs.benchmark_case == ''
+        env:
+          APPROVAL: ${{ inputs.approve_fingerprints }}
+        run: uv run --no-sync python tools/ci_tests.py complete --plan .local/ci-plan --parts .local/parts --publish .local/publish --approve "$APPROVAL" --output .local/test-map
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: ${{ !cancelled() && hashFiles('.local/fingerprint-report.json') != '' }}
+        with:
+          name: fingerprint-report
+          path: .local/fingerprint-report.json
+          include-hidden-files: true
+          retention-days: 90
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: inputs.benchmark_case == ''
+        with:
+          name: ${{ github.event_name == 'pull_request' && format('test-map-pr-{0}', github.event.pull_request.number) || 'test-map-main' }}
+          path: .local/test-map
+          include-hidden-files: true
+          retention-days: 90

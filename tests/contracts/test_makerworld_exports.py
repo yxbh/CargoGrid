@@ -128,6 +128,34 @@ def test_generation_passes_a_private_process_quota_without_mutating_the_environm
     assert observed == ["3"] and os.environ[name] == "7"
 
 
+def test_fingerprint_shards_use_the_same_writer_and_shared_worker_budget(monkeypatch, tmp_path):
+    tool = _tool()
+    first = tool.variants()[0]
+    observed = []
+
+    def generate(variant, scratch, *, packing_workers):
+        observed.append((variant.name, packing_workers))
+        return _fake_generate(variant, scratch)
+
+    monkeypatch.setattr(tool, "_process_capacity", lambda: (2, 4))
+    monkeypatch.setattr(tool, "generate", generate)
+    assert tool.main(["--output", str(tmp_path), "--jobs", "1"], _variant_names=(first.name,)) == 0
+    assert observed == [(first.name, 2)]
+    assert {path.name for path in tmp_path.iterdir()} == {
+        path.name for path in tool.destinations(tmp_path, first).values()
+    }
+
+
+def test_fingerprint_shards_reject_empty_duplicate_and_unknown_names(tmp_path):
+    tool = _tool()
+    name = tool.variants()[0].name
+    for names in ((), (name, name), ("missing",)):
+        with pytest.raises(SystemExit) as error:
+            tool.main(["--output", str(tmp_path)], _variant_names=names)
+        assert error.value.code == 2
+    assert not list(tmp_path.iterdir())
+
+
 def test_writes_named_files_and_replaces_only_on_request(monkeypatch, tmp_path, capsys):
     tool = _tool()
     monkeypatch.setattr(tool, "generate", _fake_generate)
