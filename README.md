@@ -115,7 +115,7 @@ The outer-finger centres are at X=+/-15.8 mm, each carries three 8 mm-pitch teet
 uv run cargo-grid extras adjustable-stop --printer h2d --bambu --material "Bambu PETG Basic @BBL H2D 0.8 nozzle" PETG "#688197" --material "Bambu PLA Basic @BBL H2D 0.8 nozzle" PLA "#0A2989" --nozzle-diameter-mm 0.8 --layer-height-mm 0.32 --auto-roof-support --no-stl --output outputs/adjustable-stop
 ```
 
-The fixed base currently exceeds the unchanged STEP round-trip volume budget on x86_64 Linux and Intel macOS, so those platforms refuse this export. ARM64 checking is an interim workaround, not a repair of the corner construction.
+The fixed base currently exceeds the unchanged STEP round-trip volume budget on x86_64 Linux and Intel macOS, so those platforms refuse this export. This is an interim native-export limitation pending a repair of the corner construction; the STEP check is not relaxed.
 
 The published one-plate H2D kits are generated as the `Adjustable-Stop` set in `tools/makerworld_exports.py`. Each contains the base, moving wall, keeper and accepted undimpled v10b #1 collar clip, with global normal Auto support on and PLA Basic for the interface. All four objects inherit that setting; the slicer decides where support is needed. The clip's 0.80 mm rear clearance was sized for sag in its unsupported 10.10 mm rear bridge, so support can change its printed fit. Remove support and try the clip before relying on its retention. The 0.8 mm/0.32 mm PETG geometry and unsupported clip have physical test results; the identical 0.4 mm/0.24 mm CAD export is supported but its fit, flex, bridge shape, retention and strength have not been physically tested. The Python API can also write source-oriented STEP, STL and core 3MF artifacts without adding another top-level CLI command.
 
@@ -157,6 +157,8 @@ uv run python tools/makerworld_exports.py --printer x2d --output outputs/makerwo
 ```
 
 The script slices every plate with PETG on either nozzle before writing any named files. X2D slots 1/2 are Bambu's main/auxiliary nozzles; H2D slots 1/2 are left/right. A refused plate stops the batch. Existing files are left alone unless you pass `--replace`; uploading is separate. `--set Full-Catalogue`, `--set Zeekr-7X-Expansion-Set`, `--set Pull-Handle-Set` or `--set Adjustable-Stop` limits the rebuild, and either selection option can be repeated. Omit `--printer` for the existing H2D files, or use `--printer h2d --printer x2d` for both printers.
+
+Published files are byte-reproducible on Apple Silicon macOS with the same generator and dependencies. Weekly publication checks use that platform; identical bytes across different platforms are not promised.
 
 Dual-nozzle projects initialize the complete purge table for both nozzles using Bambu Studio 02.08.02.61's defaults. This avoids an uninitialized auxiliary-nozzle table on loading, without changing automatic filament matching or claiming a calibrated flushing volume.
 

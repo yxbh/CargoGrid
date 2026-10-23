@@ -207,7 +207,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.publish_matrix) }}
-    runs-on: ubuntu-24.04-arm
+    runs-on: macos-15
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -219,10 +219,6 @@ jobs:
       - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
         with:
           python-version: ${{ needs.plan.outputs.python }}
-      - name: Install CAD runtime libraries
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install --no-install-recommends -y libgl1 libglu1-mesa
       - run: uv sync --frozen --group dev
       - run: uv run --no-sync python tools/ci_tests.py resources
       - name: Fresh source-derived fingerprints and publish dependencies
