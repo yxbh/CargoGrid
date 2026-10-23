@@ -197,10 +197,16 @@ def ci_plan(args):
     }
     plan["ci"] = metadata
     plan["weekly"] = args.mode == "weekly"
-    from makerworld_exports import variants
+    plan["contracts_only"] = bool(plan["selected"]) and all(
+        node.startswith("tests/contracts/") for node in plan["selected"]
+    )
+    if plan["contracts_only"]:
+        plan["shards"] = [plan["selected"]]
+    publish_matrix = {"include": []}
+    if plan["weekly"]:
+        from makerworld_exports import variants
 
-    publish_matrix = {
-        "include": [
+        publish_matrix["include"] = [
             {
                 "name": variant.name,
                 "printer": variant.arguments[variant.arguments.index("--printer") + 1],
@@ -208,7 +214,6 @@ def ci_plan(args):
             }
             for variant in variants(("h2d", "x2d"))
         ]
-    }
     plan["wheel"] = plan["mode"] == "full" or any(
         path.startswith(("src/", "tools/")) or path in {"pyproject.toml", "README.md", "LICENSE"}
         for path in plan["changed"]
@@ -217,9 +222,10 @@ def ci_plan(args):
     if baseline:
         write_json(args.output / "baseline.json", baseline)
     shutil.copyfile(ROOT / "uv.lock", args.output / "uv.lock")
+    runners = 0 if plan["contracts_only"] else len(plan["shards"])
     print(
         f"{plan['mode']}: {len(plan['selected'])}/{len(collection)} tests; "
-        f"{len(plan['shards'])} runner(s); publish guard={plan['publish_guard']}"
+        f"{runners} test runner(s); publish guard={plan['publish_guard']}"
     )
     with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as stream:
         stream.write(
@@ -227,6 +233,7 @@ def ci_plan(args):
             f"publish_matrix={json.dumps(publish_matrix)}\n"
             f"wheel={str(plan['wheel']).lower()}\n"
             f"weekly={str(plan['weekly']).lower()}\n"
+            f"contracts_only={str(plan['contracts_only']).lower()}\n"
             f"python={'.'.join(map(str, plan['environment']['python']))}\n"
         )
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
@@ -235,7 +242,8 @@ def ci_plan(args):
             stream.write(
                 f"### {'Measurement only; not merge qualification' if args.benchmark else 'Test selection'}\n\n"
                 f"{len(plan['selected'])}/{len(collection)} tests; "
-                f"{len(plan['shards'])} runners; mode **{plan['mode']}**.\n\n"
+                f"{runners} test runners; mode **{plan['mode']}**.\n\n"
+                f"Contracts-only execution in checks: **{plan['contracts_only']}**.\n\n"
                 f"Local publish guard: **{'required' if plan['publish_guard'] else 'not selected'}**.\n"
             )
 

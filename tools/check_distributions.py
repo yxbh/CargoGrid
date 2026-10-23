@@ -17,6 +17,7 @@ ROOT_FILES = {
     ".gitignore",
     "PKG-INFO",
     ".github/workflows/ci.yml",
+    ".github/actions/cad-runtime/action.yml",
     "tools/check_distributions.py",
     "tools/check_test_durations.py",
     "tools/ci_memory_sampler.py",

@@ -49,6 +49,7 @@ include = [
     "/tools/publish_guard.py",
     "/tools/render_docs.py",
     "/.github/workflows/ci.yml",
+    "/.github/actions/cad-runtime/action.yml",
     "/.gitignore",
     "/README.md",
     "/AGENTS.md",

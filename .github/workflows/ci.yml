@@ -23,7 +23,7 @@ on:
         type: string
         default: ""
       benchmark_case:
-        description: Measurement only (docs/test/cli/tower/stop/ramp/handle/rod-brace/adjustable-stop/planner/export/packing/assembly/core/infrastructure); not merge qualification
+        description: Measurement only (contracts/docs/test/cli/tower/stop/ramp/handle/rod-brace/adjustable-stop/planner/export/packing/assembly/core/infrastructure); not merge qualification
         type: string
         default: ""
       benchmark_run:
@@ -48,6 +48,7 @@ jobs:
       python: ${{ steps.plan.outputs.python }}
       wheel: ${{ steps.plan.outputs.wheel }}
       weekly: ${{ steps.plan.outputs.weekly }}
+      contracts_only: ${{ steps.plan.outputs.contracts_only }}
       publish_matrix: ${{ steps.plan.outputs.publish_matrix }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -70,13 +71,20 @@ jobs:
             test -z "$BENCHMARK_RUN"
             python3 tools/ci_tests.py fetch --repo "$GITHUB_REPOSITORY" --head "$HEAD_SHA" --base "$BASE_SHA" --pr "$PR_NUMBER" --output .local/baseline
           fi
+      - name: Seed the dependency cache key from the trusted lock
+        run: |
+          if [ -f .local/baseline/uv.lock ]; then
+            cp .local/baseline/uv.lock uv.lock
+          fi
       - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
         with:
           python-version: ${{ (github.event_name == 'pull_request' || inputs.benchmark_case != '') && steps.fetch.outputs.python || '3.12' }}
-      - name: Install CAD runtime libraries
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install --no-install-recommends -y libgl1 libglu1-mesa
+          enable-cache: true
+          prune-cache: false
+          cache-suffix: full-wheels-v1
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
       - name: Resolve fresh on main and backstops; pin PRs to main's lock
         env:
           PINNED: ${{ steps.fetch.outputs.pinned }}
@@ -119,10 +127,15 @@ jobs:
       - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
         with:
           python-version: ${{ needs.plan.outputs.python }}
+          enable-cache: true
+          prune-cache: false
+          cache-suffix: full-wheels-v1
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
       - name: Install CAD runtime libraries
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install --no-install-recommends -y libgl1 libglu1-mesa
+        if: needs.plan.outputs.wheel == 'true'
+        uses: ./.github/actions/cad-runtime
       - name: Install dependencies
         run: uv sync --frozen --group dev
       - name: Lint and format
@@ -160,9 +173,28 @@ jobs:
           env -u PYTHONPATH wheel-smoke/bin/python -c 'import json; p=json.load(open("wheel-rod/manifest.json")); d=p["designs"][0]; i=p["export"]["plates"][0]["items"][0]; assert d["parameters"]["above_mat_height_mm"] == 240 and d["mating_datums"]["insertion_depth_mm"] == 12; assert i["source_to_project_transform"]["rotation_y_degrees"] == 90; assert i["object_settings"] == {"enable_support":"1","support_type":"normal(auto)"}; assert d["fit_evidence"]["status"] == "user-reported-fit"'
           env -u PYTHONPATH wheel-smoke/bin/cargo-grid part --family rod-brace --brace-spacing-mm 120 --build-width-mm 150 --build-depth-mm 30 --build-height-mm 10 --no-stl --output wheel-rod-brace
           env -u PYTHONPATH wheel-smoke/bin/python -c 'import json; d=json.load(open("wheel-rod-brace/manifest.json"))["designs"][0]; assert d["parameters"]["bore_diameter_mm"] == 10; assert d["mating_datums"]["center_spacing_mm"] == 120; assert abs(d["mating_datums"]["straight_bore_length_mm"] - 5.6) < 1e-9; e=d["fit_evidence"]; assert e["status"] == "user-reported-fit" and e["scope"] == "bore-to-shaft fit only"; assert e["physical_test_pending"] is False and e["tested_center_spacings_mm"] is None and e["spacing_specific_fit_verified"] is False'
+      - name: Record runner resources
+        if: needs.plan.outputs.contracts_only == 'true'
+        run: uv run --no-sync python tools/ci_tests.py resources
+      - name: Run selected contracts without a test runner job
+        if: needs.plan.outputs.contracts_only == 'true'
+        run: uv run --no-sync python tools/ci_memory_sampler.py -- /usr/bin/time -v uv run --no-sync pytest -q tests/contracts -n 4 --dist loadgroup -m "not native" --select-tests .local/ci-plan/plan.json --test-shard 0 --record-test-map .local/parts --durations=0 --durations-min=0 --junitxml=.local/selected-junit.xml
+      - name: Check the unchanged portable per-case budget
+        if: ${{ !cancelled() && needs.plan.outputs.contracts_only == 'true' && hashFiles('.local/selected-junit.xml') != '' }}
+        run: uv run --no-sync python tools/check_test_durations.py .local/selected-junit.xml --selection-plan .local/ci-plan/plan.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: ${{ !cancelled() && needs.plan.outputs.contracts_only == 'true' }}
+        with:
+          name: test-parts-0
+          path: |
+            .local/parts
+            .local/selected-junit.xml
+          include-hidden-files: true
+          retention-days: 14
 
   tests:
     needs: plan
+    if: needs.plan.outputs.contracts_only != 'true'
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
@@ -178,10 +210,14 @@ jobs:
       - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
         with:
           python-version: ${{ needs.plan.outputs.python }}
+          enable-cache: true
+          prune-cache: false
+          cache-suffix: full-wheels-v1
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
       - name: Install CAD runtime libraries
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install --no-install-recommends -y libgl1 libglu1-mesa
+        uses: ./.github/actions/cad-runtime
       - name: Install dependencies
         run: uv sync --frozen --group dev
       - name: Record runner resources
@@ -219,6 +255,12 @@ jobs:
       - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
         with:
           python-version: ${{ needs.plan.outputs.python }}
+          enable-cache: true
+          prune-cache: false
+          cache-suffix: full-wheels-v1
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
       - run: uv sync --frozen --group dev
       - run: uv run --no-sync python tools/ci_tests.py resources
       - name: Fresh source-derived fingerprints and publish dependencies
@@ -247,10 +289,11 @@ jobs:
           CHECKS: ${{ needs.checks.result }}
           TESTS: ${{ needs.tests.result }}
           PUBLISH: ${{ needs.publish.result }}
+          CONTRACTS_ONLY: ${{ needs.plan.outputs.contracts_only }}
         run: |
           test "$PLAN" = success
           test "$CHECKS" = success
-          test "$TESTS" = success
+          test "$TESTS" = success || { test "$CONTRACTS_ONLY" = true && test "$TESTS" = skipped; }
           test "$PUBLISH" = success || test "$PUBLISH" = skipped
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
@@ -272,12 +315,12 @@ jobs:
       - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
         with:
           python-version: ${{ needs.plan.outputs.python }}
-      - run: uv sync --frozen --group dev
+          enable-cache: false
       - name: Validate exact coverage and refresh the map only after success
         if: inputs.benchmark_case == ''
         env:
           APPROVAL: ${{ inputs.approve_fingerprints }}
-        run: uv run --no-sync python tools/ci_tests.py complete --plan .local/ci-plan --parts .local/parts --publish .local/publish --approve "$APPROVAL" --output .local/test-map
+        run: uv run --no-project python tools/ci_tests.py complete --plan .local/ci-plan --parts .local/parts --publish .local/publish --approve "$APPROVAL" --output .local/test-map
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: ${{ !cancelled() && hashFiles('.local/fingerprint-report.json') != '' }}
         with:

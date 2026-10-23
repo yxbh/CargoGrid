@@ -177,6 +177,7 @@ def test_comments_and_formatting_do_not_change_function_dependencies(mapping):
         "tests/conftest.py",
         "tests/nested/conftest.py",
         ".github/workflows/ci.yml",
+        ".github/actions/cad-runtime/action.yml",
         "tools/test_selection.py",
         "tests/selection.py",
         "tools/ci_tests.py",
@@ -377,6 +378,8 @@ def test_repeated_module_side_effects_are_not_deduplicated(mapping):
 def test_measurements_need_an_exact_baseline_and_do_not_mutate_it(mapping):
     original = state({**SOURCES, "src/cargo_grid/cli.py": "def parser():\n    return 1\n"})
     mapping["snapshot"] = original
+    unchanged = benchmark_snapshot(mapping, original, mapping["environment"], "contracts")
+    assert unchanged == original and unchanged is not original
     changed = benchmark_snapshot(mapping, original, mapping["environment"], "cli")
     assert changed != original
     assert original == state({**SOURCES, "src/cargo_grid/cli.py": "def parser():\n    return 1\n"})
