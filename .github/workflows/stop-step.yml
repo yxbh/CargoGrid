@@ -49,7 +49,7 @@ jobs:
         run: |
           mkdir -p .local/stop-qualification/reports
           uv run --no-sync python tools/ci_tests.py resources > .local/stop-qualification/reports/resources.txt
-      - name: Check every STEP precision mode and the unchanged fallback
+      - name: Record all STEP modes and require the unchanged fallback
         run: |
           uv run --no-sync python - <<'PY'
           import hashlib
