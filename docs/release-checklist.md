@@ -76,6 +76,6 @@ One print doesn't establish fit or strength for every profile, material, climate
 
 After the release commit has been reviewed, create the release input from tracked files at that revision, for example with `git archive`. Do not zip the working directory.
 
-Exclude local lock files, environments, caches, reference meshes, system profiles, G-code, study output and runtime diagnostics. The documentation images are the exception: seven overview images, 105 accessory thumbnails and their provenance manifest. The source archive contains exactly 112 PNGs; the runtime wheel contains none. A partial image update keeps the source and tool revisions of the images it doesn't touch and records separate provenance for the new ones.
+Exclude local lock files, environments, caches, reference meshes, system profiles, G-code, study output and runtime diagnostics. The documentation images are the exception: seven overview images, 107 accessory thumbnails and their provenance manifest. The source archive contains exactly 114 PNGs; the runtime wheel contains none. A partial image update keeps the source and tool revisions of the images it doesn't touch and records separate provenance for the new ones.
 
 Run `tools/render_docs.py --check` to confirm image hashes, links and one-to-one inventory coverage. Tagging, uploading packages/models and merging remain separate maintainer actions.

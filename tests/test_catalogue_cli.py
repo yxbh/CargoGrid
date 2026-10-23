@@ -46,11 +46,11 @@ def test_standard_catalogue_identity_payload_is_frozen_without_building_geometry
         {"name": name, "parameters": parameters}
         for name, parameters in (accessory_identity(spec) for spec in accessory_variants(build))
     )
-    assert len(records) == 130
+    assert len(records) == 132
     payload = json.dumps(records, sort_keys=True, separators=(",", ":"))
     assert (
         hashlib.sha256(payload.encode()).hexdigest()
-        == "ce06ed147f704b78915c7cee4ac1b18ec83987df64402ad2e3001e5fe4bb588c"
+        == "5551a6f702d640aca8f91da40dc414959c13e1b0236607310c6b3ba793cf06ec"
     )
 
 

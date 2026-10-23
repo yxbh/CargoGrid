@@ -218,11 +218,11 @@ def test_standard_catalogue_inventory_and_all_accessory_ids_stay_unchanged(
 ):
     specs = accessory_variants(H2D)
     assert EDGE_OUTWARD_OPTIONS_MM == (10, 20, 30)
-    assert len(specs) == 105
+    assert len(specs) == 107
     accessories = [spec for spec in specs if isinstance(spec, Accessory)]
     assert len(accessories) == 101
     assert all(spec.edge_outward != 40 for spec in accessories)
-    assert {spec for spec in specs if isinstance(spec, Rod)} == {Rod(120), Rod(240)}
+    assert {spec for spec in specs if isinstance(spec, Rod)} == {Rod(h) for h in (40, 60, 120, 240)}
     assert {spec for spec in specs if isinstance(spec, RodBrace)} == {RodBrace(60), RodBrace(120)}
     names = [accessory_design(spec).name for spec in accessories]
     assert sha256(json.dumps(names).encode()).hexdigest() == (

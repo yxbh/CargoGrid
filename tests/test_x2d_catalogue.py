@@ -35,7 +35,7 @@ def test_smaller_printer_accounts_for_the_whole_bounded_inventory(
     }
     assert missing_tiles == {(x, y) for x in range(1, 6) for y in range(1, 6)} - expected
     all_names = [d.name for d in job.designs] + [entry["name"] for entry in job.omitted]
-    assert len(all_names) == len(set(all_names)) == 130
+    assert len(all_names) == len(set(all_names)) == 132
     rod = next(
         d
         for d in job.designs
@@ -210,7 +210,7 @@ def test_real_x2d_catalogue_solids_and_prepared_placements_stay_in_reach(
     job = dual_safe_catalogue_job(X2D, auto_roof_support=True)
     assert real_catalogue_group
     assert len(real_catalogue_group) == len(set(real_catalogue_group))
-    assert len(job.designs) + len(job.omitted) == 130
+    assert len(job.designs) + len(job.omitted) == 132
     assert {
         tuple(d.parameters[k] for k in ("nx", "ny"))
         for d in job.designs
