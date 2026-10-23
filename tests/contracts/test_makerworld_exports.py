@@ -25,7 +25,7 @@ def _tool():
 
 def test_variants_cover_each_published_set_and_nozzle_once():
     variants = _tool().variants()
-    assert len(variants) == (2 * 2 + 2) * len(H2D.profiles)
+    assert len(variants) == (2 * 2 + 3) * len(H2D.profiles)
     assert len({variant.name for variant in variants}) == len(variants)
     for variant in variants:
         args = parser().parse_args([*variant.arguments, "--output", "unused"])
@@ -36,7 +36,11 @@ def test_variants_cover_each_published_set_and_nozzle_once():
         assert variant.name.split("_")[:2] == ["CargoGrid", "H2D"]
         assert args.auto_roof_support
         assert [material[0] for material in args.material] == [profiles.petg, profiles.pla]
-        titles = {"pull-handle": "Pull-Handle-Set", "adjustable-stop": "Adjustable-Stop"}
+        titles = {
+            "pull-handle": "Pull-Handle-Set",
+            "adjustable-stop": "Adjustable-Stop",
+            "cross-post": "Cross-Post-Set",
+        }
         if args.command == "extras" and args.recipe in titles:
             assert variant.name == (
                 f"CargoGrid_H2D_{titles[args.recipe]}_{args.nozzle_diameter_mm:g}mm-Nozzle"
@@ -106,7 +110,7 @@ def test_variant_and_search_workers_share_one_budget(
     if override is not None:
         arguments += ["--jobs", str(override)]
     assert tool.main(arguments) == 0
-    assert observed == [workers] * 24
+    assert observed == [workers] * 28
 
 
 def test_generation_passes_a_private_process_quota_without_mutating_the_environment(
@@ -189,8 +193,8 @@ def test_every_variant_belongs_to_one_named_set():
 
 def test_x2d_variants_use_the_shared_sets_and_both_official_profile_pairs():
     variants = _tool().variants(("x2d",))
-    assert len(variants) == 12
-    assert len({v.name for v in variants}) == 12
+    assert len(variants) == 14
+    assert len({v.name for v in variants}) == 14
     for variant in variants:
         args = parser().parse_args([*variant.arguments, "--output", "unused"])
         profile = X2D.profiles[args.nozzle_diameter_mm]

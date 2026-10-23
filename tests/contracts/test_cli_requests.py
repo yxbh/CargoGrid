@@ -4,6 +4,7 @@ import pytest
 
 from cargo_grid import cli
 from cargo_grid.accessories import Accessory
+from cargo_grid.cross_posts import CrossPost
 from cargo_grid.parameters import Interface, Tile
 from cargo_grid.rods import Rod, RodBrace
 
@@ -29,6 +30,11 @@ INTERFACE = Interface(pitch=30, height=8)
             ["--brace-spacing-mm", "120", "--bore-diameter-mm", "10.2"],
             RodBrace(120, 10.2),
         ),
+        (
+            "cross-post",
+            ["--post-arms", "corner", "--post-mount", "x-plug", "--post-height-mm", "120"],
+            CrossPost("corner", "x-plug", 120, interface=INTERFACE),
+        ),
     ],
 )
 def test_part_request_resolves_a_narrow_spec_without_building_geometry(
@@ -39,5 +45,6 @@ def test_part_request_resolves_a_narrow_spec_without_building_geometry(
 
     monkeypatch.setattr(cli, "tile_design", unexpected)
     monkeypatch.setattr(cli, "accessory_design", unexpected)
+    monkeypatch.setattr(cli, "cross_post_design", unexpected)
     args = cli.parser().parse_args(["part", "--family", family, *options, "--output", "unused"])
     assert cli._part_specification(args, INTERFACE, 10) == expected
