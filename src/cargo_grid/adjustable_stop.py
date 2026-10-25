@@ -27,7 +27,6 @@ from build123d import (
     Polygon,
     Pos,
     RectangleRounded,
-    Solid,
     Spline,
     ThreePointArc,
     Wire,
@@ -35,23 +34,13 @@ from build123d import (
     fillet,
 )
 from OCP.BRep import BRep_Builder, BRep_Tool
-from OCP.BRepBuilderAPI import (
-    BRepBuilderAPI_Copy,
-    BRepBuilderAPI_MakeFace,
-    BRepBuilderAPI_MakeSolid,
-    BRepBuilderAPI_Sewing,
-)
-from OCP.BRepLib import BRepLib
-from OCP.BRepOffsetAPI import BRepOffsetAPI_MakeFilling
 from OCP.GeomAbs import GeomAbs_C0, GeomAbs_G1
 from OCP.OCP.collections import (
     IndexedDataMap_TopoDS_Shape_List_TopoDS_Shape_TopTools_ShapeMapHasher,
 )
-from OCP.ShapeFix import ShapeFix_Edge, ShapeFix_Face
 from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
-from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_SHELL
+from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE
 from OCP.TopExp import TopExp
-from OCP.TopLoc import TopLoc_Location
 from OCP.TopoDS import TopoDS
 
 from cargo_grid.accessories import make_bidirectional_panel_connector
@@ -898,8 +887,6 @@ def _make_base(
                     and (_lies_at(edge, "Z", d.floor) or _lies_at(edge, "Z", d.guide_top))
                     and bounds.min.X >= min(inner, root) - EDGE_SELECTION_TOLERANCE_MM
                     and bounds.max.X <= max(inner, root) + EDGE_SELECTION_TOLERANCE_MM
-                    or _lies_at(edge, "Y", d.outer_guide_tool_end)
-                    and _lies_at(edge, "X", root)
                 ):
                     outer_guide_edges.append(edge)
                     break
@@ -907,7 +894,7 @@ def _make_base(
             base,
             outer_guide_edges,
             radius=DETAIL_EDGE_RADIUS_MM,
-            expected=12,
+            expected=10,
             feature="merged outer-guide R1 exposed edge",
         )
         for side in (-1, 1):
@@ -915,95 +902,10 @@ def _make_base(
     if unify_same_domain:
         base = _unify_same_domain(base)
     if round_edges:
-        base = _rebuild_outer_guide_corners(base, d)
         _mark_outer_guide_tangency(base, d)
     base.label = "fixed_base"
     base.color = Color(0.19, 0.39, 0.50)
     return base
-
-
-def _rebuild_outer_guide_corners(part: Part, d: AdjustableStopDimensions) -> Part:
-    """Keep the original boundary curves and analytic R1 neighbors."""
-    faces = list(part.faces())
-    radius = DETAIL_EDGE_RADIUS_MM
-    corners = [
-        face
-        for face in faces
-        if face.geom_type == GeomType.BSPLINE
-        for centre in [face.center()]
-        if abs(abs(centre.X) - d.rack_wall_inner) < 2 * radius
-        and abs(centre.Y - d.outer_guide_tool_end) < 2 * radius
-        and abs(centre.Z - d.guide_top) < 2 * radius
-    ]
-    if len(corners) != 2:
-        raise ValueError(f"expected two outer-guide top corner patches, found {len(corners)}")
-    edge_faces = IndexedDataMap_TopoDS_Shape_List_TopoDS_Shape_TopTools_ShapeMapHasher()
-    TopExp.MapShapesAndAncestors_s(part.wrapped, TopAbs_EDGE, TopAbs_FACE, edge_faces)
-    sewing = BRepBuilderAPI_Sewing(1e-7)
-    for face in faces:
-        if not any(face.wrapped.IsSame(corner.wrapped) for corner in corners):
-            sewing.Add(face.wrapped)
-            continue
-        edges = list(face.edges())
-        if len(edges) != 3:
-            raise ValueError("outer-guide corner patch must have three boundary edges")
-        side = 1 if face.center().X > 0 else -1
-        initial = Face.make_rect(
-            10 * radius,
-            10 * radius,
-            Plane(
-                origin=(side * d.rack_wall_inner, d.outer_guide_tool_end, d.guide_top),
-                z_dir=(-side, 1, 1),
-            ),
-        )
-        filling = BRepOffsetAPI_MakeFilling(3, 25, 3, False, 1e-7, 1e-7, 0.01, 0.1, 8, 512)
-        filling.LoadInitSurface(initial.wrapped)
-        support_types = []
-        for edge in edges:
-            adjacent = edge_faces.FindFromKey(edge.wrapped)
-            if adjacent.Size() != 2:
-                raise ValueError("outer-guide corner boundary must have two adjacent faces")
-            other = adjacent.Last() if adjacent.First().IsSame(face.wrapped) else adjacent.First()
-            support = Face(TopoDS.Face(other))
-            support_types.append(support.geom_type)
-            # The plane/root-cylinder vertex is singular; its plane keeps only
-            # its existing boundary, while both R1 cylinders constrain tangency.
-            order = GeomAbs_G1 if support.geom_type == GeomType.CYLINDER else GeomAbs_C0
-            filling.Add(edge.wrapped, support.wrapped, order, True)
-        if support_types.count(GeomType.CYLINDER) != 2 or support_types.count(GeomType.PLANE) != 1:
-            raise ValueError("outer-guide corner must meet two R1 cylinders and its top plane")
-        filling.Build()
-        if not filling.IsDone():
-            raise ValueError("outer-guide corner filling failed")
-        surface = BRep_Tool.Surface_s(TopoDS.Face(filling.Shape()))
-        copied = BRepBuilderAPI_Copy(face.outer_wire().wrapped, False, False)
-        wire = Wire(TopoDS.Wire(copied.Shape()))
-        fixer = ShapeFix_Edge()
-        for edge in wire.edges():
-            if not fixer.FixAddPCurve(edge.wrapped, surface, TopLoc_Location(), False, 1e-7):
-                raise ValueError("outer-guide corner boundary projection failed")
-        # Filling's constraint errors describe its plate, not the approximated
-        # BSpline. Project the unchanged 3D boundary onto the finished surface.
-        made = BRepBuilderAPI_MakeFace(surface, wire.wrapped, True).Face()
-        face_fixer = ShapeFix_Face(made)
-        face_fixer.FixOrientation()
-        replacement = Face(face_fixer.Face())
-        if not replacement.is_valid or replacement.area <= 0:
-            raise ValueError("outer-guide corner replacement is not a valid face")
-        if replacement.normal_at().dot(face.normal_at()) < 0:
-            replacement.wrapped.Reverse()
-        sewing.Add(replacement.wrapped)
-    sewing.Perform()
-    shell = sewing.SewedShape()
-    if shell.ShapeType() != TopAbs_SHELL or sewing.NbFreeEdges() != 0:
-        raise ValueError("outer-guide corner reconstruction did not close one shell")
-    solid = BRepBuilderAPI_MakeSolid(TopoDS.Shell(shell)).Solid()
-    if not BRepLib.OrientClosedSolid_s(solid):
-        raise ValueError("outer-guide corner reconstruction could not orient the solid")
-    result = Part([Solid(solid)])
-    if not result.is_valid or len(result.solids()) != 1:
-        raise ValueError("outer-guide corner reconstruction did not produce one valid solid")
-    return result
 
 
 def _finger_displacement(y: float, d: AdjustableStopDimensions) -> float:

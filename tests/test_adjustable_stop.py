@@ -43,10 +43,8 @@ from build123d import (
     Pos,
     ShapeList,
 )
-from OCP.Adaptor3d import Adaptor3d_CurveOnSurface
 from OCP.BRep import BRep_Tool
-from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Curve2d, BRepAdaptor_Surface
-from OCP.GeomLib import GeomLib_CheckCurveOnSurface
+from OCP.BRepAdaptor import BRepAdaptor_Surface
 from OCP.OCP.collections import (
     IndexedDataMap_TopoDS_Shape_List_TopoDS_Shape_TopTools_ShapeMapHasher,
 )
@@ -118,36 +116,10 @@ def released_stop_parts():
     return make_adjustable_stop_parts(AdjustableStopSpec(released_illustration=True))
 
 
-def test_outer_guide_corner_trims_preserve_radii_and_keeper_seating(stop_parts):
+def test_outer_guide_radii_and_keeper_seating(stop_parts):
     base = stop_parts[0]
-    corners = [
-        face
-        for face in base.faces()
-        if face.geom_type == GeomType.BSPLINE
-        for centre in [face.center()]
-        if 22 < abs(centre.X) < 25 and 47 < centre.Y < 51 and 15 < centre.Z < 18
-    ]
-    assert len(corners) == 2
-    edge_faces = IndexedDataMap_TopoDS_Shape_List_TopoDS_Shape_TopTools_ShapeMapHasher()
-    TopExp.MapShapesAndAncestors_s(base.wrapped, TopAbs_EDGE, TopAbs_FACE, edge_faces)
-    for corner in corners:
-        assert len(corner.edges()) == 3
-        for edge in corner.edges():
-            adjacent = edge_faces.FindFromKey(edge.wrapped)
-            assert adjacent.Size() == 2
-            for support in (adjacent.First(), adjacent.Last()):
-                checker = GeomLib_CheckCurveOnSurface(BRepAdaptor_Curve(edge.wrapped))
-                checker.Perform(
-                    Adaptor3d_CurveOnSurface(
-                        BRepAdaptor_Curve2d(edge.wrapped, TopoDS.Face(support)),
-                        BRepAdaptor_Surface(TopoDS.Face(support)),
-                    )
-                )
-                assert checker.IsDone()
-                # Original fillet approximation precision, not its enlarged edge tolerance.
-                assert checker.MaxDistance() <= 1e-4
     radii = _cylindrical_radius_counts(base)
-    assert radii["1"] == 12
+    assert radii["1"] == 10
     assert radii["2"] == 52
     top_faces = [
         face
@@ -170,7 +142,7 @@ def test_outer_guide_corner_trims_preserve_radii_and_keeper_seating(stop_parts):
     contact = Compound(top_faces).intersect(keeper_footprint)
     assert contact is not None
     assert sum(face.area for face in contact.faces()) == pytest.approx(
-        310.2129939588169, abs=1e-6, rel=0
+        309.69157111568524, abs=1e-6, rel=0
     )
 
 
@@ -866,6 +838,22 @@ def test_plain_front_centre_guides_bound_rigid_yaw_without_preloading_fingers(st
     root_seam_rows = []
     for side in (-1, 1):
         root_x = side * DIMENSIONS.rack_wall_inner
+        end = DIMENSIONS.outer_guide_tool_end
+        radius = DETAIL_EDGE_RADIUS_MM
+        floor = DIMENSIONS.floor
+        top = DIMENSIONS.guide_top
+        expected_root_seams = [
+            (
+                GeomType.LINE,
+                end - radius,
+                DIMENSIONS.rack_tooth_stations[0] + DIMENSIONS.rack_lock_offset,
+                top,
+                top,
+            ),
+            (GeomType.CIRCLE, end - radius, end, top - radius, top),
+            (GeomType.LINE, end, end, floor + radius, top - radius),
+            (GeomType.CIRCLE, end, end + radius, floor, floor + radius),
+        ]
         for edge in base.edges():
             bounds = edge.bounding_box()
             if (
@@ -883,9 +871,18 @@ def test_plain_front_centre_guides_bound_rigid_yaw_without_preloading_fingers(st
                 - CONNECTOR_PROOF_TOLERANCE_MM
                 and continuity == "C0"
             ):
-                root_seam_rows.append(
-                    {"side": side, "bounds_mm": _bounds(edge), "continuity": continuity}
-                )
+                actual = (bounds.min.Y, bounds.max.Y, bounds.min.Z, bounds.max.Z)
+                for index, (kind, *coordinates) in enumerate(expected_root_seams):
+                    if edge.geom_type == kind and actual == pytest.approx(
+                        coordinates, abs=CONNECTOR_PROOF_TOLERANCE_MM, rel=0
+                    ):
+                        expected_root_seams.pop(index)
+                        break
+                else:
+                    root_seam_rows.append(
+                        {"side": side, "bounds_mm": _bounds(edge), "continuity": continuity}
+                    )
+        assert not expected_root_seams, f"missing sharp-root edges: {side=}, {expected_root_seams}"
     if front_root_edge_count or root_seam_rows:
         raise ValueError("base retains an X=+/-24 seam in the outer-guide region")
     front_top_round_rows = []
