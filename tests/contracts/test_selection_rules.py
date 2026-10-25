@@ -1,5 +1,6 @@
 """Selection contracts use tiny source trees, not CargoGrid geometry."""
 
+import copy
 import json
 import os
 import subprocess
@@ -7,10 +8,10 @@ import sys
 from pathlib import Path
 
 import pytest
+import test_selection as selector
 from test_selection import (
     FORMAT_VERSION,
     analyse,
-    benchmark_snapshot,
     dependencies,
     load_map,
     merge_parts,
@@ -177,10 +178,10 @@ def test_comments_and_formatting_do_not_change_function_dependencies(mapping):
         "tests/conftest.py",
         "tests/nested/conftest.py",
         ".github/workflows/ci.yml",
-        ".github/actions/cad-runtime/action.yml",
+        ".github/actions/setup-tests/action.yml",
         "tools/test_selection.py",
         "tests/selection.py",
-        "tools/ci_tests.py",
+        "tools/check_distributions.py",
         "tools/publish_guard.py",
         "src/example/input.json",
     ],
@@ -375,25 +376,8 @@ def test_repeated_module_side_effects_are_not_deduplicated(mapping):
     assert selection(mapping, current)["mode"] == "full"
 
 
-def test_measurements_need_an_exact_baseline_and_do_not_mutate_it(mapping):
-    original = state({**SOURCES, "src/cargo_grid/cli.py": "def parser():\n    return 1\n"})
-    mapping["snapshot"] = original
-    unchanged = benchmark_snapshot(mapping, original, mapping["environment"], "contracts")
-    assert unchanged == original and unchanged is not original
-    changed = benchmark_snapshot(mapping, original, mapping["environment"], "cli")
-    assert changed != original
-    assert original == state({**SOURCES, "src/cargo_grid/cli.py": "def parser():\n    return 1\n"})
-    assert (
-        changed["python"]["src/cargo_grid/cli.py"]["functions"]["parser"]["digest"]
-        != original["python"]["src/cargo_grid/cli.py"]["functions"]["parser"]["digest"]
-    )
-    with pytest.raises(ValueError, match="exact current tree"):
-        benchmark_snapshot(mapping, changed, mapping["environment"], "cli")
-    with pytest.raises(ValueError, match="environment"):
-        benchmark_snapshot(mapping, original, {}, "cli")
-
-
 def test_shared_lazy_fixture_dependencies_include_transitive_peers_and_data(mapping):
+    mapping["fixtures"]["another"] = record({})
     mapping["tests"]["tests/test_peer.py::test_first"]["fixtures"].append("another")
     mapping["tests"]["tests/test_last.py::test_last"] = record(
         {"src/example/body.py": ["unrelated"]}, fixtures=["another"], process=True
@@ -409,46 +393,10 @@ def test_shared_lazy_fixture_dependencies_include_transitive_peers_and_data(mapp
         assert records[node]["process"]
 
 
-def test_published_functions_use_their_own_snapshot_until_refreshed(mapping):
-    mapping["publish"] = {
-        "snapshot": state(SOURCES),
-        "environment": mapping["environment"],
-        "functions": {"src/example/body.py": ["body"]},
-    }
-    sources = {
-        **SOURCES,
-        "src/example/body.py": SOURCES["src/example/body.py"].replace("return 42", "return 43"),
-    }
-    assert not selection(mapping, sources)["publish_guard"]
-    earlier = {
-        **SOURCES,
-        "src/example/body.py": SOURCES["src/example/body.py"].replace(
-            "return cached()", "return later()\ndef later():\n    return 8"
-        ),
-    }
-    mapping["snapshot"] = state(earlier)
-    latest = {
-        **earlier,
-        "src/example/body.py": earlier["src/example/body.py"].replace("return 8", "return 9"),
-    }
-    assert selection(mapping, latest)["publish_guard"]
-    assert not selection(mapping, {**earlier, "README.md": "words"})["publish_guard"]
-
-
-def test_dependency_drift_cannot_narrow_the_guard_with_an_old_publish_graph(mapping):
-    mapping["publish"] = {
-        "snapshot": state(SOURCES),
-        "environment": mapping["environment"],
-        "functions": {"src/example/body.py": ["body"]},
-    }
-    mapping["environment"] = {"packages": {"coverage": "8"}}
-    sources = {
-        **SOURCES,
-        "src/example/body.py": SOURCES["src/example/body.py"].replace("return 42", "return 43"),
-    }
-    result = selection(mapping, sources, current_environment=mapping["environment"])
-    assert result["mode"] == "selected"
-    assert result["publish_guard"]
+def test_every_source_or_published_export_script_change_selects_the_guard(mapping):
+    for path in ("src/example/body.py", "tools/makerworld_exports.py"):
+        sources = {**SOURCES, path: SOURCES.get(path, "") + "\n# changed\n"}
+        assert selection(mapping, sources)["publish_guard"]
 
 
 def test_map_corruption_is_reported_and_requests_a_full_run(tmp_path):
@@ -457,6 +405,30 @@ def test_map_corruption_is_reported_and_requests_a_full_run(tmp_path):
         path.write_text(content)
         mapping, error = load_map(path)
         assert mapping is None and "cannot use dependency map" in error
+
+
+def test_damaged_nested_map_records_fall_back_to_the_complete_collection(mapping):
+    collection = [{"nodeid": node, "slow": False} for node in mapping["tests"]]
+    for field, value in (("snapshot", []), ("tests", []), ("fixtures", {})):
+        damaged = {**mapping, field: value}
+        plan = select(damaged, state(SOURCES), collection)
+        assert plan["map_error"] and plan["mode"] == "full"
+        assert set(plan["selected"]) == set(mapping["tests"])
+        assert "damaged dependency map" in plan["reasons"]["full"][0]
+
+
+def test_damaged_durations_fall_back_to_full_recording(mapping, monkeypatch):
+    collection = [{"nodeid": node, "slow": False} for node in mapping["tests"]]
+    monkeypatch.setattr(selector, "snapshot", lambda root: state(SOURCES))
+    monkeypatch.setattr(selector, "environment", lambda root: mapping["environment"])
+    monkeypatch.setattr(selector, "git", lambda *args: b"head")
+    for duration in (-1, float("nan"), float("inf"), "wrong"):
+        damaged = copy.deepcopy(mapping)
+        damaged["tests"]["tests/contracts/test_always.py::test_contract"]["duration"] = duration
+        plan = selector.make_plan(Path("."), damaged, collection)
+        assert plan["map_error"] and plan["mode"] == "full"
+        assert set(plan["selected"]) == set(mapping["tests"])
+        assert sorted(node for shard in plan["shards"] for node in shard) == plan["selected"]
 
 
 def test_complete_duration_shards_are_deterministic_and_keep_files_together(mapping):
@@ -489,8 +461,6 @@ def test_merge_rejects_missing_duplicate_stale_and_wrong_environment_parts(tmp_p
     assert set(merge_parts([path], plan)["tests"]) == set(mapping["tests"])
     with pytest.raises(ValueError, match="more than one"):
         merge_parts([path, path], plan)
-    with pytest.raises(ValueError, match="measurement-only"):
-        merge_parts([path], {**plan, "measurement_only": "docs"})
     with pytest.raises(ValueError, match="exactly"):
         merge_parts([], plan)
     for key, value in (("commit", "old"), ("environment", {}), ("version", 100)):

@@ -1,4 +1,4 @@
-"""Artifact provenance, output comparisons and portable-budget contracts."""
+"""Cache-scoped planning, output comparisons and portable-budget contracts."""
 
 import copy
 import io
@@ -10,15 +10,15 @@ from pathlib import Path
 from types import SimpleNamespace
 from zipfile import ZipFile, ZipInfo
 
-import ci_tests
 import publish_guard
 import pytest
+import test_selection as selection
 from publish_guard import build, compare, manifest_changes, merge_fingerprints
 from test_selection import FORMAT_VERSION, digest, environment, load_map, write_json
 
 
 @pytest.fixture
-def artifact_map(tmp_path):
+def cached_mapping(tmp_path):
     return {
         "version": FORMAT_VERSION,
         "commit": "a" * 40,
@@ -26,13 +26,12 @@ def artifact_map(tmp_path):
         "snapshot": {"files": {}, "python": {}, "config": {}},
         "tests": {},
         "fixtures": {},
-        "ci": {"main_commit": "a" * 40},
     }
 
 
-@pytest.mark.parametrize("selection", ["contracts", "mixed", "geometry", "empty", "weekly"])
+@pytest.mark.parametrize("kind", ["contracts", "mixed", "geometry", "empty", "weekly"])
 def test_ci_planning_routes_only_complete_contract_selections_into_checks(
-    tmp_path, monkeypatch, artifact_map, selection
+    tmp_path, monkeypatch, cached_mapping, kind
 ):
     nodes = [
         "tests/contracts/test_example.py::test_first",
@@ -45,11 +44,11 @@ def test_ci_planning_routes_only_complete_contract_selections_into_checks(
         "geometry": nodes[2:],
         "empty": [],
         "weekly": nodes,
-    }[selection]
+    }[kind]
     collection = [{"nodeid": node, "slow": False} for node in nodes]
     plan = {
-        **copy.deepcopy(artifact_map),
-        "mode": "full" if selection == "weekly" else "selected",
+        **copy.deepcopy(cached_mapping),
+        "mode": "full" if kind == "weekly" else "selected",
         "selected": selected,
         "changed": [],
         "publish_guard": False,
@@ -57,248 +56,121 @@ def test_ci_planning_routes_only_complete_contract_selections_into_checks(
         "shards": [[node] for node in selected],
     }
     calls = []
-    monkeypatch.setattr(ci_tests, "ROOT", tmp_path)
-    monkeypatch.setattr(ci_tests, "load_map", lambda path: (artifact_map, None))
-    monkeypatch.setattr(ci_tests, "collect", lambda *args: calls.append("collect") or collection)
+    monkeypatch.setattr(selection, "ROOT", tmp_path)
+    monkeypatch.setattr(selection, "load_map", lambda path: (cached_mapping, None))
+    monkeypatch.setattr(selection, "collect", lambda *args: calls.append("collect") or collection)
 
     def make_plan(root, baseline, actual_collection, **kwargs):
         assert calls == ["collect"] and actual_collection == collection
         calls.append("plan")
         return copy.deepcopy(plan)
 
-    monkeypatch.setattr(ci_tests, "make_plan", make_plan)
-    if selection == "weekly":
-        variant = SimpleNamespace(
-            name="named",
-            arguments=["--printer", "h2d", "--nozzle-diameter-mm", "0.8"],
-        )
-        monkeypatch.setitem(
-            sys.modules,
-            "makerworld_exports",
-            SimpleNamespace(variants=lambda printers: [variant]),
-        )
-    else:
-        monkeypatch.setitem(sys.modules, "makerworld_exports", None)
+    monkeypatch.setattr(selection, "make_plan", make_plan)
+    monkeypatch.setitem(sys.modules, "makerworld_exports", None)
     github_output = tmp_path / "github-output"
     monkeypatch.setenv("GITHUB_OUTPUT", str(github_output))
     (tmp_path / "uv.lock").write_bytes(b"locked")
     args = SimpleNamespace(
-        mode="weekly" if selection == "weekly" else "selected",
+        mode="weekly" if kind == "weekly" else "selected",
         baseline=tmp_path / "baseline",
         output=tmp_path / "plan",
-        benchmark="",
-        head="head",
-        base="base",
-        pr=7,
     )
-    ci_tests.ci_plan(args)
+    selection.ci_plan(args)
     result = json.loads((args.output / "plan.json").read_text())
     outputs = dict(line.split("=", 1) for line in github_output.read_text().splitlines())
     assert result["selected"] == selected and result["collection"] == collection
-    assert result["contracts_only"] == (selection == "contracts")
-    assert outputs["contracts_only"] == str(selection == "contracts").lower()
-    assert result["shards"] == ([selected] if selection == "contracts" else plan["shards"])
-    assert bool(json.loads(outputs["publish_matrix"])["include"]) == (selection == "weekly")
+    assert result["contracts_only"] == (kind == "contracts")
+    assert outputs["contracts_only"] == str(kind == "contracts").lower()
+    assert result["shards"] == ([selected] if kind == "contracts" else plan["shards"])
+    assert result["weekly"] == (kind == "weekly")
     assert (args.output / "uv.lock").read_bytes() == b"locked"
 
 
-@pytest.mark.parametrize("weekly", [False, True])
-def test_ci_completion_needs_only_the_pinned_python_standard_library(
-    tmp_path, artifact_map, weekly
-):
-    node = "tests/contracts/test_example.py::test_example"
-    plan = {
-        **copy.deepcopy(artifact_map),
-        "ci": {"pr": 0},
-        "selected": [node],
-        "collection": [{"nodeid": node, "slow": False}],
-        "weekly": weekly,
-    }
-    part = {
-        **copy.deepcopy(artifact_map),
-        "tests": {
-            node: {
-                "functions": {},
-                "fixtures": [],
-                "data": [],
-                "process": False,
-                "outcome": "passed",
-                "duration": 0.1,
-            }
-        },
-    }
-    write_json(tmp_path / "plan/plan.json", plan)
-    (tmp_path / "plan/uv.lock").write_bytes(b"locked")
-    write_json(tmp_path / "parts/part-main.json", part)
-    if weekly:
-        publication = {
-            **copy.deepcopy(artifact_map),
-            "functions": {},
-            "fingerprints": {
-                f"variant-{index}{suffix}": "unchanged"
-                for index in range(24)
-                for suffix in (".3mf", ".manifest.json")
-            },
-        }
-        publication["environment"].update(platform="Darwin", machine="arm64")
-        write_json(tmp_path / "publish/fingerprints.json", publication)
-    script = (
-        "import json, sys\n"
-        "from pathlib import Path\n"
-        "from types import SimpleNamespace\n"
-        "sys.path.insert(0, sys.argv[1])\n"
-        "import ci_tests\n"
-        "root = Path(sys.argv[2])\n"
-        "plan = json.loads((root / 'plan/plan.json').read_text())\n"
-        "ci_tests.snapshot = lambda root: plan['snapshot']\n"
-        "ci_tests.complete(SimpleNamespace(plan=root / 'plan', parts=root / 'parts', "
-        "publish=root / 'publish', output=root / 'result', approve=''))\n"
-        "assert not any(name == 'build123d' or name.startswith('OCP') for name in sys.modules)\n"
-    )
+def test_ci_completion_modules_import_without_cad_or_site_packages():
+    tools = str(Path(selection.__file__).parent)
     subprocess.run(
         [
             sys.executable,
             "-I",
             "-S",
             "-c",
-            script,
-            str(Path(ci_tests.__file__).parent),
-            str(tmp_path),
+            f"import sys; sys.path.insert(0, {tools!r}); "
+            "import test_selection, publish_guard; "
+            "assert not any(n == 'build123d' or n.startswith('OCP') for n in sys.modules)",
         ],
         check=True,
         capture_output=True,
         text=True,
     )
-    result, error = load_map(tmp_path / "result/map.json")
-    assert not error, error
-    assert result["tests"] == part["tests"]
-    assert result["ci"]["main_commit"] == artifact_map["commit"]
-    assert (tmp_path / "result/uv.lock").read_bytes() == b"locked"
-    assert bool(result.get("publish")) == weekly
 
 
-def test_artifact_discovery_accepts_only_successful_owned_workflow_runs(monkeypatch):
-    artifacts = [
-        {"id": number, "expired": number == 1, "workflow_run": {"id": number}}
-        for number in range(1, 7)
-    ]
-    run = {
-        "conclusion": "success",
-        "path": ".github/workflows/ci.yml",
-        "head_repository": {"full_name": "owner/repo"},
-        "head_branch": "main",
-        "event": "push",
-    }
-    runs = {
-        2: {**run, "conclusion": "failure"},
-        3: {**run, "head_repository": {"full_name": "fork/repo"}},
-        4: {**run, "head_branch": "feature"},
-        5: {**run, "path": ".github/workflows/other.yml"},
-        6: run,
-    }
-
-    def api(path):
-        return json.dumps(
-            {"artifacts": artifacts} if "artifacts?" in path else runs[int(path.rsplit("/", 1)[1])]
-        ).encode()
-
-    monkeypatch.setattr(ci_tests, "api", api)
-    assert [
-        item["id"]
-        for item in ci_tests.artifact_candidates("owner/repo", "test-map-main", main=True)
-    ] == [6]
-
-
-@pytest.mark.parametrize("corrupt", ["lock", "inventory", "schema"])
-def test_artifacts_reject_mismatched_locks_inventory_and_schema(
-    tmp_path, monkeypatch, artifact_map, corrupt
+@pytest.mark.parametrize("damage", ["missing", "version", "lock"])
+def test_cached_maps_reject_missing_files_wrong_versions_and_lock_drift(
+    tmp_path, cached_mapping, damage
 ):
-    archive = io.BytesIO()
-    mapping = copy.deepcopy(artifact_map)
-    if corrupt == "schema":
-        mapping["tests"] = []
-    with ZipFile(archive, "w") as zipped:
-        zipped.writestr("map.json", json.dumps(mapping))
-        zipped.writestr("uv.lock", b"wrong" if corrupt == "lock" else b"locked")
-        if corrupt == "inventory":
-            zipped.writestr("../unexpected", "data")
-    monkeypatch.setattr(ci_tests, "api", lambda path: archive.getvalue())
-    with pytest.raises(ValueError, match="lock|inventory|map"):
-        ci_tests.download_map("owner/repo", {"id": 1}, tmp_path)
+    if damage != "missing":
+        mapping = {**cached_mapping, "version": 0} if damage == "version" else cached_mapping
+        write_json(tmp_path / "map.json", mapping)
+        (tmp_path / "uv.lock").write_bytes(b"wrong" if damage == "lock" else b"locked")
+    mapping, error = selection.cached_map(tmp_path)
+    assert mapping is None and "cannot use" in error
 
 
-def test_incremental_fetch_requires_same_pr_base_main_environment_and_ancestor(
-    tmp_path, monkeypatch, artifact_map
+def test_cached_baseline_keeps_the_same_repo_guard_and_requires_main_lock_and_environment(
+    tmp_path, monkeypatch, cached_mapping
 ):
-    main = artifact_map
-    overlay = {
-        **main,
-        "commit": "merge",
-        "ci": {"pr": 7, "base": "base", "head": "previous", "main_commit": main["commit"]},
-    }
-    candidates = {
-        True: [{"id": 1, "run": {"head_sha": main["commit"]}}],
-        False: [
-            {
-                "id": 2,
-                "run": {
-                    "head_sha": "previous",
-                    "head_branch": "feature",
-                    "pull_requests": [],
-                },
-            }
-        ],
-    }
-    monkeypatch.setattr(
-        ci_tests, "artifact_candidates", lambda repo, name, main: iter(candidates[main])
+    main, overlay = copy.deepcopy(cached_mapping), copy.deepcopy(cached_mapping)
+    overlay["commit"] = "previous-pr-head"
+    args = SimpleNamespace(
+        main=tmp_path / "main",
+        pr=tmp_path / "pr",
+        output=tmp_path / "baseline",
+        same_repo="true",
     )
-    monkeypatch.setattr(ci_tests, "snapshot", lambda root: main["snapshot"])
-    monkeypatch.setattr(
-        ci_tests,
-        "api",
-        lambda path: json.dumps(
-            {"head": {"ref": "feature", "repo": {"full_name": "owner/repo"}}}
-        ).encode(),
-    )
-    monkeypatch.setattr(ci_tests, "ancestor", lambda root, old, new: old != "unrelated")
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "outputs"))
+    monkeypatch.setattr(selection, "snapshot", lambda root: main["snapshot"])
+    for folder, mapping in ((args.main, main), (args.pr, overlay)):
+        write_json(folder / "map.json", mapping)
+        (folder / "uv.lock").write_bytes(b"locked")
 
-    def download(repo, artifact, destination):
-        destination.mkdir(parents=True, exist_ok=True)
-        (destination / "uv.lock").write_bytes(b"locked")
-        return copy.deepcopy(main if artifact["id"] == 1 else overlay)
+    def choose():
+        selection.ci_baseline(args)
+        assert (args.output / "uv.lock").read_bytes() == b"locked"
+        return json.loads((args.output / "map.json").read_text())
 
-    monkeypatch.setattr(ci_tests, "download_map", download)
-    destination = tmp_path / "baseline"
+    assert choose()["commit"] == overlay["commit"]
+    args.same_repo = "false"
+    assert choose()["commit"] == main["commit"]
+    args.same_repo = "true"
+    changed = {**overlay, "environment": {**overlay["environment"], "python": [3, 12, 0]}}
+    write_json(args.pr / "map.json", changed)
+    assert choose()["commit"] == main["commit"]
+    write_json(args.pr / "map.json", overlay)
+    (args.pr / "uv.lock").write_bytes(b"wrong")
+    assert choose()["commit"] == main["commit"]
+    args.main = tmp_path / "missing-main"
+    selection.ci_baseline(args)
+    mapping, error = load_map(args.output / "map.json")
+    assert mapping is None and error
+    assert "pinned=false" in (tmp_path / "outputs").read_text().splitlines()[-2:]
 
-    def fetch():
-        ci_tests.fetch_baseline(
-            tmp_path, destination, repo="owner/repo", pr=7, base="base", head="current"
+
+def test_dependency_configuration_change_does_not_pin_the_cached_lock(
+    tmp_path, monkeypatch, cached_mapping
+):
+    write_json(tmp_path / "main/map.json", cached_mapping)
+    (tmp_path / "main/uv.lock").write_bytes(b"locked")
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "outputs"))
+    monkeypatch.setattr(selection, "snapshot", lambda root: {"config": {"project": "changed"}})
+    selection.ci_baseline(
+        SimpleNamespace(
+            main=tmp_path / "main",
+            pr=tmp_path / "pr",
+            output=tmp_path / "baseline",
+            same_repo="false",
         )
-        return json.loads((destination / "map.json").read_text())
-
-    assert fetch()["commit"] == "merge"
-    for field, value in (
-        ("pr", 8),
-        ("base", "different"),
-        ("head", "unrelated"),
-        ("main_commit", "different"),
-    ):
-        original = overlay["ci"][field]
-        overlay["ci"][field] = value
-        assert fetch()["commit"] == main["commit"]
-        overlay["ci"][field] = original
-    overlay["environment"] = {**main["environment"], "python": [3, 12, 1]}
-    assert fetch()["commit"] == main["commit"]
-
-
-def test_missing_or_rejected_artifact_cannot_leave_a_stale_map(tmp_path, monkeypatch, artifact_map):
-    destination = tmp_path / "baseline"
-    write_json(destination / "map.json", artifact_map)
-    monkeypatch.setattr(ci_tests, "artifact_candidates", lambda *args, **kwargs: iter(()))
-    ci_tests.fetch_baseline(tmp_path, destination, repo="owner/repo")
-    mapping, reason = load_map(destination / "map.json")
-    assert mapping is None and "cannot use" in reason
-    assert not json.loads((destination / "fetch.json").read_text())["pinned"]
+    )
+    assert "pinned=false" in (tmp_path / "outputs").read_text().splitlines()
 
 
 def test_publish_comparison_keeps_zip_metadata_and_manifest_fields_visible(tmp_path):
@@ -349,13 +221,11 @@ def test_publish_report_names_mesh_metadata_and_placement_changes(tmp_path):
 
 
 def test_weekly_parts_need_complete_inventory_and_exact_reviewed_fingerprints(
-    tmp_path, artifact_map
+    tmp_path, cached_mapping
 ):
     part = {
-        "commit": artifact_map["commit"],
-        "environment": artifact_map["environment"],
-        "snapshot": artifact_map["snapshot"],
-        "functions": {"src/example.py": ["build"]},
+        "commit": cached_mapping["commit"],
+        "environment": cached_mapping["environment"],
         "fingerprints": {
             f"variant-{index}{suffix}": "before"
             for index in range(24)
@@ -364,7 +234,10 @@ def test_weekly_parts_need_complete_inventory_and_exact_reviewed_fingerprints(
     }
     path, report = tmp_path / "fingerprints.json", tmp_path / "report.json"
     write_json(path, part)
-    baseline = merge_fingerprints([path], None, "", report)
+    with pytest.raises(ValueError, match="fingerprints changed"):
+        merge_fingerprints([path], None, "", report)
+    approval = json.loads(report.read_text())["approval_digest"]
+    baseline = merge_fingerprints([path], None, approval, report)
     part["fingerprints"]["variant-0.3mf"] = "after"
     write_json(path, part)
     with pytest.raises(ValueError, match="fingerprints changed"):
@@ -378,56 +251,6 @@ def test_weekly_parts_need_complete_inventory_and_exact_reviewed_fingerprints(
         merge_fingerprints([path, path], None, "", report)
     with pytest.raises(ValueError, match="all 24"):
         merge_fingerprints([], None, "", report)
-
-
-@pytest.mark.parametrize("drift", ["none", "commit", "snapshot", "lock", "python", "package"])
-def test_weekly_completion_retains_the_publish_platform_and_rejects_provenance_drift(
-    tmp_path, monkeypatch, artifact_map, drift
-):
-    plan = {
-        **copy.deepcopy(artifact_map),
-        "weekly": True,
-        "ci": {"pr": 7},
-    }
-    plan["environment"].update(platform="Linux", machine="x86_64")
-    plan["environment"]["packages"].pop("appnope", None)
-    publication = copy.deepcopy(artifact_map)
-    publication["environment"].update(platform="Darwin", machine="arm64")
-    publication["environment"]["packages"]["appnope"] = "0.1.4"
-    if drift == "commit":
-        publication["commit"] = "different"
-    elif drift == "snapshot":
-        publication["snapshot"]["files"]["src/changed.py"] = "different"
-    elif drift in {"lock", "python"}:
-        publication["environment"][drift] = "different"
-    elif drift == "package":
-        publication["environment"]["packages"]["coverage"] = "different"
-    monkeypatch.setattr(ci_tests, "snapshot", lambda root: plan["snapshot"])
-    monkeypatch.setattr(
-        ci_tests,
-        "merge_parts",
-        lambda *args: copy.deepcopy({**artifact_map, "environment": plan["environment"]}),
-    )
-    monkeypatch.setattr(publish_guard, "merge_fingerprints", lambda *args: publication)
-    args = SimpleNamespace(
-        plan=tmp_path / "plan",
-        parts=tmp_path / "parts",
-        publish=tmp_path / "publish",
-        output=tmp_path / "result",
-        approve="",
-    )
-    write_json(args.plan / "plan.json", plan)
-    (args.plan / "uv.lock").write_bytes(b"locked")
-    if drift != "none":
-        with pytest.raises(ValueError, match="another source or environment"):
-            ci_tests.complete(args)
-        assert not (args.output / "map.json").exists()
-    else:
-        ci_tests.complete(args)
-        result = json.loads((args.output / "map.json").read_text())
-        assert result["environment"]["platform"] == "Linux"
-        assert result["publish"]["environment"]["platform"] == "Darwin"
-        assert result["publish"]["environment"]["machine"] == "arm64"
 
 
 def test_publish_source_isolation_uses_each_archived_source_not_the_editable_install(tmp_path):
@@ -526,7 +349,8 @@ def test_duration_gate_applies_to_portable_cases_without_reclassifying_slow_case
         },
     )
     monkeypatch.setattr(
-        "sys.argv",
+        sys,
+        "argv",
         [
             "check_test_durations.py",
             str(report),

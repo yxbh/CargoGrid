@@ -14,7 +14,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from zipfile import ZipFile
 
-from test_selection import ROOT, digest, environment, function_regions, git, snapshot, write_json
+from test_selection import ROOT, digest, environment, git, write_json
 
 
 def manifest_changes(before, after, path=""):
@@ -187,102 +187,42 @@ def guard(args):
 
 
 def record_fingerprints(args):
-    import coverage
     from makerworld_exports import main as makerworld_main
-    from makerworld_exports import variants
 
     args.output.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="fingerprints-", dir=args.output) as temporary:
-        scratch = Path(temporary)
-        config = scratch / "coverage.ini"
-        config.write_text(
-            "[run]\ncore = ctrace\nparallel = true\n"
-            "concurrency = thread, multiprocessing\npatch = subprocess, _exit\n"
-            f"data_file = {scratch / '.coverage'}\n"
-            f"source =\n    {ROOT / 'src'}\n    {ROOT / 'tools'}\n",
-            encoding="utf-8",
-        )
-        measured = coverage.Coverage(config_file=str(config))
-        measured.start()
-        hashes = {}
-        try:
-            selected = [
-                variant
-                for variant in variants((args.printer,))
-                if variant.arguments[variant.arguments.index("--nozzle-diameter-mm") + 1]
-                == args.nozzle
-                and (not args.variant or variant.name == args.variant)
-            ]
-            if len(selected) != (1 if args.variant else 6):
-                raise ValueError(
-                    "unexpected authoritative inventory for this printer/nozzle/variant"
-                )
-            folder = scratch / "published"
-            folder.mkdir()
-            makerworld_main(
-                ["--printer", args.printer, "--output", str(folder), "--jobs", "1"],
-                _variant_names=tuple(variant.name for variant in selected),
-            )
-            hashes = fingerprints(folder)
-        finally:
-            measured.stop()
-            measured.save()
-        combined = coverage.Coverage(config_file=str(config))
-        combined.combine()
-        data = combined.get_data()
-        functions = {}
-        for filename in data.measured_files():
-            path = Path(filename).resolve()
-            if not path.is_relative_to(ROOT):
-                continue
-            relative = path.relative_to(ROOT).as_posix()
-            if not relative.startswith(("src/", "tools/")):
-                continue
-            regions = function_regions(path.read_bytes())
-            functions[relative] = sorted(
-                {
-                    next(
-                        (name for start, end, name in reversed(regions) if start <= line <= end),
-                        "<module>",
-                    )
-                    for line in data.lines(filename) or []
-                }
-            )
+        folder = Path(temporary) / "published"
+        folder.mkdir()
+        makerworld_main(["--printer", args.printer, "--set", args.set, "--output", str(folder)])
         write_json(
             args.output / "fingerprints.json",
             {
                 "commit": git(ROOT, "rev-parse", "HEAD").decode().strip(),
                 "environment": environment(ROOT),
-                "snapshot": snapshot(ROOT),
-                "functions": functions,
-                "fingerprints": hashes,
+                "fingerprints": fingerprints(folder),
             },
         )
 
 
 def merge_fingerprints(paths, previous, approval, report_path):
-    fingerprints_by_name, functions = {}, {}
+    fingerprints_by_name = {}
     result = None
     for path in paths:
         part = json.loads(path.read_text())
         if result and (
-            result["commit"] != part["commit"]
-            or result["environment"] != part["environment"]
-            or result["snapshot"] != part["snapshot"]
+            result["commit"] != part["commit"] or result["environment"] != part["environment"]
         ):
             raise ValueError("incompatible publish fingerprint parts")
         if fingerprints_by_name.keys() & part["fingerprints"].keys():
             raise ValueError("duplicate published variant in fingerprints")
         fingerprints_by_name.update(part["fingerprints"])
-        for file, names in part["functions"].items():
-            functions[file] = sorted(set(functions.get(file, [])) | set(names))
         result = part
     validate_inventory(fingerprints_by_name)
-    result.update(functions=functions, fingerprints=fingerprints_by_name)
+    result["fingerprints"] = fingerprints_by_name
     changed = sorted(
         name
         for name in fingerprints_by_name.keys() | (previous or {}).get("fingerprints", {}).keys()
-        if previous and fingerprints_by_name.get(name) != previous["fingerprints"].get(name)
+        if not previous or fingerprints_by_name.get(name) != previous["fingerprints"].get(name)
     )
     approval_digest = digest(json.dumps(fingerprints_by_name, sort_keys=True).encode())
     report = {
@@ -300,7 +240,7 @@ def merge_fingerprints(paths, previous, approval, report_path):
             f"approve this exact fingerprint set with approve_fingerprints={approval_digest}"
         )
     print(
-        "Weekly fingerprint baseline initialized"
+        "Reviewed initial weekly fingerprint baseline"
         if not previous
         else f"{len(changed)} reviewed fingerprint changes"
     )
@@ -316,8 +256,7 @@ def main(argv=None):
     check.add_argument("--output", type=Path, default=ROOT / ".local/publish-guard")
     record = sub.add_parser("fingerprints")
     record.add_argument("--printer", choices=("h2d", "x2d"), required=True)
-    record.add_argument("--nozzle", choices=("0.8", "0.4"), required=True)
-    record.add_argument("--variant", help="one exact name from the authoritative publish inventory")
+    record.add_argument("--set", required=True, help="one public makerworld_exports.py set name")
     record.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
     if args.command == "compare":

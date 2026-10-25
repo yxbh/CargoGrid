@@ -11,11 +11,11 @@ import json
 import math
 import os
 import platform
+import shutil
 import subprocess
 import sys
 import tarfile
 import tempfile
-import time
 import tomllib
 from collections import Counter, defaultdict
 from copy import deepcopy
@@ -26,33 +26,13 @@ ROOT = Path(__file__).resolve().parents[1]
 INFRASTRUCTURE = {
     "tests/selection.py",
     "tools/test_selection.py",
-    "tools/ci_tests.py",
     "tools/publish_guard.py",
     "tools/check_test_durations.py",
-    "tools/ci_memory_sampler.py",
     "tools/check_distributions.py",
     "pytest.ini",
     ".coveragerc",
 }
 CONFIG_SECTIONS = ("project", "dependency-groups", "build-system")
-BENCHMARK_CASES = {
-    "contracts": (None, None),
-    "docs": ("README.md", None),
-    "test": ("tests/test_ramp.py", "test_ramp_width_run_rise_rounding_step_and_mesh"),
-    "cli": ("src/cargo_grid/cli.py", "parser"),
-    "tower": ("src/cargo_grid/plates.py", "dual_nozzle_tower_reservation"),
-    "stop": ("src/cargo_grid/accessories.py", "_vertical_stop"),
-    "ramp": ("src/cargo_grid/accessories.py", "_ramp"),
-    "handle": ("src/cargo_grid/pull_handles.py", "_body"),
-    "rod-brace": ("src/cargo_grid/rods.py", "make_rod_brace"),
-    "adjustable-stop": ("src/cargo_grid/adjustable_stop.py", "_make_pusher"),
-    "planner": ("src/cargo_grid/plates.py", "plan_plates"),
-    "export": ("src/cargo_grid/export.py", "_write_3mf"),
-    "packing": ("src/cargo_grid/footprints.py", "_pack_order"),
-    "assembly": ("src/cargo_grid/vehicles/zeekr_7x_contours.py", "_south_design"),
-    "core": ("src/cargo_grid/tiles.py", "make_tile"),
-    "infrastructure": ("tests/conftest.py", None),
-}
 
 
 def git(root, *arguments):
@@ -305,113 +285,11 @@ def snapshot(root, ref=None):
     }
 
 
-def strings(value):
-    return isinstance(value, list) and all(isinstance(item, str) for item in value)
-
-
-def valid_snapshot(value):
-    if not isinstance(value, dict) or not all(
-        isinstance(value.get(key), dict) for key in ("files", "python", "config")
-    ):
-        return False
-    if not all(
-        isinstance(key, str) and isinstance(item, str) for key, item in value["files"].items()
-    ):
-        return False
-    for analysis in value["python"].values():
-        if not isinstance(analysis, dict):
-            return False
-        if isinstance(analysis.get("error"), str):
-            continue
-        if (
-            not isinstance(analysis.get("functions"), dict)
-            or not isinstance(analysis.get("items"), list)
-            or not strings(analysis.get("imports"))
-            or not strings(analysis.get("eager"))
-        ):
-            return False
-        for item in [*analysis["functions"].values(), *analysis["items"]]:
-            if (
-                not isinstance(item, dict)
-                or not isinstance(item.get("digest"), str)
-                or not strings(item.get("refs"))
-            ):
-                return False
-        if not all(
-            isinstance(function.get("definition"), str) and strings(function.get("definition_refs"))
-            for function in analysis["functions"].values()
-        ):
-            return False
-        if not all(
-            strings(item.get("names"))
-            and isinstance(item.get("bindings"), dict)
-            and all(
-                isinstance(name, str) and strings(refs) for name, refs in item["bindings"].items()
-            )
-            for item in analysis["items"]
-        ):
-            return False
-    return True
-
-
 def load_map(path):
     try:
         mapping = json.loads(Path(path).read_text(encoding="utf-8"))
-        if (
-            mapping["version"] != FORMAT_VERSION
-            or not isinstance(mapping["commit"], str)
-            or not isinstance(mapping["tests"], dict)
-            or not isinstance(mapping["fixtures"], dict)
-            or not isinstance(mapping["environment"], dict)
-            or not valid_snapshot(mapping["snapshot"])
-            or "publish" in mapping
-            and (
-                not valid_snapshot(mapping["publish"]["snapshot"])
-                or not isinstance(mapping["publish"].get("environment"), dict)
-                or not isinstance(mapping["publish"]["functions"], dict)
-                or not all(strings(names) for names in mapping["publish"]["functions"].values())
-            )
-        ):
-            raise ValueError("unsupported or incomplete dependency map")
-        recorded_environment = mapping["environment"]
-        if (
-            not isinstance(recorded_environment.get("python"), list)
-            or len(recorded_environment["python"]) != 3
-            or not all(
-                isinstance(part, int) and part >= 0 for part in recorded_environment["python"]
-            )
-            or not isinstance(recorded_environment.get("packages"), dict)
-            or not all(
-                isinstance(name, str) and isinstance(version, str)
-                for name, version in recorded_environment["packages"].items()
-            )
-            or not all(
-                isinstance(recorded_environment.get(key), str)
-                for key in ("platform", "machine", "implementation")
-            )
-        ):
-            raise ValueError("invalid recorded environment")
-        for record in [*mapping["tests"].values(), *mapping["fixtures"].values()]:
-            if (
-                not isinstance(record["functions"], dict)
-                or not all(
-                    isinstance(file, str) and strings(names)
-                    for file, names in record["functions"].items()
-                )
-                or not strings(record["data"])
-                or not isinstance(record["process"], bool)
-            ):
-                raise ValueError("invalid dependency record")
-        for record in mapping["tests"].values():
-            if (
-                not isinstance(record["fixtures"], list)
-                or not all(key in mapping["fixtures"] for key in record["fixtures"])
-                or record["outcome"] not in {"passed", "failed", "skipped"}
-                or not isinstance(record["duration"], (int, float))
-                or not math.isfinite(record["duration"])
-                or record["duration"] < 0
-            ):
-                raise ValueError("invalid test outcome, fixture or duration")
+        if mapping["version"] != FORMAT_VERSION:
+            raise ValueError("unsupported dependency map version")
         return mapping, None
     except (OSError, ValueError, KeyError, TypeError) as error:
         return None, f"cannot use dependency map {path}: {error}"
@@ -429,11 +307,11 @@ def dependencies(mapping):
         }
         for fixture in record["fixtures"]:
             users[fixture].add(test)
-            setup = mapping["fixtures"].get(fixture, {})
-            for path, names in setup.get("functions", {}).items():
+            setup = mapping["fixtures"][fixture]
+            for path, names in setup["functions"].items():
                 records[test]["functions"][path].update(names)
-            records[test]["data"].update(setup.get("data", []))
-            records[test]["process"] |= setup.get("process", False)
+            records[test]["data"].update(setup["data"])
+            records[test]["process"] |= setup["process"]
     pending = set(records)
     while pending:
         component = set()
@@ -556,7 +434,7 @@ def affected_functions(old, new, changed):
     return None if definition_time_dependency(old, new, affected) else affected
 
 
-def select(mapping, current, collection, *, current_environment=None, full_reason=None):
+def _select(mapping, current, collection, *, current_environment=None, full_reason=None):
     universe = {record["nodeid"] for record in collection}
     reasons = defaultdict(list)
     changed = []
@@ -621,37 +499,29 @@ def select(mapping, current, collection, *, current_environment=None, full_reaso
     source_changed = any(
         path.startswith("src/") or path == "tools/makerworld_exports.py" for path in changed
     )
-    publish = bool(full_reason)
-    recorded_publish = mapping.get("publish") if mapping else None
-    if source_changed and not publish:
-        if not recorded_publish or recorded_publish.get("environment") != (
-            current_environment if current_environment is not None else mapping["environment"]
-        ):
-            publish = True
-        else:
-            published = affected_functions(
-                recorded_publish["snapshot"],
-                current,
-                [
-                    path
-                    for path in recorded_publish["snapshot"]["files"].keys()
-                    | current["files"].keys()
-                    if recorded_publish["snapshot"]["files"].get(path) != current["files"].get(path)
-                ],
-            )
-            publish = published is None or any(
-                (p, q) in published
-                for p, names in recorded_publish["functions"].items()
-                for q in names
-            )
     return {
         "version": FORMAT_VERSION,
         "mode": "full" if full_reason else "selected",
         "changed": changed,
         "selected": sorted(selected),
         "reasons": dict(reasons),
-        "publish_guard": publish,
+        "publish_guard": bool(full_reason) or source_changed,
     }
+
+
+def select(mapping, current, collection, *, current_environment=None, full_reason=None):
+    try:
+        return _select(
+            mapping,
+            current,
+            collection,
+            current_environment=current_environment,
+            full_reason=full_reason,
+        )
+    except (KeyError, TypeError, AttributeError) as error:
+        result = _select(None, current, collection, full_reason=f"damaged dependency map: {error}")
+        result["map_error"] = True
+        return result
 
 
 def shards(plan, collection, mapping, count=None):
@@ -667,6 +537,12 @@ def shards(plan, collection, mapping, count=None):
                 .get(node, {})
                 .get("duration", 20.0 if record["slow"] else 1.0)
             )
+            if (
+                not isinstance(durations[node], (int, float))
+                or not math.isfinite(durations[node])
+                or durations[node] < 0
+            ):
+                raise ValueError(f"invalid recorded duration for {node}")
     count = min(count or min(4, max(1, math.ceil(sum(durations.values()) / 600))), len(groups) or 1)
     allocations, totals = [[] for _ in range(count)], [0.0] * count
     for path, nodes in sorted(
@@ -679,8 +555,6 @@ def shards(plan, collection, mapping, count=None):
 
 
 def merge_parts(paths, plan, baseline=None):
-    if plan.get("measurement_only"):
-        raise ValueError("measurement-only plans cannot refresh a dependency map")
     tests, fixtures = {}, {}
     for path in paths:
         part = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -744,60 +618,177 @@ def collect(root, destination):
     return json.loads(Path(destination).read_text())
 
 
-def benchmark_snapshot(mapping, current, current_environment, case):
-    """Measure unchanged contracts or the selection for a virtual one-function/input edit."""
-    if mapping["snapshot"] != current or mapping["environment"] != current_environment:
-        raise ValueError("benchmark needs a complete map of the exact current tree and environment")
-    changed = deepcopy(current)
-    path, name = BENCHMARK_CASES[case]
-    if path is None:
-        return changed
-    changed["files"][path] = digest((current["files"][path] + case).encode())
-    if name:
-        function = changed["python"][path]["functions"][name]
-        function["digest"] = digest((function["digest"] + case).encode())
-    return changed
-
-
-def make_plan(root, mapping, collection, *, reason=None, count=None, current=None):
-    current = current or snapshot(root)
+def make_plan(root, mapping, collection, *, reason=None, count=None):
+    current = snapshot(root)
+    recorded_environment = environment(root)
     result = select(
-        mapping, current, collection, current_environment=environment(root), full_reason=reason
+        mapping, current, collection, current_environment=recorded_environment, full_reason=reason
     )
+    try:
+        allocations = shards(
+            result, collection, None if result.get("map_error") else mapping, count
+        )
+    except (KeyError, TypeError, AttributeError, ValueError) as error:
+        result = select(None, current, collection, full_reason=f"damaged dependency map: {error}")
+        result["map_error"] = True
+        allocations = shards(result, collection, None, count)
     result.update(
         commit=git(root, "rev-parse", "HEAD").decode().strip(),
         snapshot=current,
-        environment=environment(root),
+        environment=recorded_environment,
         collection=collection,
     )
-    result["shards"] = shards(result, collection, mapping, count)
+    result["shards"] = allocations
     return result
+
+
+def cached_map(folder):
+    mapping, error = load_map(folder / "map.json")
+    if mapping:
+        try:
+            if mapping["environment"]["lock"] != digest((folder / "uv.lock").read_bytes()):
+                raise ValueError("cached map and lock differ")
+        except (OSError, KeyError, TypeError, ValueError) as problem:
+            return None, f"cannot use cached map {folder}: {problem}"
+    return mapping, error
+
+
+def ci_baseline(args):
+    args.output.mkdir(parents=True, exist_ok=True)
+    mapping, reason = cached_map(args.main)
+    pinned, python = False, "3.12"
+    if mapping:
+        try:
+            pinned = mapping["snapshot"]["config"] == snapshot(ROOT)["config"]
+            version = mapping["environment"]["python"]
+            if len(version) != 3 or any(not isinstance(part, int) or part < 0 for part in version):
+                raise ValueError("invalid recorded Python version")
+            python = ".".join(map(str, version))
+            if args.same_repo == "true":
+                overlay, error = cached_map(args.pr)
+                if overlay and overlay["environment"] == mapping["environment"]:
+                    mapping = overlay
+                elif error:
+                    print(error)
+            shutil.copyfile(args.main / "uv.lock", args.output / "uv.lock")
+            reason = "cached map" if pinned else "dependency configuration changed"
+        except (OSError, KeyError, TypeError, ValueError) as error:
+            mapping, pinned = None, False
+            reason = f"cached baseline unusable; running full tests: {error}"
+    write_json(args.output / "map.json", mapping or {"unavailable": reason})
+    print(reason)
+    with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as stream:
+        stream.write(f"pinned={str(pinned).lower()}\npython={python}\n")
+
+
+def ci_plan(args):
+    baseline, error = load_map(args.baseline / "map.json")
+    collection = collect(ROOT, args.output / "collection.json")
+    plan = make_plan(
+        ROOT,
+        baseline,
+        collection,
+        reason="requested full backstop" if args.mode in {"full", "weekly"} else error,
+    )
+    plan["weekly"] = args.mode == "weekly"
+    plan["contracts_only"] = bool(plan["selected"]) and all(
+        node.startswith("tests/contracts/") for node in plan["selected"]
+    )
+    if plan["contracts_only"]:
+        plan["shards"] = [plan["selected"]]
+    plan["wheel"] = plan["mode"] == "full" or any(
+        path.startswith(("src/", "tools/")) or path in {"pyproject.toml", "README.md", "LICENSE"}
+        for path in plan["changed"]
+    )
+    write_json(args.output / "plan.json", plan)
+    if baseline and not plan.get("map_error"):
+        write_json(args.output / "baseline.json", baseline)
+    shutil.copyfile(ROOT / "uv.lock", args.output / "uv.lock")
+    runners = 0 if plan["contracts_only"] else len(plan["shards"])
+    print(
+        f"{plan['mode']}: {len(plan['selected'])}/{len(collection)} tests; "
+        f"{runners} test runner(s); publish guard={plan['publish_guard']}"
+    )
+    with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as stream:
+        stream.write(
+            f"matrix={json.dumps({'shard': list(range(len(plan['shards'])))})}\n"
+            f"wheel={str(plan['wheel']).lower()}\n"
+            f"weekly={str(plan['weekly']).lower()}\n"
+            f"contracts_only={str(plan['contracts_only']).lower()}\n"
+            f"python={'.'.join(map(str, plan['environment']['python']))}\n"
+        )
+    if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
+        with open(summary, "a", encoding="utf-8") as stream:
+            stream.write(
+                f"### Test selection\n\n{len(plan['selected'])}/{len(collection)} tests; "
+                f"{runners} test runners; mode **{plan['mode']}**.\n\n"
+                f"Contracts-only execution in checks: **{plan['contracts_only']}**.\n\n"
+                f"Local publish guard: **{'required' if plan['publish_guard'] else 'not selected'}**.\n"
+            )
+
+
+def ci_complete(args):
+    plan = json.loads((args.plan / "plan.json").read_text())
+    if snapshot(ROOT) != plan["snapshot"]:
+        raise ValueError("the completed source does not match the planned source")
+    path = args.plan / "baseline.json"
+    baseline, error = load_map(path) if path.is_file() else (None, None)
+    if error:
+        raise ValueError(error)
+    mapping = merge_parts(sorted(args.parts.rglob("part-*.json")), plan, baseline)
+    if plan["weekly"]:
+        from publish_guard import merge_fingerprints
+
+        mapping["publish"] = merge_fingerprints(
+            sorted(args.publish.rglob("fingerprints.json")),
+            baseline.get("publish") if baseline else None,
+            args.approve,
+            args.output.parent / "fingerprint-report.json",
+        )
+    write_json(args.output / "map.json", mapping)
+    shutil.copyfile(args.plan / "uv.lock", args.output / "uv.lock")
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("select", "run", "benchmark"):
+    for name in ("select", "run"):
         command = sub.add_parser(name)
         command.add_argument("--map", type=Path, default=ROOT / ".local/test-map/local.json")
         command.add_argument("--output", type=Path, default=ROOT / ".local/test-map/selection.json")
         command.add_argument("--full", action="store_true")
-        if name in {"run", "benchmark"}:
+        if name == "run":
             command.add_argument("--jobs", type=int, default=min(12, os.cpu_count() or 1))
-        if name == "benchmark":
-            command.add_argument("--case", choices=BENCHMARK_CASES, required=True)
-    fetch = sub.add_parser("fetch")
-    fetch.add_argument("--output", type=Path, default=ROOT / ".local/test-map/main")
     merge = sub.add_parser("merge")
     merge.add_argument("--plan", type=Path, required=True)
     merge.add_argument("--baseline", type=Path)
     merge.add_argument("--parts", type=Path, required=True)
     merge.add_argument("--output", type=Path, required=True)
+    baseline = sub.add_parser("ci-baseline")
+    baseline.add_argument("--main", type=Path, required=True)
+    baseline.add_argument("--pr", type=Path, required=True)
+    baseline.add_argument("--same-repo", choices=("true", "false"), default="false")
+    baseline.add_argument("--output", type=Path, required=True)
+    plan = sub.add_parser("ci-plan")
+    plan.add_argument("--baseline", type=Path, required=True)
+    plan.add_argument("--output", type=Path, required=True)
+    plan.add_argument("--mode", choices=("selected", "full", "weekly"), required=True)
+    finish = sub.add_parser("ci-complete")
+    finish.add_argument("--plan", type=Path, required=True)
+    finish.add_argument("--parts", type=Path, required=True)
+    finish.add_argument("--publish", type=Path)
+    finish.add_argument("--approve", default="")
+    finish.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
-    if args.command == "fetch":
-        from ci_tests import fetch_baseline
-
-        return fetch_baseline(ROOT, args.output)
+    if args.command == "ci-baseline":
+        ci_baseline(args)
+        return 0
+    if args.command == "ci-plan":
+        ci_plan(args)
+        return 0
+    if args.command == "ci-complete":
+        ci_complete(args)
+        return 0
     if args.command == "merge":
         baseline, error = load_map(args.baseline) if args.baseline else (None, None)
         if error:
@@ -811,28 +802,21 @@ def main(argv=None):
             ),
         )
         return 0
-    if args.command in {"run", "benchmark"} and args.jobs < 1:
+    if args.command == "run" and args.jobs < 1:
         parser.error("--jobs must be positive")
     mapping, error = load_map(args.map)
     (ROOT / ".local").mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="test-selection-", dir=ROOT / ".local") as temporary:
         scratch = Path(temporary)
-        started = time.perf_counter()
         collection = collect(ROOT, scratch / "collection.json")
-        current = None
-        if args.command == "benchmark":
-            if error:
-                parser.error(error)
-            current = benchmark_snapshot(mapping, snapshot(ROOT), environment(ROOT), args.case)
         plan = make_plan(
             ROOT,
             mapping,
             collection,
             reason="requested full run" if args.full else error,
-            current=current,
         )
-        if args.command == "benchmark":
-            plan["measurement_only"] = args.case
+        if plan.get("map_error"):
+            mapping = None
         write_json(args.output, plan)
         print(
             f"{plan['mode']}: {len(plan['selected'])}/{len(collection)} tests; "
@@ -861,25 +845,11 @@ def main(argv=None):
             cwd=ROOT,
             check=False,
         )
-        expected = mapping["snapshot"] if args.command == "benchmark" else plan["snapshot"]
-        if snapshot(ROOT) != expected:
+        if snapshot(ROOT) != plan["snapshot"]:
             raise ValueError(
                 "source changed during the run; the previous dependency map is retained"
             )
-        if args.command == "benchmark":
-            write_json(
-                args.output.with_suffix(".timing.json"),
-                {
-                    "case": args.case,
-                    "seconds": time.perf_counter() - started,
-                    "selected": len(plan["selected"]),
-                    "total": len(collection),
-                    "jobs": args.jobs,
-                    "returncode": result.returncode,
-                    "environment": environment(ROOT),
-                },
-            )
-        elif result.returncode in (0, 1):
+        if result.returncode in (0, 1):
             write_json(
                 args.map,
                 merge_parts(sorted((scratch / "parts").glob("part-*.json")), plan, mapping),

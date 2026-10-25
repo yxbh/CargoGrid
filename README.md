@@ -454,7 +454,7 @@ export_adjustable_stop_print_project(
 )
 ```
 
-For development, `uv run pytest -q` runs the small contract checks. Seed a local dependency map with `uv run python tools/test_selection.py run --full`, then use `uv run python tools/test_selection.py run` for affected checks, including selected slow cases. The [test guide](tests/README.md) explains full-run fallbacks, PR selection and the local publish guard required for changes that reach published files.
+For development, `uv run pytest -q` runs the small contract checks. Seed a local dependency map with `uv run python tools/test_selection.py run --full`, then use `uv run python tools/test_selection.py run` for affected checks, including selected slow cases. CI reuses branch-scoped dependency maps; a missing map runs the full suite. The [test guide](tests/README.md) explains selection and the local publish guard required for source and published-export changes.
 
 Release steps are in the [release checklist](docs/release-checklist.md). The accessory page has separate [gallery reproduction instructions](docs/attachments.md#reproduce-the-images).
 
