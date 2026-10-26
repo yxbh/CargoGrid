@@ -1,0 +1,26 @@
+name: Planned test environment
+description: Restore the selected plan and install its locked Python dependencies
+inputs:
+  python-version:
+    description: Exact Python version from the plan
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+      with:
+        name: test-plan
+        path: .local/ci-plan
+    - shell: bash
+      run: cp .local/ci-plan/uv.lock uv.lock
+    - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
+      with:
+        python-version: ${{ inputs.python-version }}
+        enable-cache: true
+        prune-cache: false
+        cache-suffix: full-wheels-v1
+        cache-dependency-glob: |
+          pyproject.toml
+          uv.lock
+    - shell: bash
+      run: uv sync --frozen --group dev

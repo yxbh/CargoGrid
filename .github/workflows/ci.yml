@@ -22,14 +22,6 @@ on:
         description: Reviewed exact fingerprint digest, only when accepting a reported change
         type: string
         default: ""
-      benchmark_case:
-        description: Measurement only (contracts/docs/test/cli/tower/stop/ramp/handle/rod-brace/adjustable-stop/planner/export/packing/assembly/core/infrastructure); not merge qualification
-        type: string
-        default: ""
-      benchmark_run:
-        description: Successful CI run providing an exact-tree map and lock for measurement
-        type: string
-        default: ""
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name }}-${{ inputs.mode }}
@@ -49,28 +41,29 @@ jobs:
       wheel: ${{ steps.plan.outputs.wheel }}
       weekly: ${{ steps.plan.outputs.weekly }}
       contracts_only: ${{ steps.plan.outputs.contracts_only }}
-      publish_matrix: ${{ steps.plan.outputs.publish_matrix }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          fetch-depth: 0
-      - name: Fetch a trusted main map and lock, then an eligible green PR map
-        id: fetch
-        env:
-          GH_TOKEN: ${{ github.token }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
-          PR_NUMBER: ${{ github.event.pull_request.number || 0 }}
-          BENCHMARK_CASE: ${{ inputs.benchmark_case }}
-          BENCHMARK_RUN: ${{ inputs.benchmark_run }}
+          path: .local/test-map
+          key: test-map-main-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: test-map-main-
+      - name: Keep the main baseline before restoring this PR's map
         run: |
-          if [ -n "$BENCHMARK_CASE" ]; then
-            test -n "$BENCHMARK_RUN"
-            python3 tools/ci_tests.py fetch --repo "$GITHUB_REPOSITORY" --benchmark-run "$BENCHMARK_RUN" --output .local/baseline
-          else
-            test -z "$BENCHMARK_RUN"
-            python3 tools/ci_tests.py fetch --repo "$GITHUB_REPOSITORY" --head "$HEAD_SHA" --base "$BASE_SHA" --pr "$PR_NUMBER" --output .local/baseline
+          if [ -d .local/test-map ]; then
+            cp -R .local/test-map .local/main-map
           fi
+      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        with:
+          path: .local/test-map
+          key: test-map-pr-${{ github.event.pull_request.number }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: test-map-pr-${{ github.event.pull_request.number }}-
+      - name: Choose the cached main lock and compatible same-repository PR map
+        id: baseline
+        env:
+          SAME_REPO: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+        run: python3 tools/test_selection.py ci-baseline --main .local/main-map --pr .local/test-map --same-repo "$SAME_REPO" --output .local/baseline
       - name: Seed the dependency cache key from the trusted lock
         run: |
           if [ -f .local/baseline/uv.lock ]; then
@@ -78,7 +71,7 @@ jobs:
           fi
       - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
         with:
-          python-version: ${{ (github.event_name == 'pull_request' || inputs.benchmark_case != '') && steps.fetch.outputs.python || '3.12' }}
+          python-version: ${{ github.event_name == 'pull_request' && steps.baseline.outputs.pinned == 'true' && steps.baseline.outputs.python || '3.12' }}
           enable-cache: true
           prune-cache: false
           cache-suffix: full-wheels-v1
@@ -87,11 +80,10 @@ jobs:
             uv.lock
       - name: Resolve fresh on main and backstops; pin PRs to main's lock
         env:
-          PINNED: ${{ steps.fetch.outputs.pinned }}
+          PINNED: ${{ steps.baseline.outputs.pinned }}
           EVENT: ${{ github.event_name }}
-          BENCHMARK_CASE: ${{ inputs.benchmark_case }}
         run: |
-          if { [ "$EVENT" = pull_request ] || [ -n "$BENCHMARK_CASE" ]; } && [ "$PINNED" = true ]; then
+          if [ "$EVENT" = pull_request ] && [ "$PINNED" = true ]; then
             cp .local/baseline/uv.lock uv.lock
           else
             uv lock --upgrade
@@ -101,11 +93,7 @@ jobs:
         id: plan
         env:
           MODE: ${{ github.event_name == 'schedule' && 'weekly' || inputs.mode || (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-tests')) && 'full' || 'selected' }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
-          PR_NUMBER: ${{ github.event.pull_request.number || 0 }}
-          BENCHMARK_CASE: ${{ inputs.benchmark_case }}
-        run: uv run --no-sync python tools/ci_tests.py plan --baseline .local/baseline --output .local/ci-plan --mode "$MODE" --head "$HEAD_SHA" --base "$BASE_SHA" --pr "$PR_NUMBER" --benchmark "$BENCHMARK_CASE"
+        run: uv run --no-sync python tools/test_selection.py ci-plan --baseline .local/baseline --output .local/ci-plan --mode "$MODE"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: test-plan
@@ -119,25 +107,14 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
-        with:
-          name: test-plan
-          path: .local/ci-plan
-      - run: cp .local/ci-plan/uv.lock uv.lock
-      - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
+      - uses: ./.github/actions/setup-tests
         with:
           python-version: ${{ needs.plan.outputs.python }}
-          enable-cache: true
-          prune-cache: false
-          cache-suffix: full-wheels-v1
-          cache-dependency-glob: |
-            pyproject.toml
-            uv.lock
       - name: Install CAD runtime libraries
         if: needs.plan.outputs.wheel == 'true'
-        uses: ./.github/actions/cad-runtime
-      - name: Install dependencies
-        run: uv sync --frozen --group dev
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install --no-install-recommends -y libgl1 libglu1-mesa
       - name: Lint and format
         run: |
           uv run --no-sync ruff check .
@@ -173,12 +150,9 @@ jobs:
           env -u PYTHONPATH wheel-smoke/bin/python -c 'import json; p=json.load(open("wheel-rod/manifest.json")); d=p["designs"][0]; i=p["export"]["plates"][0]["items"][0]; assert d["parameters"]["above_mat_height_mm"] == 240 and d["mating_datums"]["insertion_depth_mm"] == 12; assert i["source_to_project_transform"]["rotation_y_degrees"] == 90; assert i["object_settings"] == {"enable_support":"1","support_type":"normal(auto)"}; assert d["fit_evidence"]["status"] == "user-reported-fit"'
           env -u PYTHONPATH wheel-smoke/bin/cargo-grid part --family rod-brace --brace-spacing-mm 120 --build-width-mm 150 --build-depth-mm 30 --build-height-mm 10 --no-stl --output wheel-rod-brace
           env -u PYTHONPATH wheel-smoke/bin/python -c 'import json; d=json.load(open("wheel-rod-brace/manifest.json"))["designs"][0]; assert d["parameters"]["bore_diameter_mm"] == 10; assert d["mating_datums"]["center_spacing_mm"] == 120; assert abs(d["mating_datums"]["straight_bore_length_mm"] - 5.6) < 1e-9; e=d["fit_evidence"]; assert e["status"] == "user-reported-fit" and e["scope"] == "bore-to-shaft fit only"; assert e["physical_test_pending"] is False and e["tested_center_spacings_mm"] is None and e["spacing_specific_fit_verified"] is False'
-      - name: Record runner resources
-        if: needs.plan.outputs.contracts_only == 'true'
-        run: uv run --no-sync python tools/ci_tests.py resources
       - name: Run selected contracts without a test runner job
         if: needs.plan.outputs.contracts_only == 'true'
-        run: uv run --no-sync python tools/ci_memory_sampler.py -- /usr/bin/time -v uv run --no-sync pytest -q tests/contracts -n 4 --dist loadgroup -m "not native" --select-tests .local/ci-plan/plan.json --test-shard 0 --record-test-map .local/parts --durations=0 --durations-min=0 --junitxml=.local/selected-junit.xml
+        run: uv run --no-sync pytest -q tests/contracts -n 4 --dist loadgroup -m "not native" --select-tests .local/ci-plan/plan.json --test-shard 0 --record-test-map .local/parts --durations=0 --durations-min=0 --junitxml=.local/selected-junit.xml
       - name: Check the unchanged portable per-case budget
         if: ${{ !cancelled() && needs.plan.outputs.contracts_only == 'true' && hashFiles('.local/selected-junit.xml') != '' }}
         run: uv run --no-sync python tools/check_test_durations.py .local/selected-junit.xml --selection-plan .local/ci-plan/plan.json
@@ -202,28 +176,15 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
-        with:
-          name: test-plan
-          path: .local/ci-plan
-      - run: cp .local/ci-plan/uv.lock uv.lock
-      - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
+      - uses: ./.github/actions/setup-tests
         with:
           python-version: ${{ needs.plan.outputs.python }}
-          enable-cache: true
-          prune-cache: false
-          cache-suffix: full-wheels-v1
-          cache-dependency-glob: |
-            pyproject.toml
-            uv.lock
       - name: Install CAD runtime libraries
-        uses: ./.github/actions/cad-runtime
-      - name: Install dependencies
-        run: uv sync --frozen --group dev
-      - name: Record runner resources
-        run: uv run --no-sync python tools/ci_tests.py resources
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install --no-install-recommends -y libgl1 libglu1-mesa
       - name: Run selected cases, including selected slow cases
-        run: uv run --no-sync python tools/ci_memory_sampler.py -- /usr/bin/time -v uv run --no-sync pytest -q tests -n 4 --dist loadgroup -m "not native" --select-tests .local/ci-plan/plan.json --test-shard "${{ matrix.shard }}" --record-test-map .local/parts --durations=0 --durations-min=0 --junitxml=.local/selected-junit.xml
+        run: uv run --no-sync pytest -q tests -n 4 --dist loadgroup -m "not native" --select-tests .local/ci-plan/plan.json --test-shard "${{ matrix.shard }}" --record-test-map .local/parts --durations=0 --durations-min=0 --junitxml=.local/selected-junit.xml
       - name: Check the unchanged portable per-case budget
         if: ${{ !cancelled() && hashFiles('.local/selected-junit.xml') != '' }}
         run: uv run --no-sync python tools/check_test_durations.py .local/selected-junit.xml --selection-plan .local/ci-plan/plan.json
@@ -242,42 +203,30 @@ jobs:
     if: needs.plan.outputs.weekly == 'true'
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.plan.outputs.publish_matrix) }}
+      matrix:
+        printer: ["h2d", "x2d"]
+        set: ["Full-Catalogue", "Zeekr-7X-Expansion-Set", "Pull-Handle-Set", "Adjustable-Stop"]
     runs-on: macos-15
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
-        with:
-          name: test-plan
-          path: .local/ci-plan
-      - run: cp .local/ci-plan/uv.lock uv.lock
-      - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
+      - uses: ./.github/actions/setup-tests
         with:
           python-version: ${{ needs.plan.outputs.python }}
-          enable-cache: true
-          prune-cache: false
-          cache-suffix: full-wheels-v1
-          cache-dependency-glob: |
-            pyproject.toml
-            uv.lock
-      - run: uv sync --frozen --group dev
-      - run: uv run --no-sync python tools/ci_tests.py resources
-      - name: Fresh source-derived fingerprints and publish dependencies
+      - name: Fresh source-derived fingerprints
         env:
           PRINTER: ${{ matrix.printer }}
-          NOZZLE: ${{ matrix.nozzle }}
-          VARIANT: ${{ matrix.name }}
-        run: uv run --no-sync python tools/publish_guard.py fingerprints --printer "$PRINTER" --nozzle "$NOZZLE" --variant "$VARIANT" --output ".local/publish/$VARIANT"
+          SET: ${{ matrix.set }}
+        run: uv run --no-sync python tools/publish_guard.py fingerprints --printer "$PRINTER" --set "$SET" --output ".local/publish/$PRINTER-$SET"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: publish-${{ matrix.name }}
+          name: publish-${{ matrix.printer }}-${{ matrix.set }}
           path: .local/publish
           include-hidden-files: true
           retention-days: 90
 
   CI:
-    name: ${{ inputs.benchmark_case != '' && 'Benchmark (not merge qualification)' || 'CI' }}
+    name: CI
     if: ${{ always() && !cancelled() }}
     needs: [plan, checks, tests, publish]
     runs-on: ubuntu-latest
@@ -317,10 +266,9 @@ jobs:
           python-version: ${{ needs.plan.outputs.python }}
           enable-cache: false
       - name: Validate exact coverage and refresh the map only after success
-        if: inputs.benchmark_case == ''
         env:
           APPROVAL: ${{ inputs.approve_fingerprints }}
-        run: uv run --no-project python tools/ci_tests.py complete --plan .local/ci-plan --parts .local/parts --publish .local/publish --approve "$APPROVAL" --output .local/test-map
+        run: uv run --no-project python tools/test_selection.py ci-complete --plan .local/ci-plan --parts .local/parts --publish .local/publish --approve "$APPROVAL" --output .local/test-map
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: ${{ !cancelled() && hashFiles('.local/fingerprint-report.json') != '' }}
         with:
@@ -328,10 +276,7 @@ jobs:
           path: .local/fingerprint-report.json
           include-hidden-files: true
           retention-days: 90
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        if: inputs.benchmark_case == ''
+      - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          name: ${{ github.event_name == 'pull_request' && format('test-map-pr-{0}', github.event.pull_request.number) || 'test-map-main' }}
           path: .local/test-map
-          include-hidden-files: true
-          retention-days: 90
+          key: test-map-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'main' }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
