@@ -411,8 +411,60 @@ def dual_safe_catalogue_job(
         hole_diameter=hole_diameter,
         hole_scope=hole_scope,
     )
-    groups = [
-        PlateGroup("Tiles", family_members({"tile"}), packing_gap),
+    tiles = family_members({"tile"})
+    rails = family_members({"support", "support-bit", "support-end"})
+    four_cell_tiles: list[Design] = []
+    four_cell_rails: list[Design] = []
+    if tuning is not None:
+
+        def four_cell(design: Design) -> bool:
+            short, long = sorted((design.parameters["nx"], design.parameters["ny"]))
+            return long == tuning.long_axis_cells and short < long
+
+        four_cell_tiles = [d for d in tiles if four_cell(d)]
+        four_cell_rails = [d for d in family_members({"support"}) if four_cell(d)]
+        four_cell_ids = {id(d) for d in (*four_cell_tiles, *four_cell_rails)}
+        tiles = [d for d in tiles if id(d) not in four_cell_ids]
+        rails = [d for d in rails if id(d) not in four_cell_ids]
+        widest_cells = max(
+            min(d.parameters["nx"], d.parameters["ny"])
+            for d in (*four_cell_tiles, *four_cell_rails)
+        )
+        # Derive the nominal boundary; packing still checks each part's actual posed bounds.
+        widest_member_mm = widest_cells * interface.pitch + interface.male_join_depth
+        left = printer.shared_x_mm[1] - tuning.long_right_inset_mm - widest_member_mm
+        four_cell_layout = PlateGroup(
+            None,
+            [],
+            packing_gap,
+            build=replace(
+                common_build,
+                exclusions=(
+                    Exclusion(0, 0, left, common_build.y),
+                    *common_build.exclusions[1:],
+                ),
+            ),
+            tower_clearance=replace(
+                TowerClearance.uniform(AUTO_SUPPORT_TOWER_CLEARANCE_MM),
+                right=TOWER_LEFT_CLEARANCE_MM,
+            ),
+            front_left_tower=True,
+        )
+        rotations = dict(tuning.tile_rotations_z)
+        for index, design in enumerate(four_cell_tiles):
+            rotation = rotations.get((design.parameters["nx"], design.parameters["ny"]))
+            if rotation is not None:
+                turned = replace(
+                    design,
+                    recommended_print_rotation_z=rotation,
+                    apply_orientation_to_bambu=True,
+                )
+                sizes[id(turned)] = turned.bambu_size
+                four_cell_tiles[index] = turned
+    groups = [PlateGroup("Tiles", tiles, packing_gap)]
+    if four_cell_tiles:
+        groups.append(replace(four_cell_layout, title="Four-cell tiles", designs=four_cell_tiles))
+    groups += [
         PlateGroup("Female ramps", family_members({"ramp"}, "female"), packing_gap),
         PlateGroup("Male ramps", family_members({"ramp"}, "male"), packing_gap),
         PlateGroup("Normal stops", family_members({"vertical-stop"}), packing_gap),
@@ -444,11 +496,13 @@ def dual_safe_catalogue_job(
                         ),
                     )
                 )
+    # The four-cell rail shares the last rails plate, which then takes the four-cell layout.
     groups.append(
         PlateGroup(
             "Rails and connectors",
-            family_members({"support", "support-bit", "support-end"}),
+            rails,
             packing_gap,
+            tail=replace(four_cell_layout, designs=four_cell_rails) if four_cell_rails else None,
         )
     )
     groups.append(
@@ -460,64 +514,6 @@ def dual_safe_catalogue_job(
         )
     )
     tower_width_mm = tuning.tower_width_mm if tuning is not None else None
-    if tuning is not None:
-        long_groups = [
-            (
-                family,
-                title,
-                [
-                    d
-                    for d in family_members({family})
-                    if max(d.parameters["nx"], d.parameters["ny"]) == tuning.long_axis_cells
-                    and min(d.parameters["nx"], d.parameters["ny"]) < tuning.long_axis_cells
-                ],
-            )
-            for family, title in (("tile", "Four-cell tiles"), ("support", "Four-cell rail"))
-        ]
-        widest_cells = max(
-            min(d.parameters["nx"], d.parameters["ny"])
-            for _, _, members in long_groups
-            for d in members
-        )
-        # Derive the nominal boundary; packing still checks each part's actual posed bounds.
-        widest_member_mm = widest_cells * interface.pitch + interface.male_join_depth
-        left = printer.shared_x_mm[1] - tuning.long_right_inset_mm - widest_member_mm
-        long_build = replace(
-            common_build,
-            exclusions=(
-                Exclusion(0, 0, left, common_build.y),
-                *common_build.exclusions[1:],
-            ),
-        )
-        rotations = dict(tuning.tile_rotations_z)
-        for family, title, long_members in long_groups:
-            long_ids = {id(d) for d in long_members}
-            for group in groups:
-                group.designs[:] = [d for d in group.designs if id(d) not in long_ids]
-            if family == "tile":
-                for index, design in enumerate(long_members):
-                    rotation = rotations.get((design.parameters["nx"], design.parameters["ny"]))
-                    if rotation is not None:
-                        turned = replace(
-                            design,
-                            recommended_print_rotation_z=rotation,
-                            apply_orientation_to_bambu=True,
-                        )
-                        sizes[id(turned)] = turned.bambu_size
-                        long_members[index] = turned
-            groups.append(
-                PlateGroup(
-                    title,
-                    long_members,
-                    packing_gap,
-                    build=long_build,
-                    tower_clearance=replace(
-                        TowerClearance.uniform(AUTO_SUPPORT_TOWER_CLEARANCE_MM),
-                        right=TOWER_LEFT_CLEARANCE_MM,
-                    ),
-                    front_left_tower=True,
-                )
-            )
     plan = plan_plates(
         groups,
         common_build,
