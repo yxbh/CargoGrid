@@ -116,6 +116,12 @@ def state_folder() -> Path:
     )
 
 
+def say(line: str) -> None:
+    """Print one progress line in a single write, so lines from check threads stay whole."""
+    sys.stdout.write(f"{line}\n")
+    sys.stdout.flush()
+
+
 def digest(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
@@ -768,7 +774,7 @@ def bambu_check(
         try:
             keys = plate_keys(project, effective, reservations, slicer.cache.checker)
         except ValueError as error:
-            print(f"{project}: slicing every plate without the cache: {error}", flush=True)
+            say(f"{project}: slicing every plate without the cache: {error}")
     result = Check([])
     tasks = []
     for mapping in NOZZLE_MAPS:
@@ -846,7 +852,7 @@ def check(variant: Variant, folder: Path, slicer: Slicer, scratch: Path) -> list
     if found.shared:
         reused.append(f"{found.shared} shared with another variant")
     detail = f"{found.slices} plate slices" + (f": {', '.join(reused)}" if reused else "")
-    print(f"{variant.name}: Bambu Studio check, {result} ({detail})", flush=True)
+    say(f"{variant.name}: Bambu Studio check, {result} ({detail})")
     if not found.problems and slicer.checker is not None:
         _write_json(
             checked_record(folder, slicer.checker),
@@ -989,13 +995,13 @@ def build(
                 and slicer.checker is not None
                 and checked_record(folders[variant], slicer.checker).is_file()
             ):
-                print(f"{variant.name}: Bambu Studio check, every plate sliced earlier", flush=True)
+                say(f"{variant.name}: Bambu Studio check, every plate sliced earlier")
                 return
             checks[variant] = checking.submit(check, variant, folders[variant], slicer, scratch)
 
         try:
             for variant in ready:
-                print(f"{variant.name}: generated earlier, in {folders[variant]}", flush=True)
+                say(f"{variant.name}: generated earlier, in {folders[variant]}")
                 start_check(variant)
             pending = {generation.submit(staged_generate, variant): variant for variant in missing}
             capacity.reserve(min(jobs, len(pending)) * share)
@@ -1003,7 +1009,7 @@ def build(
                 variant = pending[future]
                 future.result()
                 capacity.reserve(min(jobs, len(pending) - done) * share)
-                print(f"{variant.name}: generated", flush=True)
+                say(f"{variant.name}: generated")
                 start_check(variant)
             problems = [
                 problem
