@@ -6,7 +6,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from zipfile import ZipFile
+from zipfile import ZipFile, ZipInfo
 
 import pytest
 
@@ -778,16 +778,18 @@ def _meshed_project(path, meshes, printer=H2D, header="CargoGrid"):
             '<metadata key="filament_map_mode" value="Auto For Match" /><model_instance>'
             f'<metadata key="object_id" value="{whole}" /></model_instance></plate>'
         )
-    with ZipFile(path, "w") as archive:
-        archive.writestr("Metadata/project_settings.config", json.dumps(settings))
-        archive.writestr(
-            "Metadata/model_settings.config", f"<config>{''.join(objects + plates)}</config>"
-        )
-        archive.writestr(
-            "3D/3dmodel.model",
+    members = {
+        "Metadata/project_settings.config": json.dumps(settings),
+        "Metadata/model_settings.config": f"<config>{''.join(objects + plates)}</config>",
+        "3D/3dmodel.model": (
             f'<model><metadata name="Designer">{header}</metadata><resources>{"".join(resources)}'
-            f"</resources><build>{''.join(items)}</build></model>",
-        )
+            f"</resources><build>{''.join(items)}</build></model>"
+        ),
+    }
+    with ZipFile(path, "w") as archive:
+        # Fixed entry times, so identical inputs give identical bytes like the generator.
+        for name, text in members.items():
+            archive.writestr(ZipInfo(name, date_time=(2026, 1, 1, 0, 0, 0)), text)
     return settings
 
 
