@@ -1133,6 +1133,118 @@ def test_staging_key_covers_generator_files_script_and_environment(monkeypatch, 
     assert tool.source_identity()["source"] != before
 
 
+def _publish_run(monkeypatch, tool, tmp_path, meshes, problems=None):
+    """Publish the Adjustable-Stop set; ``meshes`` maps nozzle text to plate meshes."""
+
+    def generate(variant, scratch, **kwargs):
+        folder = _fake_generate(variant, scratch)
+        nozzle = variant.name.split("_")[-1]
+        _meshed_project(folder / "job.3mf", meshes[nozzle])
+        (folder / "manifest.json").write_text(
+            json.dumps({"export": {"plates": [{"items": [{"quantity": len(meshes[nozzle])}]}]}})
+        )
+        return folder
+
+    monkeypatch.setattr(tool, "generate", generate)
+    monkeypatch.setattr(
+        tool,
+        "slice_plate",
+        lambda bambu, project, plate, work, reserved_tower=None: (problems or {}).get(plate),
+    )
+    bambu, output = _fake_bambu(monkeypatch, tool, tmp_path)
+    folder = tmp_path / "MakerWorld"
+    folder.mkdir()
+    (folder / "MainImage.png").write_text("not ours")
+    return folder, [
+        "--publish",
+        str(folder),
+        "--set",
+        "Adjustable-Stop",
+        "--bambu-studio",
+        str(bambu),
+        "--no-resume",
+    ]
+
+
+def _dated(folder, day):
+    stamp = time.mktime((2026, 10, day, 12, 0, 0, 0, 0, -1))
+    for path in folder.glob("CargoGrid_*"):
+        os.utime(path, (stamp, stamp))
+
+
+def test_publish_moves_replaced_files_to_a_dated_folder_and_copies_only_changes(
+    monkeypatch, tmp_path, capsys
+):
+    tool = _tool()
+    meshes = {"0.8mm-Nozzle": ["1", "2"], "0.4mm-Nozzle": ["1", "2"]}
+    folder, arguments = _publish_run(monkeypatch, tool, tmp_path, meshes)
+    names = {
+        path.name
+        for variant in tool.variants()
+        if variant.set_name == "Adjustable-Stop"
+        for path in tool.destinations(folder, variant).values()
+    }
+    assert tool.main(arguments) == 0
+    assert {path.name for path in folder.iterdir()} == names | {"MainImage.png"}
+    assert capsys.readouterr().out.count(": new") == 4
+
+    _dated(folder, 9)
+    before = {path.name: path.stat().st_mtime for path in folder.iterdir()}
+    assert tool.main(arguments) == 0
+    assert capsys.readouterr().out.count(": identical") == 4
+    assert {path.name: path.stat().st_mtime for path in folder.iterdir()} == before
+
+    project = "CargoGrid_H2D_Adjustable-Stop_0.8mm-Nozzle.3mf"
+    meshes["0.8mm-Nozzle"] = ["1", "3"]
+    old_bytes = (folder / project).read_bytes()
+    assert tool.main(arguments) == 0
+    out = capsys.readouterr().out
+    archived = folder / "old-2026-10-09"
+    assert [path.name for path in archived.iterdir()] == [project]
+    assert (archived / project).read_bytes() == old_bytes
+    assert (archived / project).stat().st_mtime == before[project]
+    assert (
+        f"{project}: changed, previous copy in old-2026-10-09: "
+        "plates changed: 2 Plate 2; designs changed: part 2"
+    ) in out
+    assert out.count(": identical") == 3
+    assert (folder / "MainImage.png").read_text() == "not ours"
+    assert not list(folder.glob(".*"))
+
+    _dated(folder, 9)
+    meshes["0.8mm-Nozzle"] = ["1", "3", "4"]
+    assert tool.main(arguments) == 0
+    out = capsys.readouterr().out
+    assert "previous copy in old-2026-10-09-2: 2 plates before, 3 now; designs added: part 3" in out
+    assert "manifest.json: changed, previous copy in old-2026-10-09-2: 1 fields changed" in out
+    assert sorted(path.name for path in (folder / "old-2026-10-09-2").iterdir()) == [
+        project,
+        project.replace(".3mf", ".manifest.json"),
+    ]
+
+
+def test_publish_waits_for_every_check_and_needs_the_slicer(monkeypatch, tmp_path, capsys):
+    tool = _tool()
+    meshes = {"0.8mm-Nozzle": ["1", "2"], "0.4mm-Nozzle": ["1", "2"]}
+    folder, arguments = _publish_run(monkeypatch, tool, tmp_path, meshes, problems={2: "conflict"})
+    with pytest.raises(RuntimeError, match="nothing was written"):
+        tool.main(arguments)
+    assert [path.name for path in folder.iterdir()] == ["MainImage.png"]
+    unchecked = arguments[: arguments.index("--bambu-studio")]
+    bambu = arguments[arguments.index("--bambu-studio") + 1]
+    for extra, message in (
+        ([], "--publish needs --bambu-studio"),
+        (["--bambu-studio", bambu, "--replace"], "--publish keeps replaced files"),
+        (["--bambu-studio", bambu, "--output", str(tmp_path)], "not allowed with argument"),
+    ):
+        with pytest.raises(SystemExit):
+            tool.main([*unchecked, *extra])
+        assert message in capsys.readouterr().err
+    with pytest.raises(SystemExit):
+        tool.main(["--publish", str(tmp_path / "missing"), "--bambu-studio", bambu])
+    assert "--publish must be an existing folder" in capsys.readouterr().err
+
+
 def test_bambu_studio_must_be_an_existing_file(tmp_path, capsys):
     with pytest.raises(SystemExit) as error:
         _tool().main(["--output", str(tmp_path), "--bambu-studio", str(tmp_path / "missing")])

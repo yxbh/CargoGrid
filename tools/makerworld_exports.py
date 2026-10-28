@@ -39,11 +39,18 @@ reuses them instead of building those variants again; ``--no-resume`` builds eve
 again. Staged builds from other source files are removed at the start of a run. The named
 files are still written only once every selected variant is present and checked.
 
+``--publish FOLDER`` writes into an existing folder, such as the one the MakerWorld files are
+uploaded from, instead of ``--output``. It needs ``--bambu-studio``. Files with identical bytes
+are left alone; each replaced file is moved into ``old-<date>`` in that folder first, dated by
+the replaced files, and a line per file says what changed: which plates and designs in a
+project, which fields in a manifest. Nothing is uploaded.
+
 ``--set NAME`` builds only that set, for every nozzle; repeat it for more than one set.
 ``--printer x2d`` selects the 256 mm printer instead of the default H2D; repeat the option
 with ``--printer h2d --printer x2d`` to build both.
 
-    uv run python tools/makerworld_exports.py --output FOLDER [--replace] [--jobs N]
+    uv run python tools/makerworld_exports.py (--output FOLDER [--replace] | --publish FOLDER)
+        [--jobs N]
         [--printer h2d|x2d ...]
         [--set Full-Catalogue|Zeekr-7X-Expansion-Set|Pull-Handle-Set|Adjustable-Stop ...]
         [--bambu-studio /Applications/BambuStudio.app/Contents/MacOS/BambuStudio]
@@ -52,7 +59,9 @@ with ``--printer h2d --printer x2d`` to build both.
 
 import argparse
 import ast
+import filecmp
 import hashlib
+import itertools
 import json
 import os
 import re
@@ -67,8 +76,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from itertools import chain
 from pathlib import Path
-from zipfile import ZIP64_LIMIT, ZIP_DEFLATED, ZipFile
+from zipfile import ZIP64_LIMIT, ZIP_DEFLATED, BadZipFile, ZipFile
 
+from publish_guard import manifest_changes
 from test_selection import environment
 
 import cargo_grid
@@ -998,9 +1008,138 @@ def build(
     return [folders[variant] for variant in selected], problems
 
 
+BATCH_SUFFIX = re.compile(r"_batch_\\d+$")
+PLATE_NAME = re.compile(r'<metadata key="plater_name" value="([^"]*)" />')
+OBJECT_NAME = re.compile(r'<metadata key="name" value="([^"]*)" />')
+
+
+def _outline(project: Path) -> dict:
+    """A project's plates with their names, its designs by name and its project settings."""
+    _, fingerprints = plate_fingerprints(project)
+    with ZipFile(project) as archive:
+        text = archive.read(PLATE_SETTINGS).decode()
+        settings = digest(archive.read(PROJECT_SETTINGS))
+    names = {
+        match[1]: BATCH_SUFFIX.sub("", name[1])
+        for match in OBJECT_SETTINGS.finditer(text)
+        if (name := OBJECT_NAME.search(match[0]))
+    }
+    plates, designs = [], {}
+    for number, (plate, fingerprint) in enumerate(zip(PLATE.findall(text), fingerprints), 1):
+        name = PLATE_NAME.search(plate)
+        plates.append((f"{number} {name[1]}" if name else str(number), fingerprint))
+        for identity, item in zip(INSTANCE_OBJECT.findall(plate), fingerprint["objects"]):
+            designs.setdefault(names.get(identity, identity), []).append(item["meshes"])
+    return {
+        "plates": plates,
+        "designs": {name: sorted(meshes) for name, meshes in designs.items()},
+        "settings": settings,
+    }
+
+
+def project_changes(old: Path, new: Path) -> str:
+    """Which plates, designs and settings differ between two versions of a project."""
+    try:
+        before, after = _outline(old), _outline(new)
+    except (OSError, KeyError, ValueError, BadZipFile) as error:
+        return f"contents differ ({error})"
+    found = []
+    plates = [
+        label
+        for (label, fingerprint), (_, previous) in zip(after["plates"], before["plates"])
+        if fingerprint != previous
+    ]
+    if plates:
+        found.append(f"plates changed: {', '.join(plates)}")
+    if len(after["plates"]) != len(before["plates"]):
+        found.append(f"{len(before['plates'])} plates before, {len(after['plates'])} now")
+    old_designs, new_designs = before["designs"], after["designs"]
+    for label, names in (
+        (
+            "designs changed",
+            [n for n in new_designs if old_designs.get(n, new_designs[n]) != new_designs[n]],
+        ),
+        ("designs added", [n for n in new_designs if n not in old_designs]),
+        ("designs removed", [n for n in old_designs if n not in new_designs]),
+    ):
+        if names:
+            found.append(f"{label}: {', '.join(sorted(names))}")
+    if after["settings"] != before["settings"]:
+        found.append("project settings changed")
+    return "; ".join(found) or "same plates, designs and settings; other archive bytes differ"
+
+
+def manifest_differences(old: Path, new: Path) -> str:
+    try:
+        fields = [
+            change["path"]
+            for change in manifest_changes(json.loads(old.read_text()), json.loads(new.read_text()))
+        ]
+    except (OSError, ValueError) as error:
+        return f"contents differ ({error})"
+    if not fields:
+        return "same fields, different formatting"
+    return f"{len(fields)} fields changed, such as {', '.join(fields[:3])}"
+
+
+def publish(folder: Path, selected: list[Variant], staged: list[Path]) -> list[tuple[str, str]]:
+    """Copy new and changed files into ``folder``; return each file's status and summary.
+
+    Before a file is replaced it moves to ``old-<date>``, dated by the earliest modification
+    time of that variant's replaced files, or ``old-<date>-2`` and so on when that folder
+    already holds a file of the same name. Identical files are not touched.
+    """
+    lines = []
+    for variant, source in zip(selected, staged):
+        targets = destinations(folder, variant)
+        changed = {
+            name: destination
+            for name, destination in targets.items()
+            if destination.exists() and not filecmp.cmp(source / name, destination, shallow=False)
+        }
+        archive = None
+        if changed:
+            date = min(
+                datetime.fromtimestamp(path.stat().st_mtime) for path in changed.values()
+            ).date()
+            archive = next(
+                candidate
+                for count in itertools.count(1)
+                if not any(
+                    (candidate := folder / f"old-{date}{'' if count == 1 else f'-{count}'}")
+                    .joinpath(path.name)
+                    .exists()
+                    for path in changed.values()
+                )
+            )
+        for name, destination in targets.items():
+            if destination.exists() and name not in changed:
+                lines.append(("identical", f"{destination.name}: identical"))
+                continue
+            status, summary = "new", "new"
+            if name in changed:
+                describe = project_changes if name == "job.3mf" else manifest_differences
+                details = describe(destination, source / name)
+                archive.mkdir(exist_ok=True)
+                shutil.move(destination, archive / destination.name)
+                status = "changed"
+                summary = f"changed, previous copy in {archive.name}: {details}"
+            temporary = destination.with_name(f".{destination.name}.publishing")
+            shutil.copyfile(source / name, temporary)
+            os.replace(temporary, destination)
+            lines.append((status, f"{destination.name}: {summary}"))
+    return lines
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--output", type=Path, required=True, help="folder for the named files")
+    target = parser.add_mutually_exclusive_group(required=True)
+    target.add_argument("--output", type=Path, help="folder for the named files")
+    target.add_argument(
+        "--publish",
+        type=Path,
+        help="existing folder to update, keeping replaced files in old-<date>; needs --bambu-studio",
+    )
     parser.add_argument(
         "--replace", action="store_true", help="replace files with the same names in --output"
     )
@@ -1063,14 +1202,21 @@ def main(argv: list[str] | None = None) -> int:
     cores, memory_slots = _process_capacity()
     jobs = min(args.jobs if args.jobs is not None else min(cores, memory_slots), len(selected))
     packing_workers = max(1, min(cores // jobs, memory_slots // jobs - 1))
-    if not args.output.is_dir():
+    if args.publish is not None:
+        if args.bambu_studio is None:
+            parser.error("--publish needs --bambu-studio, so only checked files are published")
+        if args.replace:
+            parser.error("--publish keeps replaced files in old-<date>; --replace is for --output")
+        if not args.publish.is_dir():
+            parser.error(f"--publish must be an existing folder: {args.publish}")
+    elif not args.output.is_dir():
         parser.error(f"--output must be an existing folder: {args.output}")
     if args.bambu_studio is not None and not args.bambu_studio.is_file():
         parser.error(f"--bambu-studio must be the Bambu Studio executable: {args.bambu_studio}")
     existing = [
         path
         for variant in selected
-        for path in destinations(args.output, variant).values()
+        for path in (destinations(args.output, variant).values() if args.output else ())
         if path.exists()
     ]
     if existing and not args.replace:
@@ -1129,10 +1275,23 @@ def main(argv: list[str] | None = None) -> int:
                 + "\n".join(problems)
                 + f"\nFinished variants stay in {current} for the next run."
             )
+        if args.publish is not None:
+            lines = publish(args.publish, selected, folders)
+            print(f"Published to {args.publish}:")
+            for _, line in lines:
+                print(f"  {line}")
+            print(
+                ", ".join(
+                    f"{sum(status == kind for status, _ in lines)} {kind}"
+                    for kind in ("identical", "changed", "new")
+                ),
+                flush=True,
+            )
         for variant, folder in zip(selected, folders):
-            for source, destination in destinations(args.output, variant).items():
-                shutil.copyfile(folder / source, destination)
-            export = json.loads(destinations(args.output, variant)["manifest.json"].read_text())
+            if args.output is not None:
+                for source, destination in destinations(args.output, variant).items():
+                    shutil.copyfile(folder / source, destination)
+            export = json.loads((folder / "manifest.json").read_text())
             plates = export["export"]["plates"]
             parts = sum(item["quantity"] for plate in plates for item in plate["items"])
             print(f"{variant.name}: {len(plates)} plates, {parts} parts")
