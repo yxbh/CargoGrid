@@ -162,7 +162,7 @@ Each variant's plates are sliced as soon as that variant is generated, and slice
 
 Plates that slice cleanly are remembered in `.local/makerworld/slice-cache`. The key covers everything that decides the result: the plate's objects, meshes and placements, the project and check settings, the nozzle map, the reserved tower, the Bambu Studio executable and profiles, and the checking code. A plate that matches one already checked, in the same run or an earlier one, isn't sliced again, so changing one plate re-slices only that plate. The ordinary and 1.92 mm solid-bottom catalogues share their unchanged accessory plates. Refused plates are always sliced again, and `--no-slice-cache` slices everything.
 
-Finished variants are kept in `.local/makerworld/staging` until the generator source, the script or the Python environment changes. If a run stops part way, after a crash or a refused plate, the same command picks up where it stopped and only builds what is missing; `--no-resume` builds everything again. Named files are still written only once every selected variant is present and checked.
+Finished variants are kept in `.local/makerworld/staging` until the generator source, the script's list of variants or the Python environment changes. If a run stops part way, after a crash or a refused plate, the same command picks up where it stopped and only builds what is missing; `--no-resume` builds everything again. Named files are still written only once every selected variant is present and checked.
 
 To update the folder you upload from, use `--publish` instead of `--output`:
 

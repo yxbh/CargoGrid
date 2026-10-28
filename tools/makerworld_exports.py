@@ -33,8 +33,9 @@ sliced again. ``--no-slice-cache`` slices every plate and leaves the cache alone
 be deleted at any time.
 
 Each finished variant, its manifest and a clean check result are kept in
-``.local/makerworld/staging``, under a key made from the generator source files, this script,
-the Python environment and the variant's arguments. A rerun after a crash or a refused plate
+``.local/makerworld/staging``, under a key made from the generator source files, the code in
+this script that lists and generates variants, the Python environment and the variant's
+arguments. A rerun after a crash or a refused plate
 reuses them instead of building those variants again; ``--no-resume`` builds every variant
 again. Staged builds from other source files are removed at the start of a run. The named
 files are still written only once every selected variant is present and checked.
@@ -105,6 +106,8 @@ STAGING_FORMAT = 1
 # Modules whose code decides a check result, and where this script's own check code starts.
 CHECK_MODULES = (parameters, printers, sliced_extrusion)
 CHECK_ROOTS = ("bambu_check", "Slicer", "SliceCache", "effective_settings", "CACHE_FORMAT")
+# Where this script's code that decides a generated variant starts.
+GENERATION_ROOTS = ("variants", "generate", "staged_name", "STAGING_FORMAT")
 
 
 def state_folder() -> Path:
@@ -445,9 +448,13 @@ def slice_plate(
 def check_code() -> str:
     """Source of the definitions in this script that a check result depends on.
 
-    Follows the names used from ``CHECK_ROOTS``, so editing the variant list or how files are
-    written keeps cached plates.
+    Editing the variant list or how files are written keeps cached plates.
     """
+    return script_code(CHECK_ROOTS)
+
+
+def script_code(roots: tuple[str, ...]) -> str:
+    """Source of the definitions in this script reached from ``roots`` by the names they use."""
     source = Path(__file__).read_text()
     definitions = {}
     for node in ast.parse(source).body:
@@ -458,7 +465,7 @@ def check_code() -> str:
                 definitions.update(
                     (name.id, node) for name in ast.walk(target) if isinstance(name, ast.Name)
                 )
-    pending, used = list(CHECK_ROOTS), {}
+    pending, used = list(roots), {}
     while pending:
         name = pending.pop()
         if name in used or name not in definitions:
@@ -859,10 +866,14 @@ def _write_json(path: Path, value: dict) -> None:
 
 
 def source_identity() -> dict:
-    """What decides generated projects: the generator source files, this script and Python."""
+    """What decides generated projects: the generator files, this script's variants and Python.
+
+    Only the code reached from ``GENERATION_ROOTS`` counts, so editing the check or publishing
+    steps keeps staged variants.
+    """
     package = Path(cargo_grid.__file__).resolve().parent
-    hasher = hashlib.sha256()
-    files = [("makerworld_exports.py", Path(__file__))] + [
+    hasher = hashlib.sha256(f"{script_code(GENERATION_ROOTS)}\n".encode())
+    files = [
         (path.relative_to(package).as_posix(), path)
         for path in sorted(package.rglob("*"))
         if path.is_file() and "__pycache__" not in path.parts and not path.name.startswith(".")
@@ -1008,7 +1019,7 @@ def build(
     return [folders[variant] for variant in selected], problems
 
 
-BATCH_SUFFIX = re.compile(r"_batch_\\d+$")
+BATCH_SUFFIX = re.compile(r"_batch_\d+$")
 PLATE_NAME = re.compile(r'<metadata key="plater_name" value="([^"]*)" />')
 OBJECT_NAME = re.compile(r'<metadata key="name" value="([^"]*)" />')
 

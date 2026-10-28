@@ -1089,16 +1089,43 @@ def test_unchecked_staged_variant_is_checked_by_a_later_run(monkeypatch, tmp_pat
     assert generated == [] and len(sliced) == 6
 
 
+def _script_copy(tmp_path, text):
+    path = tmp_path / f"copy{len(list(tmp_path.iterdir()))}.py"
+    path.write_text(text)
+    spec = importlib.util.spec_from_file_location(path.stem, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_staging_key_follows_variant_code_and_ignores_check_and_publishing(tmp_path):
+    source = (ROOT / "tools/makerworld_exports.py").read_text()
+
+    def code(text):
+        return _script_copy(tmp_path, text).source_identity()["source"]
+
+    original = code(source)
+    for old, new in (
+        ("SOLID_BOTTOM_MM = 1.92", "SOLID_BOTTOM_MM = 2"),
+        ('"--no-stl",', '"--no-stl", "--no-holes",'),
+        ('"-m", "cargo_grid"', '"-I", "-m", "cargo_grid"'),
+    ):
+        assert old in source
+        assert code(source.replace(old, new, 1)) != original, old
+    for old, new in (
+        ('"--orient", "0", "--slice"', '"--orient", "1", "--slice"'),
+        ('summary = "new"', 'summary = "added"'),
+        ('help="list each file', 'help="show each file'),
+    ):
+        assert old in source
+        assert code(source.replace(old, new, 1)) == original, old
+
+
 def test_check_code_follows_what_decides_a_result_and_ignores_the_rest(tmp_path):
     source = (ROOT / "tools/makerworld_exports.py").read_text()
 
     def code(text):
-        path = tmp_path / f"copy{len(list(tmp_path.iterdir()))}.py"
-        path.write_text(text)
-        spec = importlib.util.spec_from_file_location(path.stem, path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module.check_code()
+        return _script_copy(tmp_path, text).check_code()
 
     original = code(source)
     for name in ("def slice_plate", "def extrusion_problem", "def model_digests", "PROBLEMS ="):
@@ -1206,8 +1233,8 @@ def test_publish_moves_replaced_files_to_a_dated_folder_and_copies_only_changes(
     assert (archived / project).read_bytes() == old_bytes
     assert (archived / project).stat().st_mtime == before[project]
     assert (
-        f"{project}: changed, previous copy in old-2026-10-09: "
-        "plates changed: 2 Plate 2; designs changed: part 2"
+        f"  {project}: changed, previous copy in old-2026-10-09: "
+        "plates changed: 2 Plate 2; designs changed: part 2\n"
     ) in out
     assert out.count(": identical") == 3
     assert (folder / "MainImage.png").read_text() == "not ours"
@@ -1217,7 +1244,9 @@ def test_publish_moves_replaced_files_to_a_dated_folder_and_copies_only_changes(
     meshes["0.8mm-Nozzle"] = ["1", "3", "4"]
     assert tool.main(arguments) == 0
     out = capsys.readouterr().out
-    assert "previous copy in old-2026-10-09-2: 2 plates before, 3 now; designs added: part 3" in out
+    assert (
+        "previous copy in old-2026-10-09-2: 2 plates before, 3 now; designs added: part 3\n" in out
+    )
     assert "manifest.json: changed, previous copy in old-2026-10-09-2: 1 fields changed" in out
     assert sorted(path.name for path in (folder / "old-2026-10-09-2").iterdir()) == [
         project,
