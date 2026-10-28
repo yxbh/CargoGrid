@@ -118,8 +118,8 @@ def required_accessories(max_cells, *, hole_diameter=10, hole_scope="full"):
         "lock-45": [Accessory("lock-45", nx=n, ny=n) for n in (1, 2)],
         "plate": [Accessory("plate", nx=x, ny=y) for x, y in ((1, 1), (1, 2), (2, 2))],
         "rod": [
-            Rod(above_mat_height_mm=120, peg_diameter_mm=10, tile_thickness_mm=13),
-            Rod(above_mat_height_mm=240, peg_diameter_mm=10, tile_thickness_mm=13),
+            Rod(above_mat_height_mm=height, peg_diameter_mm=10, tile_thickness_mm=13)
+            for height in (40, 60, 120, 240)
         ],
         "rod-brace": [
             RodBrace(center_spacing_mm=60, bore_diameter_mm=10),
@@ -348,7 +348,7 @@ def test_h2d_dual_safe_plan_keeps_full_family_inventory_and_hardware_zones(h2d_p
     assert len({design.name for design in job.designs}) == len(job.designs)
     assert len(job.designs) == len(job.print_placements)
     assert all(design.quantity == 1 for design in job.designs)
-    assert len(job.designs) == 24 + 105
+    assert len(job.designs) == 24 + 107
     (omitted,) = job.omitted
     assert "family" not in omitted["parameters"]
     assert (omitted["parameters"]["nx"], omitted["parameters"]["ny"]) == (5, 5)

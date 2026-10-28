@@ -73,7 +73,7 @@ How well the floor keeps dust out, and what it does to fit, flatness and strengt
 
 ## Browse and generate accessories
 
-At the standard 60/13 settings, a 350x320x325 mm build volume fits all 105 accessories: female and male ramps, attachment plates, five vertical tile brackets, eight normal stops, two angled stops, round-hole rods and upper braces, edge and corner pieces, and support rails with their connectors. Edge and corner pieces come in 10, 20 and 30 mm widths. With the full hole pattern they carry the other half of the tiles' edge holes; with no holes or interior-only holes they are plain. A different unit size or build volume can change what fits.
+At the standard 60/13 settings, a 350x320x325 mm build volume fits all 107 accessories: female and male ramps, attachment plates, five vertical tile brackets, eight normal stops, two angled stops, round-hole rods and upper braces, edge and corner pieces, and support rails with their connectors. Edge and corner pieces come in 10, 20 and 30 mm widths. With the full hole pattern they carry the other half of the tiles' edge holes; with no holes or interior-only holes they are plain. A different unit size or build volume can change what fits.
 
 ![Three plates, five tile brackets, eight normal stops and two angled stops that use the X attachment interface.](docs/images/x-attachments.png)
 
@@ -123,13 +123,13 @@ Free exterior base, wall and reinforcement-ridge edges use 2 mm radii; finger, s
 
 The front posts are independently authored Cargo-Grid BREP geometry rather than literal copied facets from the earlier external 3MF workflow. Their 0.08 mm inset straight stems, 0.1 mm transitions and unchanged R2 tips match the vertical tile brackets. No vertex, topology or digest equality to the earlier mesh is claimed. The original two-opening tile remains a separate accessory and is not included in this output.
 
-The native source export is not a Bambu project and does not select a print orientation or process preset; use the H2D extra for that. The adjustable stop remains outside the 81-design catalogue. The released-finger option and the one-pitch collision screen are prescribed rigid geometry, not an elastic or force simulation. The 3.7 mm release stroke leaves 0.7 mm nominal radial tip clearance after disengagement. One H2D 0.8 mm/0.32 mm PETG print supplied the current base, pusher, keeper and clip fit observations, but does not establish click and squeeze force, automatic ratcheting, creep, fatigue or strength. Bags remain supported by the mat, and the stop has no load or crash rating.
+The native source export is not a Bambu project and does not select a print orientation or process preset; use the H2D extra for that. The adjustable stop remains outside the catalogue. The released-finger option and the one-pitch collision screen are prescribed rigid geometry, not an elastic or force simulation. The 3.7 mm release stroke leaves 0.7 mm nominal radial tip clearance after disengagement. One H2D 0.8 mm/0.32 mm PETG print supplied the current base, pusher, keeper and clip fit observations, but does not establish click and squeeze force, automatic ratcheting, creep, fatigue or strength. Bags remain supported by the mat, and the stop has no load or crash rating.
 
 The keeper is one 61.6x18 mm block from its Z=16.85 mm seat to its Z=26 mm top. The four screw axes, 3.4 mm bores, 2.7 mm base pilots and M3x16 recommendation stay fixed; the provisional 7 mm 90-degree mouths are 1.8 mm deep and retain 1.3 mm of side land. R3.35 local bosses around the R1.35 pilots leave 2 mm nominal radial ligament without changing their axes or depth. The pusher remains clear throughout the 0..48 mm adjustment range, including the prescribed two-finger release pose. After the last lock at 48 mm, the larger tooth carriers permit 4 mm controlled overtravel and contact the solid keeper at 52 mm; 52 mm is a stop, not another lock. Do not force the pusher beyond that contact: remove the four keeper screws and lift off the keeper first, squeeze the two outer pads through the 3.7 mm release travel, then withdraw the pusher.
 
 ## Make the full H2D catalogue
 
-This command makes a ready-packed project for a Bambu Lab H2D with 0.8 mm or 0.4 mm nozzles: 24 tile sizes with the full 10 mm hole pattern and all 105 accessories, on named plates grouped by family. It only works with the standard 60 mm unit, 13 mm thickness and no fit offset; you can add `--solid-bottom-thickness-mm`. Edges and corners share plates by outward width, and each object's name still says which edge, corner variant and male/female joint it has.
+This command makes a ready-packed project for a Bambu Lab H2D with 0.8 mm or 0.4 mm nozzles: 24 tile sizes with the full 10 mm hole pattern and all 107 accessories, on named plates grouped by family. It only works with the standard 60 mm unit, 13 mm thickness and no fit offset; you can add `--solid-bottom-thickness-mm`. Edges and corners share plates by outward width, and each object's name still says which edge, corner variant and male/female joint it has.
 
 ```sh
 uv run cargo-grid catalogue --printer h2d --bambu --material "Bambu PETG Basic @BBL H2D 0.8 nozzle" PETG "#637b70" --nozzle-diameter-mm 0.8 --layer-height-mm 0.32 --no-stl --output outputs/full-catalogue
@@ -174,7 +174,7 @@ For 0.4 mm nozzles, use 0.24 mm layers and the `Bambu PETG Basic @BBL X2D 0.4 no
 
 The X2D auto-support catalogue includes the 3x4 and 4x3 tiles as well as 1x4, 2x4, 4x1, 4x2 and the four-cell support rail. Its full-hole, ordinary/1.92 mm-bottom projects use an 18 mm-wide rectangular prime tower, with ribs off, on every catalogue plate; Bambu cannot store that shape per plate. Plates with four-cell parts put it at front-left X=35.5, Y=15; other plates keep it front-right at X=223, Y=15 to avoid extra plates. The four-cell tiles follow the other tiles, and the four-cell rail shares the last rails plate. The planner reserves its brim and nozzle-change wipe lines separately from the models. The long tiles retain a 5 mm front/back inset and at least 5 mm at the right; the 3x4 turns 180 degrees and the 4x3 turns 90 degrees so their male sides face the tower. Prime volumes, automatic support feet and the named processes' support thresholds stay unchanged. Tower stability on tall plates, including the 120 mm brackets and stops, needs a physical print check. Other X2D sets and all H2D projects keep the default tower.
 
-The 4x4 and five-cell designs remain omitted. The existing 240 mm above-mat rod fits diagonally: its horizontal Y=90-degree pose gets another Z=45-degree turn, with the exact transform recorded in the manifest. No shorter rod or scaled geometry is needed. The Zeekr set is only an expansion set; its manifest still names the large standard rear-panel tiles printed separately. No X2D physical fit, support-removal or strength result is implied, and the narrower tower is not a physical stability result.
+The 4x4 and five-cell designs remain omitted. The existing 240 mm above-mat rod fits diagonally: its horizontal Y=90-degree pose gets another Z=45-degree turn, with the exact transform recorded in the manifest. It isn't shortened or scaled to fit. The Zeekr set is only an expansion set; its manifest still names the large standard rear-panel tiles printed separately. No X2D physical fit, support-removal or strength result is implied, and the narrower tower is not a physical stability result.
 
 ## Make the Zeekr 7X expansion set
 
@@ -235,9 +235,9 @@ The grip, posts and hand opening are sized for a hand, so they don't change with
 
 ## Round-hole rods and upper braces
 
-Rods fit the mat's round holes, with a collar resting on its top. Choose 120 or 240 mm above-mat height; the peg adds another 12 mm at standard tile thickness. Upper braces connect two Ø10 mm shafts at 60 or 120 mm centres. That spacing stays in physical millimetres when unit size changes.
+Rods fit the mat's round holes, with a collar resting on its top. The catalogue has rods 40, 60, 120 and 240 mm above the mat; the two short ones make low fences for small items, and `--rod-height-mm` takes other heights. The peg adds another 12 mm at standard tile thickness. Upper braces connect two Ø10 mm shafts at 60 or 120 mm centres. That spacing stays in physical millimetres when unit size changes.
 
-![Two round-hole rods and two labelled upper braces, with scale shared within each family.](docs/images/rods-and-braces.png)
+![Four round-hole rods and two labelled upper braces, with scale shared within each family.](docs/images/rods-and-braces.png)
 
 ```sh
 uv run cargo-grid part --family rod --rod-height-mm 120 --peg-diameter-mm 10 --build-width-mm 350 --build-depth-mm 320 --build-height-mm 325 --bambu --material "Model PETG" PETG "#637b70" --nozzle-diameter-mm 0.8 --layer-height-mm 0.32 --output outputs/rod

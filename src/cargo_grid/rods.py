@@ -9,7 +9,9 @@ from cargo_grid.interfaces import horizontal_edges
 from cargo_grid.parameters import positive
 
 ROD_FAMILIES = ("rod", "rod-brace")
-ROD_HEIGHTS_MM = (120.0, 240.0)
+ROD_HEIGHTS_MM = (40.0, 60.0, 120.0, 240.0)
+# The user-reported peg fit came from printed 120/240 mm rods only.
+FIT_REPORTED_ROD_HEIGHTS_MM = (120.0, 240.0)
 BRACE_SPACINGS_MM = (60.0, 120.0)
 BRACE_BORES_MM = (10.0, 10.2, 10.4)
 SHAFT_DIAMETER_MM = 10.0
@@ -254,7 +256,7 @@ def brace_datums(spec: RodBrace) -> dict:
 def fit_evidence(spec: Rod | RodBrace) -> dict:
     if isinstance(spec, Rod):
         applies = (
-            spec.above_mat_height_mm in ROD_HEIGHTS_MM
+            spec.above_mat_height_mm in FIT_REPORTED_ROD_HEIGHTS_MM
             and spec.peg_diameter_mm == 10
             and spec.tile_thickness_mm == 13
         )
