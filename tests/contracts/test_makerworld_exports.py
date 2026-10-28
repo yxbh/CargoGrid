@@ -19,8 +19,12 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 @pytest.fixture(autouse=True)
-def _private_state(monkeypatch, tmp_path):
-    monkeypatch.setenv("CARGO_GRID_MAKERWORLD_STATE", str(tmp_path / "state"))
+def _private_state(monkeypatch, tmp_path_factory):
+    monkeypatch.setenv("CARGO_GRID_MAKERWORLD_STATE", str(tmp_path_factory.mktemp("state")))
+
+
+def _state():
+    return Path(os.environ["CARGO_GRID_MAKERWORLD_STATE"])
 
 
 def _bambu_bundle(folder):
@@ -765,10 +769,12 @@ def _meshed_project(path, meshes, printer=H2D, header="CargoGrid"):
         )
         items.append(f'<item objectid="{whole}" transform="1 0 0 0 1 0 0 0 1 {number} 0 0" />')
         objects.append(
-            f'<object id="{whole}"><metadata key="name" value="part {number}" /></object>'
+            f'<object id="{whole}"><metadata key="name" value="part {number}_batch_{number}" />'
+            "</object>"
         )
         plates.append(
             f'<plate><metadata key="plater_id" value="{number}" />'
+            f'<metadata key="plater_name" value="Plate {number}" />'
             '<metadata key="filament_map_mode" value="Auto For Match" /><model_instance>'
             f'<metadata key="object_id" value="{whole}" /></model_instance></plate>'
         )
@@ -863,6 +869,7 @@ def _cached_run(monkeypatch, tool, tmp_path, meshes_by_variant, problems=None):
         "Adjustable-Stop",
         "--bambu-studio",
         str(bambu),
+        "--no-resume",
     ]
 
 
@@ -890,7 +897,7 @@ def test_identical_plates_are_sliced_once_per_run_and_reused_by_later_runs(
         (last.name, "petg-nozzle-1", 2),
         (last.name, "petg-nozzle-2", 2),
     ]
-    entries = list((tmp_path / "state" / "slice-cache").glob("*.json"))
+    entries = list((_state() / "slice-cache").glob("*.json"))
     assert len(entries) == 8
     record = json.loads(entries[0].read_text())
     assert record["result"] == "clean" and record["key"] == entries[0].stem
@@ -906,7 +913,7 @@ def test_refused_plates_are_sliced_again_and_never_cached(monkeypatch, tmp_path)
         with pytest.raises(RuntimeError, match="plate 2 with PETG"):
             tool.main(arguments)
         assert sorted(plate for _, _, plate in sliced) == expected
-    assert len(list((tmp_path / "state" / "slice-cache").glob("*.json"))) == 2
+    assert len(list((_state() / "slice-cache").glob("*.json"))) == 2
 
 
 def test_no_slice_cache_slices_every_plate_and_writes_no_cache(monkeypatch, tmp_path, capsys):
@@ -914,10 +921,10 @@ def test_no_slice_cache_slices_every_plate_and_writes_no_cache(monkeypatch, tmp_
     sliced, arguments = _cached_run(monkeypatch, tool, tmp_path, lambda variant: ["1", "2"])
     assert tool.main(arguments) == 0
     sliced.clear()
-    before = sorted(path.name for path in (tmp_path / "state" / "slice-cache").iterdir())
+    before = sorted(path.name for path in (_state() / "slice-cache").iterdir())
     assert tool.main([*arguments, "--no-slice-cache"]) == 0
     assert len(sliced) == 8
-    assert sorted(path.name for path in (tmp_path / "state" / "slice-cache").iterdir()) == before
+    assert sorted(path.name for path in (_state() / "slice-cache").iterdir()) == before
     assert "from the slice cache" not in capsys.readouterr().out.split("every plate sliced (4")[-1]
 
 
@@ -931,7 +938,7 @@ def test_unreadable_model_falls_back_to_slicing_every_plate(monkeypatch, tmp_pat
     assert tool.main(arguments) == 0
     assert len(sliced) == 16
     assert "slicing every plate without the cache: odd model" in capsys.readouterr().out
-    assert not (tmp_path / "state" / "slice-cache").exists()
+    assert not (_state() / "slice-cache").exists()
 
 
 def test_checker_identity_covers_the_executable_profiles_and_check_code(tmp_path):
@@ -960,6 +967,170 @@ def test_checker_identity_covers_the_executable_profiles_and_check_code(tmp_path
         for node in ast.walk(ast.parse(source.read_text())):
             if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("cargo_grid."):
                 pending.append(node.module)
+
+
+def _resumable_run(monkeypatch, tool, tmp_path, fail=None, problems=None):
+    """Run the Adjustable-Stop set; return generated and sliced variant names."""
+    generated, sliced = [], []
+    lock = threading.Lock()
+
+    def generate(variant, scratch, **kwargs):
+        if variant.name == fail.get("generate"):
+            # Crash once the other variant has finished its check.
+            deadline = time.monotonic() + 10
+            while not list((_state() / "staging").glob("*/*/check-*.json")):
+                assert time.monotonic() < deadline, "the first variant was never checked"
+                time.sleep(0.01)
+            raise RuntimeError("generator crashed")
+        with lock:
+            generated.append(variant.name)
+        folder = _fake_generate(variant, scratch)
+        _meshed_project(folder / "job.3mf", ["1", variant.name[-12:-9]])
+        return folder
+
+    def slice_plate(bambu, project, plate, work, reserved_tower=None):
+        name = work.parent.name.removesuffix("-check")
+        with lock:
+            sliced.append((name, work.name, plate))
+        return fail.get("slice", {}).get((name, plate))
+
+    fail = fail if fail is not None else {}
+    monkeypatch.setattr(tool, "generate", generate)
+    monkeypatch.setattr(tool, "slice_plate", slice_plate)
+    bambu, output = _fake_bambu(monkeypatch, tool, tmp_path)
+    arguments = ["--output", str(output), "--set", "Adjustable-Stop", "--bambu-studio", str(bambu)]
+    return generated, sliced, output, arguments
+
+
+def _staged(tool):
+    builds = [path for path in (_state() / "staging").iterdir() if path.is_dir()]
+    assert len(builds) == 1
+    return builds[0]
+
+
+def test_rerun_after_a_crash_reuses_finished_variants(monkeypatch, tmp_path, capsys):
+    tool = _tool()
+    first, last = [v for v in tool.variants() if v.set_name == "Adjustable-Stop"]
+    fail = {"generate": last.name}
+    generated, sliced, output, arguments = _resumable_run(monkeypatch, tool, tmp_path, fail)
+    monkeypatch.setattr(tool, "_process_capacity", lambda: (4, 8))
+    with pytest.raises(RuntimeError, match="generator crashed"):
+        tool.main([*arguments, "--jobs", "1"])
+    assert not any(output.iterdir())
+    staged = _staged(tool) / tool.staged_name(first)
+    record = json.loads((staged / "variant.json").read_text())
+    assert record["name"] == first.name and record["arguments"] == list(first.arguments)
+    assert {"commit", "source", "environment"} <= record.keys()
+    assert [path.name for path in staged.glob("check-*.json")]
+    assert not list(_staged(tool).glob(".partial-*"))
+
+    fail.clear()
+    generated.clear()
+    sliced.clear()
+    capsys.readouterr()
+    assert tool.main(arguments) == 0
+    assert generated == [last.name]
+    assert {name for name, _, _ in sliced} == {last.name}
+    out = capsys.readouterr().out
+    assert f"{first.name}: generated earlier" in out
+    assert f"{first.name}: Bambu Studio check, every plate sliced earlier" in out
+    assert (output / f"{first.name}.3mf").read_bytes() == (staged / "job.3mf").read_bytes()
+    assert {path.name for path in output.iterdir()} == {
+        path.name
+        for variant in (first, last)
+        for path in tool.destinations(output, variant).values()
+    }
+
+
+def test_refused_variant_is_checked_again_without_being_rebuilt(monkeypatch, tmp_path):
+    tool = _tool()
+    first, last = [v for v in tool.variants() if v.set_name == "Adjustable-Stop"]
+    fail = {"slice": {(first.name, 2): "conflict"}}
+    generated, sliced, output, arguments = _resumable_run(monkeypatch, tool, tmp_path, fail)
+    with pytest.raises(RuntimeError, match="Finished variants stay in"):
+        tool.main(arguments)
+    assert not list((_staged(tool) / tool.staged_name(first)).glob("check-*.json"))
+    fail.clear()
+    generated.clear()
+    sliced.clear()
+    assert tool.main(arguments) == 0
+    assert generated == []
+    assert sorted(sliced) == [(first.name, "petg-nozzle-1", 2), (first.name, "petg-nozzle-2", 2)]
+
+
+def test_no_resume_and_changed_sources_build_every_variant_again(monkeypatch, tmp_path, capsys):
+    tool = _tool()
+    generated, sliced, output, arguments = _resumable_run(monkeypatch, tool, tmp_path)
+    arguments.append("--replace")
+    assert tool.main(arguments) == 0
+    old = _staged(tool)
+    stale = old / ".partial-999999999-x"
+    stale.mkdir()
+    for extra, changed in (["--no-resume"], False), ([], True):
+        generated.clear()
+        if changed:
+            identity = tool.source_identity()
+            monkeypatch.setattr(tool, "source_identity", lambda: {**identity, "source": "edited"})
+        assert tool.main([*arguments, *extra]) == 0
+        assert len(generated) == 2
+    assert not old.exists() and _staged(tool) != old
+    assert "staged from other source files" in capsys.readouterr().out
+
+
+def test_unchecked_staged_variant_is_checked_by_a_later_run(monkeypatch, tmp_path):
+    tool = _tool()
+    generated, sliced, output, arguments = _resumable_run(monkeypatch, tool, tmp_path)
+    unchecked = [argument for argument in arguments if argument != "--bambu-studio"][:-1]
+    assert tool.main(unchecked) == 0
+    generated.clear()
+    assert tool.main([*arguments, "--replace"]) == 0
+    assert generated == [] and len(sliced) == 6
+
+
+def test_check_code_follows_what_decides_a_result_and_ignores_the_rest(tmp_path):
+    source = (ROOT / "tools/makerworld_exports.py").read_text()
+
+    def code(text):
+        path = tmp_path / f"copy{len(list(tmp_path.iterdir()))}.py"
+        path.write_text(text)
+        spec = importlib.util.spec_from_file_location(path.stem, path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module.check_code()
+
+    original = code(source)
+    for name in ("def slice_plate", "def extrusion_problem", "def model_digests", "PROBLEMS ="):
+        assert name in original
+    assert "def variants" not in original and "def main" not in original
+    edits = {
+        '"--orient", "0", "--slice"': '"--orient", "1", "--slice"',
+        "gcode path conflicts found": "gcode path conflict found",
+        'b"</object>"': 'b"</object >"',
+        "CACHE_FORMAT = 1": "CACHE_FORMAT = 2",
+    }
+    for old, new in edits.items():
+        assert old in source
+        assert code(source.replace(old, new, 1)) != original, old
+    assert code(source.replace("SOLID_BOTTOM_MM = 1.92", "SOLID_BOTTOM_MM = 2")) == original
+    assert code(source.replace('help="list each file', 'help="show each file')) == original
+
+
+def test_staging_key_covers_generator_files_script_and_environment(monkeypatch, tmp_path):
+    tool = _tool()
+    identity = tool.source_identity()
+    assert identity["environment"]["python"] == list(sys.version_info[:3])
+    package = tmp_path / "cargo_grid"
+    (package / "__pycache__").mkdir(parents=True)
+    (package / "__init__.py").write_text("")
+    (package / "data.json").write_text("{}")
+    (package / "__pycache__" / "x.pyc").write_text("")
+    monkeypatch.setattr(tool.cargo_grid, "__file__", str(package / "__init__.py"))
+    before = tool.source_identity()["source"]
+    (package / "__pycache__" / "x.pyc").write_text("changed")
+    (package / ".DS_Store").write_text("")
+    assert tool.source_identity()["source"] == before
+    (package / "data.json").write_text('{"a": 1}')
+    assert tool.source_identity()["source"] != before
 
 
 def test_bambu_studio_must_be_an_existing_file(tmp_path, capsys):

@@ -32,6 +32,13 @@ comes from another variant in the same run or from an earlier run. Refused plate
 sliced again. ``--no-slice-cache`` slices every plate and leaves the cache alone; the folder can
 be deleted at any time.
 
+Each finished variant, its manifest and a clean check result are kept in
+``.local/makerworld/staging``, under a key made from the generator source files, this script,
+the Python environment and the variant's arguments. A rerun after a crash or a refused plate
+reuses them instead of building those variants again; ``--no-resume`` builds every variant
+again. Staged builds from other source files are removed at the start of a run. The named
+files are still written only once every selected variant is present and checked.
+
 ``--set NAME`` builds only that set, for every nozzle; repeat it for more than one set.
 ``--printer x2d`` selects the 256 mm printer instead of the default H2D; repeat the option
 with ``--printer h2d --printer x2d`` to build both.
@@ -40,10 +47,11 @@ with ``--printer h2d --printer x2d`` to build both.
         [--printer h2d|x2d ...]
         [--set Full-Catalogue|Zeekr-7X-Expansion-Set|Pull-Handle-Set|Adjustable-Stop ...]
         [--bambu-studio /Applications/BambuStudio.app/Contents/MacOS/BambuStudio]
-        [--slice-jobs N] [--no-slice-cache]
+        [--slice-jobs N] [--no-slice-cache] [--no-resume]
 """
 
 import argparse
+import ast
 import hashlib
 import json
 import os
@@ -61,6 +69,9 @@ from itertools import chain
 from pathlib import Path
 from zipfile import ZIP64_LIMIT, ZIP_DEFLATED, ZipFile
 
+from test_selection import environment
+
+import cargo_grid
 from cargo_grid import parameters, printers, sliced_extrusion
 from cargo_grid.footprints import PACKING_WORKERS_ENV
 from cargo_grid.printers import PRINTERS, DualNozzlePrinter, NozzleProfiles, bambu_flush_settings
@@ -77,11 +88,13 @@ SUFFIXES = {"job.3mf": ".3mf", "manifest.json": ".manifest.json"}
 # Budget for one generator, search worker or Bambu Studio process. A slice of an H2D
 # catalogue plate, the largest project, peaked at 2.4 GB with Bambu Studio 02.08.02.61.
 PROCESS_MEMORY_BYTES = 3 * 1024**3
-# Local state: the slice cache. Tests point this elsewhere.
+# Local state: the slice cache and staged variants. Tests point this elsewhere.
 STATE_ENV = "CARGO_GRID_MAKERWORLD_STATE"
 CACHE_FORMAT = 1
-# Modules whose code decides a check result besides this file.
+STAGING_FORMAT = 1
+# Modules whose code decides a check result, and where this script's own check code starts.
 CHECK_MODULES = (parameters, printers, sliced_extrusion)
+CHECK_ROOTS = ("bambu_check", "Slicer", "SliceCache", "effective_settings", "CACHE_FORMAT")
 
 
 def state_folder() -> Path:
@@ -419,10 +432,36 @@ def slice_plate(
     return found[0].strip() if found else f"Bambu Studio exited with code {code}"
 
 
+def check_code() -> str:
+    """Source of the definitions in this script that a check result depends on.
+
+    Follows the names used from ``CHECK_ROOTS``, so editing the variant list or how files are
+    written keeps cached plates.
+    """
+    source = Path(__file__).read_text()
+    definitions = {}
+    for node in ast.parse(source).body:
+        if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+            definitions[node.name] = node
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            for target in node.targets if isinstance(node, ast.Assign) else [node.target]:
+                definitions.update(
+                    (name.id, node) for name in ast.walk(target) if isinstance(name, ast.Name)
+                )
+    pending, used = list(CHECK_ROOTS), {}
+    while pending:
+        name = pending.pop()
+        if name in used or name not in definitions:
+            continue
+        used[name] = definitions[name]
+        pending += [node.id for node in ast.walk(used[name]) if isinstance(node, ast.Name)]
+    return "\n".join(ast.get_source_segment(source, used[name]) for name in sorted(used))
+
+
 def checker_identity(bambu: Path) -> str:
     """Digest of the Bambu Studio executable, its profile files and the checking code."""
     resources = _profiles(bambu).parents[1]
-    hasher = hashlib.sha256()
+    hasher = hashlib.sha256(f"{sys.version}\0{check_code()}\n".encode())
     named = [("executable", bambu)]
     info = bambu.parents[1] / "Info.plist"
     if info.is_file():
@@ -433,7 +472,6 @@ def checker_identity(bambu: Path) -> str:
             for path in sorted(folder.rglob("*"))
             if path.is_file()
         ]
-    named += [("makerworld_exports.py", Path(__file__))]
     named += [(module.__name__, Path(module.__file__)) for module in CHECK_MODULES]
     for name, path in named:
         hasher.update(f"{name}\0{digest(path.read_bytes())}\n".encode())
@@ -671,11 +709,13 @@ class Slicer:
         pool: ThreadPoolExecutor,
         capacity: Capacity,
         cache: SliceCache | None = None,
+        checker: str | None = None,
     ):
         self.bambu = bambu
         self.pool = pool
         self.capacity = capacity
         self.cache = cache
+        self.checker = checker if cache is None else cache.checker
 
     def submit(self, project: Path, plate: int, work: Path, reserved_tower=None):
         return self.pool.submit(self._slice, project, plate, work, reserved_tower)
@@ -790,43 +830,160 @@ def check(variant: Variant, folder: Path, slicer: Slicer, scratch: Path) -> list
         reused.append(f"{found.shared} shared with another variant")
     detail = f"{found.slices} plate slices" + (f": {', '.join(reused)}" if reused else "")
     print(f"{variant.name}: Bambu Studio check, {result} ({detail})", flush=True)
+    if not found.problems and slicer.checker is not None:
+        _write_json(
+            checked_record(folder, slicer.checker),
+            {
+                "checker": slicer.checker,
+                "slices": found.slices,
+                "checked": datetime.now().isoformat(),
+            },
+        )
     return [f"{variant.name}: {problem}" for problem in found.problems]
+
+
+def _write_json(path: Path, value: dict) -> None:
+    temporary = path.with_name(f".{path.name}.{threading.get_ident()}.tmp")
+    temporary.write_text(json.dumps(value, indent=2))
+    os.replace(temporary, path)
+
+
+def source_identity() -> dict:
+    """What decides generated projects: the generator source files, this script and Python."""
+    package = Path(cargo_grid.__file__).resolve().parent
+    hasher = hashlib.sha256()
+    files = [("makerworld_exports.py", Path(__file__))] + [
+        (path.relative_to(package).as_posix(), path)
+        for path in sorted(package.rglob("*"))
+        if path.is_file() and "__pycache__" not in path.parts and not path.name.startswith(".")
+    ]
+    for name, path in files:
+        hasher.update(f"{name}\0{digest(path.read_bytes())}\n".encode())
+    return {
+        "format": STAGING_FORMAT,
+        "source": hasher.hexdigest(),
+        "environment": environment(Path(__file__).resolve().parents[1]),
+    }
+
+
+def commit() -> str | None:
+    """The checked-out commit, marked when there are local changes; recorded, not a key."""
+    root = Path(__file__).resolve().parents[1]
+    try:
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, check=True
+        ).stdout.strip()
+        dirty = subprocess.run(
+            ["git", "status", "--porcelain"], cwd=root, capture_output=True, text=True, check=True
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return f"{head}+local-changes" if dirty else head
+
+
+def _running(pid: int) -> bool:
+    """Whether a process is alive, so a stopped run's partial variant can be removed."""
+    if sys.platform == "win32":
+        return True  # signal 0 is CTRL_C_EVENT there; leave partial folders alone
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
+def staged_name(variant: Variant) -> str:
+    return f"{variant.name}-{digest(json.dumps(variant.arguments).encode())[:12]}"
+
+
+def checked_record(folder: Path, checker: str) -> Path:
+    return folder / f"check-{checker[:16]}.json"
 
 
 def build(
     selected: list[Variant],
+    staging: Path,
     scratch: Path,
     *,
     jobs: int,
     packing_workers: int,
     capacity: Capacity,
     slicer: Slicer | None = None,
+    resume: bool = True,
+    reuse_checks: bool = True,
+    record: dict | None = None,
 ) -> tuple[list[Path], list[str]]:
-    """Generate every variant and start its Bambu Studio check as soon as it exists."""
+    """Generate and check every variant, keeping each finished one in ``staging``.
+
+    A variant already staged under the same key is reused when ``resume`` is set, and so is
+    its clean check when ``reuse_checks`` is also set. Each check starts as soon as its variant
+    exists.
+    """
+    staging.mkdir(parents=True, exist_ok=True)
+    for partial in staging.glob(".partial-*"):
+        if not _running(int(partial.name.split("-")[1])):
+            shutil.rmtree(partial, ignore_errors=True)
     share = 1 + packing_workers
-    folders, checks = {}, {}
+    folders = {variant: staging / staged_name(variant) for variant in selected}
+    ready = [
+        variant for variant in selected if resume and (folders[variant] / "variant.json").is_file()
+    ]
+    missing = [variant for variant in selected if variant not in ready]
+
+    def staged_generate(variant: Variant) -> Path:
+        partial = Path(tempfile.mkdtemp(prefix=f".partial-{os.getpid()}-", dir=staging))
+        try:
+            folder = generate(variant, partial, packing_workers=packing_workers)
+            _write_json(
+                folder / "variant.json",
+                {
+                    **(record or {}),
+                    "name": variant.name,
+                    "arguments": list(variant.arguments),
+                    "generated": datetime.now().isoformat(),
+                },
+            )
+            if folders[variant].exists():
+                shutil.rmtree(folders[variant])
+            folder.rename(folders[variant])
+        finally:
+            shutil.rmtree(partial, ignore_errors=True)
+        return folders[variant]
+
+    checks = {}
     with (
         ThreadPoolExecutor(jobs) as generation,
         ThreadPoolExecutor(len(selected)) as checking,
     ):
         pools = (generation, checking, *((slicer.pool,) if slicer else ()))
+
+        def start_check(variant: Variant) -> None:
+            if slicer is None:
+                return
+            if (
+                resume
+                and reuse_checks
+                and slicer.checker is not None
+                and checked_record(folders[variant], slicer.checker).is_file()
+            ):
+                print(f"{variant.name}: Bambu Studio check, every plate sliced earlier", flush=True)
+                return
+            checks[variant] = checking.submit(check, variant, folders[variant], slicer, scratch)
+
         try:
-            pending = {
-                generation.submit(generate, variant, scratch, packing_workers=packing_workers): (
-                    variant
-                )
-                for variant in selected
-            }
+            for variant in ready:
+                print(f"{variant.name}: generated earlier, in {folders[variant]}", flush=True)
+                start_check(variant)
+            pending = {generation.submit(staged_generate, variant): variant for variant in missing}
             capacity.reserve(min(jobs, len(pending)) * share)
             for done, future in enumerate(as_completed(pending), 1):
                 variant = pending[future]
-                folders[variant] = future.result()
+                future.result()
                 capacity.reserve(min(jobs, len(pending) - done) * share)
                 print(f"{variant.name}: generated", flush=True)
-                if slicer is not None:
-                    checks[variant] = checking.submit(
-                        check, variant, folders[variant], slicer, scratch
-                    )
+                start_check(variant)
             problems = [
                 problem
                 for variant in selected
@@ -884,6 +1041,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="slice every plate again and leave the slice cache untouched",
     )
+    parser.add_argument(
+        "--no-resume",
+        action="store_true",
+        help="build every variant again instead of reusing ones a stopped run finished",
+    )
     args = parser.parse_args(argv)
     if args.jobs is not None and args.jobs < 1:
         parser.error("--jobs must be at least 1")
@@ -916,6 +1078,14 @@ def main(argv: list[str] | None = None) -> int:
             f"{len(existing)} files already exist, such as {existing[0].name}; "
             "pass --replace to overwrite them"
         )
+    identity = source_identity()
+    staging = state_folder() / "staging"
+    current = staging / digest(json.dumps(identity, sort_keys=True).encode())[:16]
+    if staging.is_dir():
+        for other in staging.iterdir():
+            if other != current and other.is_dir():
+                shutil.rmtree(other)
+                print(f"Removed {other.name}, staged from other source files", flush=True)
     capacity = Capacity(memory_slots)
     slice_jobs = args.slice_jobs if args.slice_jobs is not None else cores
     with (
@@ -931,12 +1101,11 @@ def main(argv: list[str] | None = None) -> int:
         slicer = None
         if args.bambu_studio is not None:
             bambu = args.bambu_studio.resolve()
+            checker = checker_identity(bambu)
             cache = (
-                None
-                if args.no_slice_cache
-                else SliceCache(state_folder() / "slice-cache", checker_identity(bambu))
+                None if args.no_slice_cache else SliceCache(state_folder() / "slice-cache", checker)
             )
-            slicer = Slicer(bambu, slices, capacity, cache)
+            slicer = Slicer(bambu, slices, capacity, cache, checker)
             print(
                 f"Slicing with at most {min(slice_jobs, capacity.slots)} Bambu Studio processes "
                 f"at once, within {capacity.slots} memory slots shared with generation",
@@ -944,19 +1113,25 @@ def main(argv: list[str] | None = None) -> int:
             )
         folders, problems = build(
             selected,
+            current,
             scratch,
             jobs=jobs,
             packing_workers=packing_workers,
             capacity=capacity,
             slicer=slicer,
+            resume=not args.no_resume,
+            reuse_checks=not args.no_slice_cache,
+            record={"commit": commit(), **identity},
         )
         if problems:
             raise RuntimeError(
-                "Bambu Studio refused these plates; nothing was written:\n" + "\n".join(problems)
+                "Bambu Studio refused these plates; nothing was written:\n"
+                + "\n".join(problems)
+                + f"\nFinished variants stay in {current} for the next run."
             )
         for variant, folder in zip(selected, folders):
             for source, destination in destinations(args.output, variant).items():
-                shutil.move(folder / source, destination)
+                shutil.copyfile(folder / source, destination)
             export = json.loads(destinations(args.output, variant)["manifest.json"].read_text())
             plates = export["export"]["plates"]
             parts = sum(item["quantity"] for plate in plates for item in plate["items"])
