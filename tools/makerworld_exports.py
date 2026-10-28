@@ -24,6 +24,14 @@ manifest's reserved footprint.
 MakerWorld re-slices uploads and rejects the same conflicts, which the Bambu Studio GUI only
 shows as a warning on the plate being previewed.
 
+Plates that slice cleanly are remembered in ``.local/makerworld/slice-cache``, keyed by
+everything that decides the result: the plate's objects, meshes and placements, the project
+and check settings, the nozzle map, the reserved tower footprint, the Bambu Studio executable
+and profile files, and this checking code. An identical plate is not sliced again, whether it
+comes from another variant in the same run or from an earlier run. Refused plates are always
+sliced again. ``--no-slice-cache`` slices every plate and leaves the cache alone; the folder can
+be deleted at any time.
+
 ``--set NAME`` builds only that set, for every nozzle; repeat it for more than one set.
 ``--printer x2d`` selects the 256 mm printer instead of the default H2D; repeat the option
 with ``--printer h2d --printer x2d`` to build both.
@@ -32,10 +40,11 @@ with ``--printer h2d --printer x2d`` to build both.
         [--printer h2d|x2d ...]
         [--set Full-Catalogue|Zeekr-7X-Expansion-Set|Pull-Handle-Set|Adjustable-Stop ...]
         [--bambu-studio /Applications/BambuStudio.app/Contents/MacOS/BambuStudio]
-        [--slice-jobs N]
+        [--slice-jobs N] [--no-slice-cache]
 """
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -44,12 +53,15 @@ import subprocess
 import sys
 import tempfile
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime
+from itertools import chain
 from pathlib import Path
 from zipfile import ZIP64_LIMIT, ZIP_DEFLATED, ZipFile
 
+from cargo_grid import parameters, printers, sliced_extrusion
 from cargo_grid.footprints import PACKING_WORKERS_ENV
 from cargo_grid.printers import PRINTERS, DualNozzlePrinter, NozzleProfiles, bambu_flush_settings
 from cargo_grid.sliced_extrusion import reach_problem
@@ -65,6 +77,21 @@ SUFFIXES = {"job.3mf": ".3mf", "manifest.json": ".manifest.json"}
 # Budget for one generator, search worker or Bambu Studio process. A slice of an H2D
 # catalogue plate, the largest project, peaked at 2.4 GB with Bambu Studio 02.08.02.61.
 PROCESS_MEMORY_BYTES = 3 * 1024**3
+# Local state: the slice cache. Tests point this elsewhere.
+STATE_ENV = "CARGO_GRID_MAKERWORLD_STATE"
+CACHE_FORMAT = 1
+# Modules whose code decides a check result besides this file.
+CHECK_MODULES = (parameters, printers, sliced_extrusion)
+
+
+def state_folder() -> Path:
+    return Path(
+        os.environ.get(STATE_ENV) or Path(__file__).resolve().parents[1] / ".local" / "makerworld"
+    )
+
+
+def digest(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()
 
 
 def _available_memory_bytes() -> int:
@@ -306,8 +333,8 @@ def effective_settings(project: Path, bambu: Path, work: Path) -> dict:
     return effective
 
 
-def check_copy(project: Path, effective: dict, mapping: tuple[str, ...], target: Path) -> int:
-    """Write a sliceable copy with a fixed nozzle map; return its plate count."""
+def check_settings(effective: dict, mapping: tuple[str, ...]) -> str:
+    """The check copy's project settings: the effective settings with a fixed nozzle map."""
     settings = dict(effective)
     count = len(settings["filament_settings_id"])
     extruders = len(settings["nozzle_diameter"])
@@ -321,6 +348,13 @@ def check_copy(project: Path, effective: dict, mapping: tuple[str, ...], target:
         extruder_nozzle_stats=["Standard#1"] * extruders,
     )
     settings.update(bambu_flush_settings(count, extruders))
+    return json.dumps(settings, indent=2)
+
+
+def check_copy(project: Path, effective: dict, mapping: tuple[str, ...], target: Path) -> int:
+    """Write a sliceable copy with a fixed nozzle map; return its plate count."""
+    settings = check_settings(effective, mapping)
+    mapping = tuple(mapping[: len(effective["filament_settings_id"])])
     plates = 0
     # The copy is only read by Bambu Studio, so the large model is streamed at a fast level.
     with (
@@ -329,7 +363,7 @@ def check_copy(project: Path, effective: dict, mapping: tuple[str, ...], target:
     ):
         for entry in original.infolist():
             if entry.filename == "Metadata/project_settings.config":
-                copy.writestr(entry.filename, json.dumps(settings, indent=2))
+                copy.writestr(entry.filename, settings)
             elif entry.filename == "Metadata/model_settings.config":
                 text = original.read(entry).decode()
                 plates = text.count("<plate>")
@@ -385,13 +419,263 @@ def slice_plate(
     return found[0].strip() if found else f"Bambu Studio exited with code {code}"
 
 
+def checker_identity(bambu: Path) -> str:
+    """Digest of the Bambu Studio executable, its profile files and the checking code."""
+    resources = _profiles(bambu).parents[1]
+    hasher = hashlib.sha256()
+    named = [("executable", bambu)]
+    info = bambu.parents[1] / "Info.plist"
+    if info.is_file():
+        named.append(("Info.plist", info))
+    for folder in (resources / "profiles", resources / "printers"):
+        named += [
+            (path.relative_to(resources).as_posix(), path)
+            for path in sorted(folder.rglob("*"))
+            if path.is_file()
+        ]
+    named += [("makerworld_exports.py", Path(__file__))]
+    named += [(module.__name__, Path(module.__file__)) for module in CHECK_MODULES]
+    for name, path in named:
+        hasher.update(f"{name}\0{digest(path.read_bytes())}\n".encode())
+    return hasher.hexdigest()
+
+
+MODEL = "3D/3dmodel.model"
+PLATE_SETTINGS = "Metadata/model_settings.config"
+PROJECT_SETTINGS = "Metadata/project_settings.config"
+# Component lists are read from objects up to this size; a larger object must be a mesh.
+WHOLE_OBJECT_BYTES = 1024**2
+TAG_ID = re.compile(rb'\sid="([^"]+)"')
+COMPONENT = re.compile(rb'<component\b[^>]*\bobjectid="([^"]+)"')
+ITEM = re.compile(rb"<item\b[^>]*/>")
+ITEM_OBJECT = re.compile(rb'\bobjectid="([^"]+)"')
+OBJECT_SETTINGS = re.compile(r'<object id="([^"]+)">.*?</object>', re.S)
+PLATE = re.compile(r"<plate>.*?</plate>", re.S)
+INSTANCE_OBJECT = re.compile(r'<metadata key="object_id" value="([^"]+)" />')
+
+
+def model_digests(stream) -> tuple[str, dict[str, str], dict[str, list[str]], dict[str, list]]:
+    """Digest each resource object and build item of a 3MF model, and everything else.
+
+    Streams the model, which holds every mesh of a catalogue. Returns the digest of the bytes
+    outside objects and items, object digests and component ids by object id, and item digests
+    by the object they place. Anything unexpected raises ``ValueError``.
+    """
+    rest = bytearray()
+    objects, components = {}, {}
+    buffer = b""
+    current = None
+    for chunk in chain(iter(lambda: stream.read(16 * 1024**2), b""), [b""]):
+        final = not chunk
+        buffer += chunk
+        view = memoryview(buffer)
+        position = 0
+        while True:
+            if current is None:
+                start = buffer.find(b"<object", position)
+                if start < 0:
+                    # Keep a possible partial "<object" for the next chunk.
+                    stop = len(buffer) if final else max(position, len(buffer) - 6)
+                    rest += view[position:stop]
+                    position = stop
+                    break
+                rest += view[position:start]
+                position = start
+                close = buffer.find(b">", start)
+                if close < 0:
+                    if final:
+                        raise ValueError("unterminated <object> tag")
+                    break
+                identity = TAG_ID.search(buffer, start, close + 1)
+                if buffer[start + 7 : start + 8] not in b" \t\r\n>" or identity is None:
+                    raise ValueError("unexpected <object> tag")
+                current = [identity[1].decode(), hashlib.sha256(), bytearray(), 0]
+            end = buffer.find(b"</object>", position)
+            if end < 0 and final:
+                raise ValueError(f"unterminated object {current[0]}")
+            stop = end + 9 if end >= 0 else max(position, len(buffer) - 8)
+            identity, hasher, head, size = current
+            hasher.update(view[position:stop])
+            head += view[position : min(stop, position + max(0, WHOLE_OBJECT_BYTES - len(head)))]
+            current[3] = size = size + stop - position
+            position = stop
+            if end < 0:
+                break
+            if identity in objects:
+                raise ValueError(f"object {identity} appears twice")
+            if size > WHOLE_OBJECT_BYTES and b"<component" in head:
+                raise ValueError(f"object {identity} is too large to read its components")
+            components[identity] = [match.decode() for match in COMPONENT.findall(head)]
+            objects[identity] = hasher.hexdigest()
+            current = None
+        view.release()
+        buffer = buffer[position:]
+        if final:
+            break
+    rest = bytes(rest)
+    items = {}
+    for match in ITEM.finditer(rest):
+        items.setdefault(ITEM_OBJECT.search(match[0])[1].decode(), []).append(digest(match[0]))
+    if rest.count(b"<item") != sum(map(len, items.values())):
+        raise ValueError("build items with child elements")
+    return digest(ITEM.sub(b"", rest)), objects, components, items
+
+
+def plate_fingerprints(project: Path) -> tuple[dict, list[dict]]:
+    """What one plate's slice depends on in a project, apart from its project settings.
+
+    Returns what every plate shares (other archive members, the model and plate settings
+    outside objects and plates, and the plate count), then each plate's own settings block
+    with the settings, meshes, components and placements of its objects.
+    """
+    with ZipFile(project) as archive:
+        members = [
+            (entry.filename, digest(archive.read(entry)))
+            for entry in archive.infolist()
+            if entry.filename not in (MODEL, PLATE_SETTINGS, PROJECT_SETTINGS)
+        ]
+        with archive.open(MODEL) as stream:
+            model, objects, components, items = model_digests(stream)
+        text = archive.read(PLATE_SETTINGS).decode()
+    plates = PLATE.findall(text)
+    if len(plates) != text.count("<plate>"):
+        raise ValueError("nested or unterminated plates")
+    settings = {match[1]: digest(match[0].encode()) for match in OBJECT_SETTINGS.finditer(text)}
+
+    def meshes(identity: str, seen: tuple[str, ...] = ()) -> list[str]:
+        if identity in seen or identity not in objects:
+            raise ValueError(f"object {identity} is missing or contains itself")
+        return [objects[identity]] + [
+            value for child in components[identity] for value in meshes(child, (*seen, identity))
+        ]
+
+    shared = {
+        "members": members,
+        "model": model,
+        "plate_settings": digest(PLATE.sub("", OBJECT_SETTINGS.sub("", text)).encode()),
+        "plates": len(plates),
+    }
+    return shared, [
+        {
+            "plate": digest(plate.encode()),
+            "objects": [
+                {
+                    "settings": settings.get(identity),
+                    "meshes": meshes(identity),
+                    "items": items.get(identity, []),
+                }
+                for identity in INSTANCE_OBJECT.findall(plate)
+            ],
+        }
+        for plate in plates
+    ]
+
+
+def plate_keys(
+    project: Path, effective: dict, reservations: dict, checker: str
+) -> dict[tuple[str, ...], list[str]]:
+    """Cache keys of every plate for each nozzle map, in plate order."""
+    shared, plates = plate_fingerprints(project)
+    keys = {}
+    for mapping in NOZZLE_MAPS:
+        settings = digest(check_settings(effective, mapping).encode())
+        keys[mapping] = [
+            digest(
+                json.dumps(
+                    {
+                        "format": CACHE_FORMAT,
+                        "checker": checker,
+                        "check_settings": settings,
+                        "nozzle_map": mapping,
+                        "project": shared,
+                        "plate": plate,
+                        "reserved_tower": reservations.get(number),
+                    },
+                    sort_keys=True,
+                ).encode()
+            )
+            for number, plate in enumerate(plates, 1)
+        ]
+    return keys
+
+
+class SliceCache:
+    """Clean plate slices from earlier runs, and plates already claimed in this run."""
+
+    def __init__(self, folder: Path, checker: str):
+        self.folder = folder
+        self.checker = checker
+        self._lock = threading.Lock()
+        self._claimed: dict[str, Future] = {}
+
+    def _path(self, key: str) -> Path:
+        return self.folder / f"{key}.json"
+
+    def claim(self, key: str) -> tuple[Future, str]:
+        """The plate's result and where it comes from: cached, shared or new.
+
+        Whoever gets ``new`` must slice the plate and pass its future to ``follow``, or call
+        ``abandon``; other variants in this run wait for that result.
+        """
+        with self._lock:
+            if key in self._claimed:
+                return self._claimed[key], "shared"
+            future = Future()
+            try:
+                stored = json.loads(self._path(key).read_text())
+            except (OSError, ValueError):
+                stored = None
+            if stored and stored.get("key") == key and stored.get("result") == "clean":
+                future.set_result(None)
+                return future, "cached"
+            self._claimed[key] = future
+            return future, "new"
+
+    def follow(self, key: str, sliced: Future, record: dict) -> None:
+        claimed = self._claimed[key]
+
+        def settle(done: Future) -> None:
+            if done.cancelled():
+                claimed.cancel()
+            elif done.exception() is not None:
+                claimed.set_exception(done.exception())
+            else:
+                if done.result() is None:
+                    self._store(key, record)
+                claimed.set_result(done.result())
+
+        sliced.add_done_callback(settle)
+
+    def abandon(self, key: str, error: BaseException) -> None:
+        self._claimed[key].set_exception(error)
+
+    def _store(self, key: str, record: dict) -> None:
+        self.folder.mkdir(parents=True, exist_ok=True)
+        path = self._path(key)
+        temporary = path.with_name(f"{path.name}.{threading.get_ident()}.tmp")
+        temporary.write_text(
+            json.dumps(
+                {"key": key, "result": "clean", **record, "checked": datetime.now().isoformat()},
+                indent=2,
+            )
+        )
+        os.replace(temporary, path)
+
+
 class Slicer:
     """One pool of Bambu Studio slices shared by every variant in a run."""
 
-    def __init__(self, bambu: Path, pool: ThreadPoolExecutor, capacity: Capacity):
+    def __init__(
+        self,
+        bambu: Path,
+        pool: ThreadPoolExecutor,
+        capacity: Capacity,
+        cache: SliceCache | None = None,
+    ):
         self.bambu = bambu
         self.pool = pool
         self.capacity = capacity
+        self.cache = cache
 
     def submit(self, project: Path, plate: int, work: Path, reserved_tower=None):
         return self.pool.submit(self._slice, project, plate, work, reserved_tower)
@@ -401,44 +685,84 @@ class Slicer:
             return slice_plate(self.bambu, project, plate, work, reserved_tower=reserved_tower)
 
 
+@dataclass
+class Check:
+    """What the Bambu Studio check found for one project."""
+
+    problems: list[str]
+    slices: int = 0
+    cached: int = 0
+    shared: int = 0
+
+
+def bambu_check(
+    project: Path,
+    work: Path,
+    slicer: Slicer,
+    tower_bounds: dict[int, tuple[float, ...]] | None = None,
+) -> Check:
+    """Slice every plate with PETG on each nozzle, reusing clean results the cache holds."""
+    work.mkdir(parents=True)
+    effective = effective_settings(project, slicer.bambu, work)
+    printer = next(p for p in PRINTERS.values() if p.model == effective["printer_model"])
+    reservations = tower_bounds or {}
+    keys = None
+    if slicer.cache is not None:
+        try:
+            keys = plate_keys(project, effective, reservations, slicer.cache.checker)
+        except ValueError as error:
+            print(f"{project}: slicing every plate without the cache: {error}", flush=True)
+    result = Check([])
+    tasks = []
+    for mapping in NOZZLE_MAPS:
+        folder = work / f"petg-nozzle-{mapping[0]}"
+        folder.mkdir()
+        copy = folder / "check.3mf"
+        if keys is None:
+            plates = check_copy(project, effective, mapping, copy)
+            tasks += [
+                (mapping, plate, slicer.submit(copy, plate, folder, reservations.get(plate)))
+                for plate in range(1, plates + 1)
+            ]
+            continue
+        copied = False
+        for plate, key in enumerate(keys[mapping], 1):
+            future, origin = slicer.cache.claim(key)
+            if origin == "new":
+                try:
+                    if not copied:
+                        check_copy(project, effective, mapping, copy)
+                        copied = True
+                    sliced = slicer.submit(copy, plate, folder, reservations.get(plate))
+                except BaseException as error:
+                    slicer.cache.abandon(key, error)
+                    raise
+                slicer.cache.follow(key, sliced, {"plate": plate, "nozzle_map": list(mapping)})
+            result.cached += origin == "cached"
+            result.shared += origin == "shared"
+            tasks.append((mapping, plate, future))
+    result.slices = len(tasks)
+    result.problems = [
+        f"plate {plate} with PETG on the {printer.nozzles[int(mapping[0]) - 1].name} nozzle: "
+        f"{problem}"
+        for mapping, plate, future in tasks
+        if (problem := future.result())
+    ]
+    return result
+
+
 def bambu_problems(
     project: Path,
     bambu: Path,
     work: Path,
     jobs: int = 1,
     tower_bounds: dict[int, tuple[float, ...]] | None = None,
-    slicer: Slicer | None = None,
 ) -> list[str]:
     """Slice every plate with PETG on each nozzle; list what Bambu Studio refuses."""
-    if slicer is None:
-        with ThreadPoolExecutor(jobs) as pool:
-            return bambu_problems(
-                project,
-                bambu,
-                work,
-                tower_bounds=tower_bounds,
-                slicer=Slicer(bambu, pool, Capacity(jobs)),
-            )
-    work.mkdir(parents=True)
-    effective = effective_settings(project, bambu, work)
-    printer = next(p for p in PRINTERS.values() if p.model == effective["printer_model"])
-    reservations = tower_bounds or {}
-    tasks = []
-    for mapping in NOZZLE_MAPS:
-        folder = work / f"petg-nozzle-{mapping[0]}"
-        folder.mkdir()
-        copy = folder / "check.3mf"
-        plates = check_copy(project, effective, mapping, copy)
-        tasks += [
-            (mapping, plate, slicer.submit(copy, plate, folder, reservations.get(plate)))
-            for plate in range(1, plates + 1)
-        ]
-    return [
-        f"plate {plate} with PETG on the {printer.nozzles[int(mapping[0]) - 1].name} nozzle: "
-        f"{problem}"
-        for mapping, plate, future in tasks
-        if (problem := future.result())
-    ]
+    with ThreadPoolExecutor(jobs) as pool:
+        return bambu_check(
+            project, work, Slicer(bambu, pool, Capacity(jobs)), tower_bounds
+        ).problems
 
 
 def reserved_towers(manifest: dict) -> dict[int, tuple[float, ...]] | None:
@@ -453,16 +777,20 @@ def reserved_towers(manifest: dict) -> dict[int, tuple[float, ...]] | None:
 
 def check(variant: Variant, folder: Path, slicer: Slicer, scratch: Path) -> list[str]:
     manifest = json.loads((folder / "manifest.json").read_text())
-    found = bambu_problems(
-        folder / "job.3mf",
-        slicer.bambu,
-        scratch / f"{variant.name}-check",
-        tower_bounds=reserved_towers(manifest),
-        slicer=slicer,
+    found = bambu_check(
+        folder / "job.3mf", scratch / f"{variant.name}-check", slicer, reserved_towers(manifest)
     )
-    result = f"{len(found)} plate slices refused" if found else "every plate sliced"
-    print(f"{variant.name}: Bambu Studio check, {result}", flush=True)
-    return [f"{variant.name}: {problem}" for problem in found]
+    result = (
+        f"{len(found.problems)} plate slices refused" if found.problems else "every plate sliced"
+    )
+    reused = []
+    if found.cached:
+        reused.append(f"{found.cached} from the slice cache")
+    if found.shared:
+        reused.append(f"{found.shared} shared with another variant")
+    detail = f"{found.slices} plate slices" + (f": {', '.join(reused)}" if reused else "")
+    print(f"{variant.name}: Bambu Studio check, {result} ({detail})", flush=True)
+    return [f"{variant.name}: {problem}" for problem in found.problems]
 
 
 def build(
@@ -551,6 +879,11 @@ def main(argv: list[str] | None = None) -> int:
         type=int,
         help="Bambu Studio slices at once; default one per core, within the shared memory budget",
     )
+    parser.add_argument(
+        "--no-slice-cache",
+        action="store_true",
+        help="slice every plate again and leave the slice cache untouched",
+    )
     args = parser.parse_args(argv)
     if args.jobs is not None and args.jobs < 1:
         parser.error("--jobs must be at least 1")
@@ -597,7 +930,13 @@ def main(argv: list[str] | None = None) -> int:
         )
         slicer = None
         if args.bambu_studio is not None:
-            slicer = Slicer(args.bambu_studio.resolve(), slices, capacity)
+            bambu = args.bambu_studio.resolve()
+            cache = (
+                None
+                if args.no_slice_cache
+                else SliceCache(state_folder() / "slice-cache", checker_identity(bambu))
+            )
+            slicer = Slicer(bambu, slices, capacity, cache)
             print(
                 f"Slicing with at most {min(slice_jobs, capacity.slots)} Bambu Studio processes "
                 f"at once, within {capacity.slots} memory slots shared with generation",

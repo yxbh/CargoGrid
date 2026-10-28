@@ -18,6 +18,21 @@ from cargo_grid.sliced_extrusion import SUPPORT_REACH_ALLOWANCE_MM, feature_boun
 ROOT = Path(__file__).resolve().parents[2]
 
 
+@pytest.fixture(autouse=True)
+def _private_state(monkeypatch, tmp_path):
+    monkeypatch.setenv("CARGO_GRID_MAKERWORLD_STATE", str(tmp_path / "state"))
+
+
+def _bambu_bundle(folder):
+    contents = folder / "BambuStudio.app" / "Contents"
+    (contents / "Resources" / "profiles" / "BBL" / "machine").mkdir(parents=True)
+    (contents / "Resources" / "printers").mkdir()
+    (contents / "MacOS").mkdir()
+    executable = contents / "MacOS" / "BambuStudio"
+    executable.write_text("bambu")
+    return executable
+
+
 def _tool():
     spec = importlib.util.spec_from_file_location(
         "makerworld_exports", ROOT / "tools/makerworld_exports.py"
@@ -550,24 +565,23 @@ def test_bambu_problems_name_the_plate_and_petg_nozzle(monkeypatch, tmp_path, pr
 def test_bambu_check_runs_before_anything_is_written(monkeypatch, tmp_path, capsys):
     tool = _tool()
     monkeypatch.setattr(tool, "generate", _fake_generate)
-    bambu = tmp_path / "BambuStudio"
-    bambu.write_text("")
+    bambu = _bambu_bundle(tmp_path)
     output = tmp_path / "out"
     output.mkdir()
     refused = tool.variants()[1].name
     nozzle = H2D.nozzles[0].name
 
-    def fake_problems(project, executable, work, tower_bounds=None, slicer=None):
-        assert executable == bambu.resolve() and project.name == "job.3mf"
-        return (
+    def fake_check(project, work, slicer, tower_bounds=None):
+        assert slicer.bambu == bambu.resolve() and project.name == "job.3mf"
+        return tool.Check(
             [f"plate 9 with PETG on the {nozzle} nozzle: conflict"] if refused in str(work) else []
         )
 
-    monkeypatch.setattr(tool, "bambu_problems", fake_problems)
+    monkeypatch.setattr(tool, "bambu_check", fake_check)
     with pytest.raises(RuntimeError, match=f"{refused}: plate 9 with PETG on the {nozzle}"):
         tool.main(["--output", str(output), "--bambu-studio", str(bambu)])
     assert not any(output.iterdir())
-    monkeypatch.setattr(tool, "bambu_problems", lambda *args, **kwargs: [])
+    monkeypatch.setattr(tool, "bambu_check", lambda *args, **kwargs: tool.Check([]))
     assert tool.main(["--output", str(output), "--bambu-studio", str(bambu)]) == 0
     assert len(list(output.iterdir())) == 2 * len(tool.variants())
     assert "Bambu Studio check, every plate sliced" in capsys.readouterr().out
@@ -587,14 +601,13 @@ def test_bambu_check_passes_rectangular_reservations_from_the_manifest(monkeypat
         manifest.write_text(json.dumps(data))
         return folder
 
-    def problems(project, executable, work, tower_bounds, slicer):
+    def check(project, work, slicer, tower_bounds):
         assert tower_bounds == {1: (25.75, 12, 63.25, 48)}
-        return []
+        return tool.Check([])
 
     monkeypatch.setattr(tool, "generate", generate)
-    monkeypatch.setattr(tool, "bambu_problems", problems)
-    bambu = tmp_path / "BambuStudio"
-    bambu.touch()
+    monkeypatch.setattr(tool, "bambu_check", check)
+    bambu = _bambu_bundle(tmp_path)
     output = tmp_path / "out"
     output.mkdir()
     assert tool.main(["--output", str(output), "--bambu-studio", str(bambu)]) == 0
@@ -613,8 +626,7 @@ def _fake_bambu(monkeypatch, tool, tmp_path):
     monkeypatch.setattr(
         tool, "effective_settings", lambda project, bambu, work: _project(work / "settings.3mf")
     )
-    bambu = tmp_path / "BambuStudio"
-    bambu.touch()
+    bambu = _bambu_bundle(tmp_path)
     output = tmp_path / "out"
     output.mkdir()
     return bambu, output
@@ -631,12 +643,12 @@ def test_each_variant_is_checked_as_soon_as_it_is_generated(monkeypatch, tmp_pat
             assert checked.wait(10), "the first variant was not checked during generation"
         return generate(variant, scratch)
 
-    def problems(project, executable, work, tower_bounds, slicer):
+    def check(project, work, slicer, tower_bounds):
         checked.set()
-        return []
+        return tool.Check([])
 
     monkeypatch.setattr(tool, "generate", generate_in_order)
-    monkeypatch.setattr(tool, "bambu_problems", problems)
+    monkeypatch.setattr(tool, "bambu_check", check)
     bambu, output = _fake_bambu(monkeypatch, tool, tmp_path)
     arguments = ["--output", str(output), "--set", "Adjustable-Stop", "--jobs", "2"]
     assert tool.main([*arguments, "--bambu-studio", str(bambu)]) == 0
@@ -738,6 +750,216 @@ def test_capacity_lets_slices_use_only_unreserved_slots():
     with pytest.raises(RuntimeError, match="stopped"):
         with capacity.slot():
             pass
+
+
+def _meshed_project(path, meshes, printer=H2D, header="CargoGrid"):
+    """A project with one placed object per plate; each mesh is a vertex x value."""
+    settings = _project(path, plates=len(meshes), printer=printer)
+    resources, items, objects, plates = [], [], [], []
+    for number, mesh in enumerate(meshes, 1):
+        part, whole = 2 * number - 1, 2 * number
+        resources.append(
+            f'<object id="{part}" type="model"><mesh><vertices><vertex x="{mesh}" y="0" z="0"/>'
+            f'</vertices></mesh></object><object id="{whole}" type="model"><components>'
+            f'<component objectid="{part}" /></components></object>'
+        )
+        items.append(f'<item objectid="{whole}" transform="1 0 0 0 1 0 0 0 1 {number} 0 0" />')
+        objects.append(
+            f'<object id="{whole}"><metadata key="name" value="part {number}" /></object>'
+        )
+        plates.append(
+            f'<plate><metadata key="plater_id" value="{number}" />'
+            '<metadata key="filament_map_mode" value="Auto For Match" /><model_instance>'
+            f'<metadata key="object_id" value="{whole}" /></model_instance></plate>'
+        )
+    with ZipFile(path, "w") as archive:
+        archive.writestr("Metadata/project_settings.config", json.dumps(settings))
+        archive.writestr(
+            "Metadata/model_settings.config", f"<config>{''.join(objects + plates)}</config>"
+        )
+        archive.writestr(
+            "3D/3dmodel.model",
+            f'<model><metadata name="Designer">{header}</metadata><resources>{"".join(resources)}'
+            f"</resources><build>{''.join(items)}</build></model>",
+        )
+    return settings
+
+
+def test_plate_keys_change_only_with_what_decides_that_plate(tmp_path):
+    tool = _tool()
+
+    def keys(meshes, reservations=None, checker="checker", header="CargoGrid", effective=None):
+        path = tmp_path / "job.3mf"
+        settings = _meshed_project(path, meshes, header=header)
+        return tool.plate_keys(path, effective or settings, reservations or {}, checker)
+
+    base = keys(["1", "2", "3"])
+    assert len({key for values in base.values() for key in values}) == 6
+    changed = keys(["1", "2.5", "3"])
+    for mapping in tool.NOZZLE_MAPS:
+        assert [a == b for a, b in zip(base[mapping], changed[mapping])] == [True, False, True]
+    moved = keys(["1", "2", "3"], reservations={3: (1, 2, 3, 4)})
+    assert [a == b for a, b in zip(base[("1", "2")], moved[("1", "2")])] == [True, True, False]
+    for other in (
+        keys(["1", "2", "3"], checker="other"),
+        keys(["1", "2", "3"], header="Other"),
+        keys(["1", "2"]),
+        keys(["1", "2", "3"], effective={**_project(tmp_path / "x.3mf"), "layer_height": "0.24"}),
+    ):
+        assert not set(base[("1", "2")]) & set(other[("1", "2")])
+
+
+def test_model_digests_split_objects_and_items_and_refuse_unknown_structure():
+    import io
+
+    tool = _tool()
+    model = (
+        b'<model><resources><object id="1"><mesh><v x="1"/></mesh></object>'
+        b'<object xmlns="ns" id="2"><components><component objectid="1" /></components>'
+        b'</object></resources><build><item objectid="2" transform="t" /></build></model>'
+    )
+
+    class Trickle(io.BytesIO):
+        def read(self, size=-1):
+            return super().read(3)
+
+    rest, objects, components, items = tool.model_digests(io.BytesIO(model))
+    assert tool.model_digests(Trickle(model)) == (rest, objects, components, items)
+    assert set(objects) == {"1", "2"} and components == {"1": [], "2": ["1"]}
+    assert list(items) == ["2"]
+    for broken in (
+        model.replace(b"/></build>", b"><x/></item></build>"),
+        model.replace(b"</object></resources>", b"</resources>"),
+        model.replace(b'<object id="1">', b'<objects id="1">'),
+        model.replace(b'id="2"', b'id="1"'),
+    ):
+        with pytest.raises(ValueError):
+            tool.model_digests(io.BytesIO(broken))
+
+
+def _cached_run(monkeypatch, tool, tmp_path, meshes_by_variant, problems=None):
+    """Run the Adjustable-Stop set; return (variant name, nozzle folder, plate) slices made."""
+    sliced = []
+    lock = threading.Lock()
+
+    def generate(variant, scratch, **kwargs):
+        folder = _fake_generate(variant, scratch)
+        _meshed_project(folder / "job.3mf", meshes_by_variant(variant))
+        return folder
+
+    def slice_plate(bambu, project, plate, work, reserved_tower=None):
+        with lock:
+            sliced.append((work.parent.name.removesuffix("-check"), work.name, plate))
+        return (problems or {}).get(plate)
+
+    monkeypatch.setattr(tool, "generate", generate)
+    monkeypatch.setattr(tool, "slice_plate", slice_plate)
+    bambu, output = _fake_bambu(monkeypatch, tool, tmp_path)
+    return sliced, [
+        "--output",
+        str(output),
+        "--replace",
+        "--set",
+        "Adjustable-Stop",
+        "--bambu-studio",
+        str(bambu),
+    ]
+
+
+def test_identical_plates_are_sliced_once_per_run_and_reused_by_later_runs(
+    monkeypatch, tmp_path, capsys
+):
+    tool = _tool()
+    first, last = [v for v in tool.variants() if v.set_name == "Adjustable-Stop"]
+    meshes = {first: ["1", "2"], last: ["1", "3"]}
+    sliced, arguments = _cached_run(monkeypatch, tool, tmp_path, lambda variant: meshes[variant])
+    assert tool.main(arguments) == 0
+    assert len(sliced) == 6 and len(set(sliced)) == 6
+    assert sorted(plate for _, _, plate in sliced) == [1, 1, 2, 2, 2, 2]
+    shared = re.findall(r"(\d+) shared with another variant", capsys.readouterr().out)
+    assert sum(map(int, shared)) == 2
+
+    sliced.clear()
+    assert tool.main(arguments) == 0
+    assert sliced == []
+    assert capsys.readouterr().out.count("(4 plate slices: 4 from the slice cache)") == 2
+
+    meshes[last] = ["1", "4"]
+    assert tool.main(arguments) == 0
+    assert sorted(sliced) == [
+        (last.name, "petg-nozzle-1", 2),
+        (last.name, "petg-nozzle-2", 2),
+    ]
+    entries = list((tmp_path / "state" / "slice-cache").glob("*.json"))
+    assert len(entries) == 8
+    record = json.loads(entries[0].read_text())
+    assert record["result"] == "clean" and record["key"] == entries[0].stem
+
+
+def test_refused_plates_are_sliced_again_and_never_cached(monkeypatch, tmp_path):
+    tool = _tool()
+    sliced, arguments = _cached_run(
+        monkeypatch, tool, tmp_path, lambda variant: ["1", "2"], problems={2: "conflict"}
+    )
+    for expected in ([1, 1, 2, 2], [2, 2]):
+        sliced.clear()
+        with pytest.raises(RuntimeError, match="plate 2 with PETG"):
+            tool.main(arguments)
+        assert sorted(plate for _, _, plate in sliced) == expected
+    assert len(list((tmp_path / "state" / "slice-cache").glob("*.json"))) == 2
+
+
+def test_no_slice_cache_slices_every_plate_and_writes_no_cache(monkeypatch, tmp_path, capsys):
+    tool = _tool()
+    sliced, arguments = _cached_run(monkeypatch, tool, tmp_path, lambda variant: ["1", "2"])
+    assert tool.main(arguments) == 0
+    sliced.clear()
+    before = sorted(path.name for path in (tmp_path / "state" / "slice-cache").iterdir())
+    assert tool.main([*arguments, "--no-slice-cache"]) == 0
+    assert len(sliced) == 8
+    assert sorted(path.name for path in (tmp_path / "state" / "slice-cache").iterdir()) == before
+    assert "from the slice cache" not in capsys.readouterr().out.split("every plate sliced (4")[-1]
+
+
+def test_unreadable_model_falls_back_to_slicing_every_plate(monkeypatch, tmp_path, capsys):
+    tool = _tool()
+    sliced, arguments = _cached_run(monkeypatch, tool, tmp_path, lambda variant: ["1", "2"])
+    monkeypatch.setattr(
+        tool, "plate_fingerprints", lambda project: (_ for _ in ()).throw(ValueError("odd model"))
+    )
+    assert tool.main(arguments) == 0
+    assert tool.main(arguments) == 0
+    assert len(sliced) == 16
+    assert "slicing every plate without the cache: odd model" in capsys.readouterr().out
+    assert not (tmp_path / "state" / "slice-cache").exists()
+
+
+def test_checker_identity_covers_the_executable_profiles_and_check_code(tmp_path):
+    import ast
+
+    tool = _tool()
+    bambu = _bambu_bundle(tmp_path)
+    profile = bambu.parents[1] / "Resources" / "profiles" / "BBL" / "machine" / "H2D.json"
+    profile.write_text("{}")
+    printer = bambu.parents[1] / "Resources" / "printers" / "O1D.json"
+    printer.write_text("{}")
+    identities = {tool.checker_identity(bambu)}
+    for path, text in ((bambu, "bambu 2"), (profile, '{"a": 1}'), (printer, '{"b": 1}')):
+        path.write_text(text)
+        identities.add(tool.checker_identity(bambu))
+    profile.rename(profile.with_name("Other.json"))
+    identities.add(tool.checker_identity(bambu))
+    assert len(identities) == 5
+
+    covered = {module.__name__ for module in tool.CHECK_MODULES}
+    pending = ["cargo_grid.sliced_extrusion", "cargo_grid.printers"]
+    while pending:
+        name = pending.pop()
+        assert name in covered
+        source = ROOT / "src" / Path(*name.split(".")).with_suffix(".py")
+        for node in ast.walk(ast.parse(source.read_text())):
+            if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("cargo_grid."):
+                pending.append(node.module)
 
 
 def test_bambu_studio_must_be_an_existing_file(tmp_path, capsys):
