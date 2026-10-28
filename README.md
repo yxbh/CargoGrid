@@ -158,6 +158,20 @@ uv run python tools/makerworld_exports.py --printer x2d --output outputs/makerwo
 
 The script slices every plate with PETG on either nozzle before writing any named files. X2D slots 1/2 are Bambu's main/auxiliary nozzles; H2D slots 1/2 are left/right. A refused plate stops the batch. Existing files are left alone unless you pass `--replace`; uploading is separate. `--set Full-Catalogue`, `--set Zeekr-7X-Expansion-Set`, `--set Pull-Handle-Set` or `--set Adjustable-Stop` limits the rebuild, and either selection option can be repeated. Omit `--printer` for the existing H2D files, or use `--printer h2d --printer x2d` for both printers.
 
+Each variant's plates are sliced as soon as that variant is generated, and slices from every variant share one pool. Generation and slicing share one memory budget: by default there is one Bambu Studio slice per core, fewer while other variants are still being generated or when memory is short. `--slice-jobs N` lowers the limit.
+
+Plates that slice cleanly are remembered in `.local/makerworld/slice-cache`. The key covers everything that decides the result: the plate's objects, meshes and placements, the project and check settings, the nozzle map, the reserved tower, the Bambu Studio executable and profiles, and the checking code. A plate that matches one already checked, in the same run or an earlier one, isn't sliced again, so changing one plate re-slices only that plate. The ordinary and 1.92 mm solid-bottom catalogues share their unchanged accessory plates. Refused plates are always sliced again, and `--no-slice-cache` slices everything.
+
+Finished variants are kept in `.local/makerworld/staging` until the generator source, the script or the Python environment changes. If a run stops part way, after a crash or a refused plate, the same command picks up where it stopped and only builds what is missing; `--no-resume` builds everything again. Named files are still written only once every selected variant is present and checked.
+
+To update the folder you upload from, use `--publish` instead of `--output`:
+
+```sh
+uv run python tools/makerworld_exports.py --printer h2d --printer x2d --publish "$MAKERWORLD_FOLDER" --bambu-studio "$BAMBU_STUDIO"
+```
+
+It needs `--bambu-studio`. Files whose bytes haven't changed are left alone. Before a file is replaced, it moves into an `old-<date>` folder next to it, named after the date of the files being replaced. The script prints a line for each file: identical, new, or which plates and designs (or manifest fields) changed. It doesn't upload anything.
+
 Published files are byte-reproducible on Apple Silicon macOS with the same generator and dependencies. Weekly publication checks use that platform; identical bytes across different platforms are not promised.
 
 Dual-nozzle projects initialize the complete purge table for both nozzles using Bambu Studio 02.08.02.61's defaults. This avoids an uninitialized auxiliary-nozzle table on loading, without changing automatic filament matching or claiming a calibrated flushing volume.
