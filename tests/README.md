@@ -28,7 +28,7 @@ Any `conftest.py`, selection/CI tooling, workflow, local CI action, source packa
 
 CI caches dependency wheels for the lock and platform, not geometry, meshes or exported files; every geometry check constructs its inputs again. Linux CAD jobs install their system libraries with apt. Main and backstop runs still resolve fresh dependencies. Planning collects the whole suite without installing CAD system libraries; only selected CAD jobs and installed-wheel CAD checks request them. A contracts-only selection runs in the checks job instead of starting test shards, with the same recording and per-case budget. The aggregate merges those parts with the exact pinned Python but needs no CAD packages.
 
-Only a successful aggregate `CI` check saves a reusable map and lock. Main keys start with `test-map-main-`; PR keys start with `test-map-pr-N-`. GitHub evicts idle caches, so a map is an optimization, not a requirement for coverage. Main's branch ruleset requires the check and an up-to-date branch. To request the full backstop on the current branch:
+Only a successful aggregate `CI` check saves a reusable map and lock: it fails when any needed job failed or was cancelled, and `ci-complete` refuses parts that record a failed case. Main keys start with `test-map-main-`; PR keys start with `test-map-pr-N-`. GitHub evicts idle caches, so a map is an optimization, not a requirement for coverage. Main's branch ruleset requires the check and an up-to-date branch. To request the full backstop on the current branch:
 
 ```sh
 gh workflow run ci.yml --ref BRANCH -f mode=full

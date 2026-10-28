@@ -470,6 +470,97 @@ def test_merge_rejects_missing_duplicate_stale_and_wrong_environment_parts(tmp_p
             merge_parts([path], plan)
 
 
+def test_ci_complete_saves_a_map_only_when_every_selected_case_passed_or_skipped(
+    tmp_path, mapping, monkeypatch
+):
+    from types import SimpleNamespace
+
+    tests = {node: record for node, record in mapping["tests"].items() if "failed" not in node}
+    plan = {
+        "commit": "head",
+        "environment": mapping["environment"],
+        "snapshot": mapping["snapshot"],
+        "selected": sorted(tests),
+        "collection": [{"nodeid": n} for n in tests],
+        "weekly": False,
+    }
+    folder, parts = tmp_path / "plan", tmp_path / "parts"
+    parts.mkdir()
+    selector.write_json(folder / "plan.json", plan)
+    (folder / "uv.lock").write_text("lock")
+    monkeypatch.setattr(selector, "snapshot", lambda root: plan["snapshot"])
+    args = SimpleNamespace(
+        plan=folder, parts=parts, publish=None, approve="", output=tmp_path / "map"
+    )
+    failed = "tests/test_body.py::test_body"
+    part = {
+        "version": FORMAT_VERSION,
+        "commit": "head",
+        "environment": mapping["environment"],
+        "tests": {**tests, failed: {**tests[failed], "outcome": "failed"}},
+        "fixtures": mapping["fixtures"],
+    }
+    selector.write_json(parts / "part-0.json", part)
+    with pytest.raises(ValueError, match=f"did not pass: {failed}"):
+        selector.ci_complete(args)
+    assert not args.output.exists()
+    part["tests"][failed]["outcome"] = "skipped"
+    selector.write_json(parts / "part-0.json", part)
+    selector.ci_complete(args)
+    assert load_map(args.output / "map.json")[0]["tests"][failed]["outcome"] == "skipped"
+
+
+def _required_result_gate():
+    lines = (ROOT / ".github/workflows/ci.yml").read_text().splitlines()
+    job = lines.index("  CI:")
+    needs = next(line for line in lines[job:] if line.startswith("    needs: "))
+    start = lines.index("      - name: Require every selected check and backstop", job)
+    end = next(i for i in range(start + 1, len(lines)) if lines[i].startswith("      - "))
+    step = lines[start + 1 : end]
+    env, run = step.index("        env:"), step.index("        run: |")
+    variables = dict(line.strip().split(": ", 1) for line in step[env + 1 : run])
+    jobs = needs.split("[", 1)[1].rstrip("]").split(", ")
+    return jobs, variables, "\n".join(line[10:] for line in step[run + 1 :])
+
+
+@pytest.mark.parametrize(
+    ("results", "accepted"),
+    [
+        ({}, True),
+        ({"PUBLISH": "success"}, True),
+        ({"TESTS": "skipped", "CONTRACTS_ONLY": "true"}, True),
+        ({"PLAN": "failure"}, False),
+        ({"CHECKS": "failure"}, False),
+        ({"TESTS": "failure"}, False),
+        ({"TESTS": "cancelled"}, False),
+        ({"TESTS": "skipped"}, False),
+        ({"TESTS": "failure", "CONTRACTS_ONLY": "true"}, False),
+        ({"PUBLISH": "failure"}, False),
+    ],
+)
+def test_ci_aggregate_rejects_every_unsuccessful_required_job(results, accepted):
+    jobs, variables, script = _required_result_gate()
+    assert {f"${{{{ needs.{job}.result }}}}" for job in jobs} <= set(variables.values())
+    env = {
+        "PATH": os.environ["PATH"],
+        "PLAN": "success",
+        "CHECKS": "success",
+        "TESTS": "success",
+        "PUBLISH": "skipped",
+        "CONTRACTS_ONLY": "false",
+        **results,
+    }
+    # GitHub's default bash step shell.
+    result = subprocess.run(
+        ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert (result.returncode == 0) is accepted, result.stdout + result.stderr
+
+
 @pytest.fixture(scope="module")
 def recorded_example(tmp_path_factory):
     root = tmp_path_factory.mktemp("recorded-selection")
