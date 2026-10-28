@@ -736,6 +736,13 @@ def ci_complete(args):
     if error:
         raise ValueError(error)
     mapping = merge_parts(sorted(args.parts.rglob("part-*.json")), plan, baseline)
+    failed = [
+        node
+        for node in plan["selected"]
+        if mapping["tests"][node]["outcome"] not in {"passed", "skipped"}
+    ]
+    if failed:
+        raise ValueError(f"selected tests did not pass: {', '.join(failed)}")
     if plan["weekly"]:
         from publish_guard import merge_fingerprints
 

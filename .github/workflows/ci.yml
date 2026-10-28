@@ -240,10 +240,17 @@ jobs:
           PUBLISH: ${{ needs.publish.result }}
           CONTRACTS_ONLY: ${{ needs.plan.outputs.contracts_only }}
         run: |
+          # bash -e ignores a failure inside `a || { b && c; }`, so alternatives exit explicitly.
           test "$PLAN" = success
           test "$CHECKS" = success
-          test "$TESTS" = success || { test "$CONTRACTS_ONLY" = true && test "$TESTS" = skipped; }
-          test "$PUBLISH" = success || test "$PUBLISH" = skipped
+          case "$TESTS/$CONTRACTS_ONLY" in
+            success/* | skipped/true) ;;
+            *) echo "::error::tests: $TESTS"; exit 1 ;;
+          esac
+          case "$PUBLISH" in
+            success | skipped) ;;
+            *) echo "::error::publish: $PUBLISH"; exit 1 ;;
+          esac
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
