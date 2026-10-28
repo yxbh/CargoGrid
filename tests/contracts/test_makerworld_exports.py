@@ -3,6 +3,8 @@ import json
 import os
 import re
 import sys
+import threading
+import time
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -79,36 +81,26 @@ def test_automatic_capacity_reserves_cores_and_memory(monkeypatch):
     ],
 )
 def test_variant_and_search_workers_share_one_budget(
-    monkeypatch, tmp_path, override, capacity, jobs, workers
+    monkeypatch, tmp_path, capsys, override, capacity, jobs, workers
 ):
     tool = _tool()
     observed = []
-
-    class Pool:
-        def __init__(self, count):
-            assert count == jobs
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-        def map(self, function, variants):
-            return map(function, variants)
 
     def generate(variant, scratch, *, packing_workers):
         observed.append(packing_workers)
         return _fake_generate(variant, scratch)
 
     monkeypatch.setattr(tool, "_process_capacity", lambda: capacity)
-    monkeypatch.setattr(tool, "ThreadPoolExecutor", Pool)
     monkeypatch.setattr(tool, "generate", generate)
     arguments = ["--output", str(tmp_path), "--printer", "h2d", "--printer", "x2d"]
     if override is not None:
         arguments += ["--jobs", str(override)]
     assert tool.main(arguments) == 0
     assert observed == [workers] * 24
+    assert (
+        f"Generating 24 variants with {min(jobs, 24)} jobs; "
+        f"at most {workers} search workers per variant"
+    ) in capsys.readouterr().out
 
 
 def test_generation_passes_a_private_process_quota_without_mutating_the_environment(
@@ -565,7 +557,7 @@ def test_bambu_check_runs_before_anything_is_written(monkeypatch, tmp_path, caps
     refused = tool.variants()[1].name
     nozzle = H2D.nozzles[0].name
 
-    def fake_problems(project, executable, work, jobs, tower_bounds=None):
+    def fake_problems(project, executable, work, tower_bounds=None, slicer=None):
         assert executable == bambu.resolve() and project.name == "job.3mf"
         return (
             [f"plate 9 with PETG on the {nozzle} nozzle: conflict"] if refused in str(work) else []
@@ -575,7 +567,7 @@ def test_bambu_check_runs_before_anything_is_written(monkeypatch, tmp_path, caps
     with pytest.raises(RuntimeError, match=f"{refused}: plate 9 with PETG on the {nozzle}"):
         tool.main(["--output", str(output), "--bambu-studio", str(bambu)])
     assert not any(output.iterdir())
-    monkeypatch.setattr(tool, "bambu_problems", lambda *args: [])
+    monkeypatch.setattr(tool, "bambu_problems", lambda *args, **kwargs: [])
     assert tool.main(["--output", str(output), "--bambu-studio", str(bambu)]) == 0
     assert len(list(output.iterdir())) == 2 * len(tool.variants())
     assert "Bambu Studio check, every plate sliced" in capsys.readouterr().out
@@ -595,7 +587,7 @@ def test_bambu_check_passes_rectangular_reservations_from_the_manifest(monkeypat
         manifest.write_text(json.dumps(data))
         return folder
 
-    def problems(project, executable, work, jobs, tower_bounds):
+    def problems(project, executable, work, tower_bounds, slicer):
         assert tower_bounds == {1: (25.75, 12, 63.25, 48)}
         return []
 
@@ -606,6 +598,146 @@ def test_bambu_check_passes_rectangular_reservations_from_the_manifest(monkeypat
     output = tmp_path / "out"
     output.mkdir()
     assert tool.main(["--output", str(output), "--bambu-studio", str(bambu)]) == 0
+
+
+def _sliceable_generate(plates):
+    def generate(variant, scratch, **kwargs):
+        folder = _fake_generate(variant, scratch)
+        _project(folder / "job.3mf", plates=plates)
+        return folder
+
+    return generate
+
+
+def _fake_bambu(monkeypatch, tool, tmp_path):
+    monkeypatch.setattr(
+        tool, "effective_settings", lambda project, bambu, work: _project(work / "settings.3mf")
+    )
+    bambu = tmp_path / "BambuStudio"
+    bambu.touch()
+    output = tmp_path / "out"
+    output.mkdir()
+    return bambu, output
+
+
+def test_each_variant_is_checked_as_soon_as_it_is_generated(monkeypatch, tmp_path):
+    tool = _tool()
+    first, last = [v for v in tool.variants() if v.set_name == "Adjustable-Stop"]
+    checked = threading.Event()
+    generate = _sliceable_generate(1)
+
+    def generate_in_order(variant, scratch, **kwargs):
+        if variant == last:
+            assert checked.wait(10), "the first variant was not checked during generation"
+        return generate(variant, scratch)
+
+    def problems(project, executable, work, tower_bounds, slicer):
+        checked.set()
+        return []
+
+    monkeypatch.setattr(tool, "generate", generate_in_order)
+    monkeypatch.setattr(tool, "bambu_problems", problems)
+    bambu, output = _fake_bambu(monkeypatch, tool, tmp_path)
+    arguments = ["--output", str(output), "--set", "Adjustable-Stop", "--jobs", "2"]
+    assert tool.main([*arguments, "--bambu-studio", str(bambu)]) == 0
+
+
+def test_slice_jobs_are_independent_of_generation_jobs(monkeypatch, tmp_path):
+    tool = _tool()
+    together = threading.Barrier(4, timeout=10)
+
+    def slice_plate(bambu, project, plate, work, reserved_tower=None):
+        together.wait()
+        return None
+
+    monkeypatch.setattr(tool, "_process_capacity", lambda: (2, 8))
+    monkeypatch.setattr(tool, "generate", _sliceable_generate(2))
+    monkeypatch.setattr(tool, "slice_plate", slice_plate)
+    bambu, output = _fake_bambu(monkeypatch, tool, tmp_path)
+    arguments = ["--output", str(output), "--set", "Adjustable-Stop", "--jobs", "1"]
+    assert tool.main([*arguments, "--bambu-studio", str(bambu), "--slice-jobs", "4"]) == 0
+
+
+def test_slices_wait_for_memory_that_generation_has_reserved(monkeypatch, tmp_path, capsys):
+    tool = _tool()
+    lock = threading.Lock()
+    running, peak, generating = [0], [0], []
+
+    def generate(variant, scratch, **kwargs):
+        with lock:
+            generating.append(running[0])
+        return _sliceable_generate(3)(variant, scratch)
+
+    def slice_plate(bambu, project, plate, work, reserved_tower=None):
+        with lock:
+            running[0] += 1
+            peak[0] = max(peak[0], running[0])
+        time.sleep(0.02)
+        with lock:
+            running[0] -= 1
+
+    # One job with two search workers reserves all three memory slots while it builds.
+    monkeypatch.setattr(tool, "_process_capacity", lambda: (16, 3))
+    monkeypatch.setattr(tool, "generate", generate)
+    monkeypatch.setattr(tool, "slice_plate", slice_plate)
+    bambu, output = _fake_bambu(monkeypatch, tool, tmp_path)
+    arguments = ["--output", str(output), "--set", "Adjustable-Stop", "--jobs", "1"]
+    assert tool.main([*arguments, "--bambu-studio", str(bambu)]) == 0
+    assert generating == [0, 0] and 1 <= peak[0] <= 3
+    assert "at most 3 Bambu Studio processes at once" in capsys.readouterr().out
+
+
+def test_failed_generation_stops_waiting_slices_and_writes_nothing(monkeypatch, tmp_path):
+    tool = _tool()
+    first, last = [v for v in tool.variants() if v.set_name == "Adjustable-Stop"]
+    sliced = []
+
+    def generate(variant, scratch, **kwargs):
+        if variant == last:
+            raise RuntimeError("generation failed")
+        return _sliceable_generate(2)(variant, scratch)
+
+    monkeypatch.setattr(tool, "_process_capacity", lambda: (16, 3))
+    monkeypatch.setattr(tool, "generate", generate)
+    monkeypatch.setattr(tool, "slice_plate", lambda *args, **kwargs: sliced.append(args))
+    bambu, output = _fake_bambu(monkeypatch, tool, tmp_path)
+    arguments = ["--output", str(output), "--set", "Adjustable-Stop", "--jobs", "1"]
+    errors = []
+    runner = threading.Thread(
+        target=lambda: errors.append(
+            pytest.raises(RuntimeError, tool.main, [*arguments, "--bambu-studio", str(bambu)])
+        ),
+        daemon=True,
+    )
+    runner.start()
+    runner.join(20)
+    assert not runner.is_alive(), "waiting slices kept the run open"
+    assert "generation failed" in str(errors[0].value)
+    assert not sliced and not any(output.iterdir())
+
+
+def test_capacity_lets_slices_use_only_unreserved_slots():
+    tool = _tool()
+    capacity = tool.Capacity(3)
+    capacity.reserve(2)
+    started = threading.Event()
+
+    def second():
+        with capacity.slot():
+            started.set()
+
+    with capacity.slot():
+        waiter = threading.Thread(target=second, daemon=True)
+        waiter.start()
+        assert not started.wait(0.1)
+        capacity.reserve(1)
+        assert started.wait(5)
+    waiter.join(5)
+    capacity.reserve(3)
+    capacity.close()
+    with pytest.raises(RuntimeError, match="stopped"):
+        with capacity.slot():
+            pass
 
 
 def test_bambu_studio_must_be_an_existing_file(tmp_path, capsys):

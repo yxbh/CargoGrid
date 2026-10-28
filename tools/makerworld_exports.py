@@ -12,7 +12,10 @@ example
 ``CargoGrid_H2D_Full-Catalogue_Solid-Bottom-1.92mm_Auto-Support_0.8mm-Nozzle``.
 
 With ``--bambu-studio PATH`` every plate is also sliced by that Bambu Studio executable, once
-with PETG on each nozzle, before anything is written. The check copy gets the full printer,
+with PETG on each nozzle, before anything is written. A variant's plates are sliced as soon as
+it is generated, on one pool of slices shared by every variant. Slices and generation share
+the same memory budget; ``--slice-jobs`` limits how many slices run at once. The check copy
+gets the full printer,
 process and filament profiles from that installation and a fixed filament-to-nozzle map; the
 written project is unchanged. Any G-code path conflict or unprintable plate stops the run.
 Generated extrusion must stay inside the bed; only support features have a small XY
@@ -29,6 +32,7 @@ with ``--printer h2d --printer x2d`` to build both.
         [--printer h2d|x2d ...]
         [--set Full-Catalogue|Zeekr-7X-Expansion-Set|Pull-Handle-Set|Adjustable-Stop ...]
         [--bambu-studio /Applications/BambuStudio.app/Contents/MacOS/BambuStudio]
+        [--slice-jobs N]
 """
 
 import argparse
@@ -39,10 +43,12 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from concurrent.futures import ThreadPoolExecutor
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from zipfile import ZIP_DEFLATED, ZipFile
+from zipfile import ZIP64_LIMIT, ZIP_DEFLATED, ZipFile
 
 from cargo_grid.footprints import PACKING_WORKERS_ENV
 from cargo_grid.printers import PRINTERS, DualNozzlePrinter, NozzleProfiles, bambu_flush_settings
@@ -56,6 +62,8 @@ HANDLE_SET = (("extras", "pull-handle"), "Pull-Handle-Set")
 ADJUSTABLE_STOP_SET = (("extras", "adjustable-stop"), "Adjustable-Stop")
 SET_NAMES = tuple(title for _, title in (*SETS, HANDLE_SET, ADJUSTABLE_STOP_SET))
 SUFFIXES = {"job.3mf": ".3mf", "manifest.json": ".manifest.json"}
+# Budget for one generator, search worker or Bambu Studio process. A slice of an H2D
+# catalogue plate, the largest project, peaked at 2.4 GB with Bambu Studio 02.08.02.61.
 PROCESS_MEMORY_BYTES = 3 * 1024**3
 
 
@@ -105,6 +113,48 @@ def _process_capacity() -> tuple[int, int]:
     memory = _available_memory_bytes()
     usable = max(0, memory - max(2 * 1024**3, memory // 4))
     return cores, max(1, usable // PROCESS_MEMORY_BYTES)
+
+
+class Capacity:
+    """Memory slots shared by variant generation and Bambu Studio slices.
+
+    Generation reserves its slots for the variants it is building or still has to build; a
+    slice starts only when one of the remaining slots is free.
+    """
+
+    def __init__(self, slots: int):
+        self.slots = max(1, slots)
+        self._reserved = 0
+        self._running = 0
+        self._closed = False
+        self._condition = threading.Condition()
+
+    def reserve(self, count: int) -> None:
+        with self._condition:
+            self._reserved = count
+            self._condition.notify_all()
+
+    def close(self) -> None:
+        """Refuse slices that have not started, after a failure elsewhere in the run."""
+        with self._condition:
+            self._closed = True
+            self._condition.notify_all()
+
+    @contextmanager
+    def slot(self):
+        with self._condition:
+            self._condition.wait_for(
+                lambda: self._closed or self._reserved + self._running < self.slots
+            )
+            if self._closed:
+                raise RuntimeError("the run stopped before this slice started")
+            self._running += 1
+        try:
+            yield
+        finally:
+            with self._condition:
+                self._running -= 1
+                self._condition.notify_all()
 
 
 @dataclass(frozen=True)
@@ -272,21 +322,33 @@ def check_copy(project: Path, effective: dict, mapping: tuple[str, ...], target:
     )
     settings.update(bambu_flush_settings(count, extruders))
     plates = 0
-    with ZipFile(project) as original, ZipFile(target, "w", ZIP_DEFLATED) as copy:
+    # The copy is only read by Bambu Studio, so the large model is streamed at a fast level.
+    with (
+        ZipFile(project) as original,
+        ZipFile(target, "w", ZIP_DEFLATED, compresslevel=1) as copy,
+    ):
         for entry in original.infolist():
-            data = original.read(entry)
             if entry.filename == "Metadata/project_settings.config":
-                data = json.dumps(settings, indent=2).encode()
+                copy.writestr(entry.filename, json.dumps(settings, indent=2))
             elif entry.filename == "Metadata/model_settings.config":
-                text = data.decode()
+                text = original.read(entry).decode()
                 plates = text.count("<plate>")
-                text = text.replace(
-                    '<metadata key="filament_map_mode" value="Auto For Match" />',
-                    '<metadata key="filament_map_mode" value="Manual" />'
-                    f'<metadata key="filament_maps" value="{" ".join(mapping)}" />',
+                copy.writestr(
+                    entry.filename,
+                    text.replace(
+                        '<metadata key="filament_map_mode" value="Auto For Match" />',
+                        '<metadata key="filament_map_mode" value="Manual" />'
+                        f'<metadata key="filament_maps" value="{" ".join(mapping)}" />',
+                    ),
                 )
-                data = text.encode()
-            copy.writestr(entry, data)
+            else:
+                with (
+                    original.open(entry) as source,
+                    copy.open(
+                        entry.filename, "w", force_zip64=entry.file_size >= ZIP64_LIMIT
+                    ) as destination,
+                ):
+                    shutil.copyfileobj(source, destination, 16 * 1024**2)
     return plates
 
 
@@ -323,40 +385,132 @@ def slice_plate(
     return found[0].strip() if found else f"Bambu Studio exited with code {code}"
 
 
+class Slicer:
+    """One pool of Bambu Studio slices shared by every variant in a run."""
+
+    def __init__(self, bambu: Path, pool: ThreadPoolExecutor, capacity: Capacity):
+        self.bambu = bambu
+        self.pool = pool
+        self.capacity = capacity
+
+    def submit(self, project: Path, plate: int, work: Path, reserved_tower=None):
+        return self.pool.submit(self._slice, project, plate, work, reserved_tower)
+
+    def _slice(self, project: Path, plate: int, work: Path, reserved_tower):
+        with self.capacity.slot():
+            return slice_plate(self.bambu, project, plate, work, reserved_tower=reserved_tower)
+
+
 def bambu_problems(
     project: Path,
     bambu: Path,
     work: Path,
-    jobs: int,
+    jobs: int = 1,
     tower_bounds: dict[int, tuple[float, ...]] | None = None,
+    slicer: Slicer | None = None,
 ) -> list[str]:
     """Slice every plate with PETG on each nozzle; list what Bambu Studio refuses."""
+    if slicer is None:
+        with ThreadPoolExecutor(jobs) as pool:
+            return bambu_problems(
+                project,
+                bambu,
+                work,
+                tower_bounds=tower_bounds,
+                slicer=Slicer(bambu, pool, Capacity(jobs)),
+            )
     work.mkdir(parents=True)
     effective = effective_settings(project, bambu, work)
     printer = next(p for p in PRINTERS.values() if p.model == effective["printer_model"])
+    reservations = tower_bounds or {}
     tasks = []
     for mapping in NOZZLE_MAPS:
         folder = work / f"petg-nozzle-{mapping[0]}"
         folder.mkdir()
         copy = folder / "check.3mf"
         plates = check_copy(project, effective, mapping, copy)
-        tasks += [(mapping, copy, plate, folder) for plate in range(1, plates + 1)]
-    with ThreadPoolExecutor(jobs) as pool:
-        reservations = tower_bounds or {}
-        results = list(
-            pool.map(
-                lambda task: slice_plate(
-                    bambu, *task[1:], reserved_tower=reservations.get(task[2])
-                ),
-                tasks,
-            )
-        )
+        tasks += [
+            (mapping, plate, slicer.submit(copy, plate, folder, reservations.get(plate)))
+            for plate in range(1, plates + 1)
+        ]
     return [
         f"plate {plate} with PETG on the {printer.nozzles[int(mapping[0]) - 1].name} nozzle: "
         f"{problem}"
-        for (mapping, _, plate, _), problem in zip(tasks, results)
-        if problem
+        for mapping, plate, future in tasks
+        if (problem := future.result())
     ]
+
+
+def reserved_towers(manifest: dict) -> dict[int, tuple[float, ...]] | None:
+    """Rectangular tower footprints the slices must stay inside, by plate."""
+    tower = manifest["export"].get("prime_tower", {})
+    if "prime_tower_width" not in tower.get("process_settings", {}):
+        return None
+    return {
+        plate["plate"]: tuple(plate["reserved_extrusion_bounds_mm"]) for plate in tower["plates"]
+    }
+
+
+def check(variant: Variant, folder: Path, slicer: Slicer, scratch: Path) -> list[str]:
+    manifest = json.loads((folder / "manifest.json").read_text())
+    found = bambu_problems(
+        folder / "job.3mf",
+        slicer.bambu,
+        scratch / f"{variant.name}-check",
+        tower_bounds=reserved_towers(manifest),
+        slicer=slicer,
+    )
+    result = f"{len(found)} plate slices refused" if found else "every plate sliced"
+    print(f"{variant.name}: Bambu Studio check, {result}", flush=True)
+    return [f"{variant.name}: {problem}" for problem in found]
+
+
+def build(
+    selected: list[Variant],
+    scratch: Path,
+    *,
+    jobs: int,
+    packing_workers: int,
+    capacity: Capacity,
+    slicer: Slicer | None = None,
+) -> tuple[list[Path], list[str]]:
+    """Generate every variant and start its Bambu Studio check as soon as it exists."""
+    share = 1 + packing_workers
+    folders, checks = {}, {}
+    with (
+        ThreadPoolExecutor(jobs) as generation,
+        ThreadPoolExecutor(len(selected)) as checking,
+    ):
+        pools = (generation, checking, *((slicer.pool,) if slicer else ()))
+        try:
+            pending = {
+                generation.submit(generate, variant, scratch, packing_workers=packing_workers): (
+                    variant
+                )
+                for variant in selected
+            }
+            capacity.reserve(min(jobs, len(pending)) * share)
+            for done, future in enumerate(as_completed(pending), 1):
+                variant = pending[future]
+                folders[variant] = future.result()
+                capacity.reserve(min(jobs, len(pending) - done) * share)
+                print(f"{variant.name}: generated", flush=True)
+                if slicer is not None:
+                    checks[variant] = checking.submit(
+                        check, variant, folders[variant], slicer, scratch
+                    )
+            problems = [
+                problem
+                for variant in selected
+                if variant in checks
+                for problem in checks[variant].result()
+            ]
+        except BaseException:
+            capacity.close()
+            for pool in pools:
+                pool.shutdown(wait=False, cancel_futures=True)
+            raise
+    return [folders[variant] for variant in selected], problems
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -392,9 +546,16 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         help="Bambu Studio executable used to slice every plate before anything is written",
     )
+    parser.add_argument(
+        "--slice-jobs",
+        type=int,
+        help="Bambu Studio slices at once; default one per core, within the shared memory budget",
+    )
     args = parser.parse_args(argv)
     if args.jobs is not None and args.jobs < 1:
         parser.error("--jobs must be at least 1")
+    if args.slice_jobs is not None and (args.slice_jobs < 1 or args.bambu_studio is None):
+        parser.error("--slice-jobs must be at least 1 and needs --bambu-studio")
     selected = [
         variant
         for variant in variants(tuple(args.printers or ("h2d",)))
@@ -422,49 +583,38 @@ def main(argv: list[str] | None = None) -> int:
             f"{len(existing)} files already exist, such as {existing[0].name}; "
             "pass --replace to overwrite them"
         )
-    with tempfile.TemporaryDirectory(prefix="cargo-grid-makerworld-") as temporary:
+    capacity = Capacity(memory_slots)
+    slice_jobs = args.slice_jobs if args.slice_jobs is not None else cores
+    with (
+        tempfile.TemporaryDirectory(prefix="cargo-grid-makerworld-") as temporary,
+        ThreadPoolExecutor(slice_jobs) as slices,
+    ):
         scratch = Path(temporary)
         print(
             f"Generating {len(selected)} variants with {jobs} jobs; "
             f"at most {packing_workers} search workers per variant",
             flush=True,
         )
-        with ThreadPoolExecutor(jobs) as pool:
-            folders = list(
-                pool.map(
-                    lambda variant: generate(variant, scratch, packing_workers=packing_workers),
-                    selected,
-                )
-            )
+        slicer = None
         if args.bambu_studio is not None:
-            bambu = args.bambu_studio.resolve()
-            problems = []
-            for variant, folder in zip(selected, folders):
-                manifest = json.loads((folder / "manifest.json").read_text())
-                tower = manifest["export"].get("prime_tower", {})
-                tower_bounds = (
-                    {
-                        plate["plate"]: tuple(plate["reserved_extrusion_bounds_mm"])
-                        for plate in tower["plates"]
-                    }
-                    if "prime_tower_width" in tower.get("process_settings", {})
-                    else None
-                )
-                found = bambu_problems(
-                    folder / "job.3mf",
-                    bambu,
-                    scratch / f"{variant.name}-check",
-                    jobs,
-                    tower_bounds,
-                )
-                result = f"{len(found)} plate slices refused" if found else "every plate sliced"
-                print(f"{variant.name}: Bambu Studio check, {result}")
-                problems += [f"{variant.name}: {problem}" for problem in found]
-            if problems:
-                raise RuntimeError(
-                    "Bambu Studio refused these plates; nothing was written:\n"
-                    + "\n".join(problems)
-                )
+            slicer = Slicer(args.bambu_studio.resolve(), slices, capacity)
+            print(
+                f"Slicing with at most {min(slice_jobs, capacity.slots)} Bambu Studio processes "
+                f"at once, within {capacity.slots} memory slots shared with generation",
+                flush=True,
+            )
+        folders, problems = build(
+            selected,
+            scratch,
+            jobs=jobs,
+            packing_workers=packing_workers,
+            capacity=capacity,
+            slicer=slicer,
+        )
+        if problems:
+            raise RuntimeError(
+                "Bambu Studio refused these plates; nothing was written:\n" + "\n".join(problems)
+            )
         for variant, folder in zip(selected, folders):
             for source, destination in destinations(args.output, variant).items():
                 shutil.move(folder / source, destination)
