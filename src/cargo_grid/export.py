@@ -778,7 +778,7 @@ def _write_3mf(
                     "note": (
                         f"Each plate sets only the tower origin. On the {tower_printer} it is where Bambu Studio 02.08.02.61 places the tower when it opens the project, and the reserved bounds cover its estimated tower, automatic brim and the extra depth seen in local slices. They are not a guarantee for other profiles or materials."
                         if job.prime_tower_width_mm is None
-                        else "X2D catalogue width and rib-wall settings are project-wide; measured four-cell groups use a front-left origin and ordinary groups use front-right. Prime volumes, automatic brim, support feet and process support thresholds are unchanged. Bounds reserve the tower body, brim and nozzle-change wipe lines. Tall-plate tower stability is physically untested."
+                        else "X2D catalogue width and rib-wall settings are project-wide; plates with measured four-cell parts use a front-left origin and other plates use front-right. Prime volumes, automatic brim, support feet and process support thresholds are unchanged. Bounds reserve the tower body, brim and nozzle-change wipe lines. Tall-plate tower stability is physically untested."
                     ),
                 }
             }

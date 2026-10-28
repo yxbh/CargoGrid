@@ -1,6 +1,8 @@
 import importlib.util
 import json
 import os
+import re
+import sys
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -126,6 +128,63 @@ def test_generation_passes_a_private_process_quota_without_mutating_the_environm
     monkeypatch.setattr(tool.subprocess, "run", run)
     tool.generate(tool.variants()[0], tmp_path, packing_workers=3)
     assert observed == ["3"] and os.environ[name] == "7"
+
+
+def test_published_sets_use_the_same_writer_and_shared_worker_budget(monkeypatch, tmp_path):
+    tool = _tool()
+    selected = [variant for variant in tool.variants() if variant.set_name == "Adjustable-Stop"]
+    observed = []
+
+    def generate(variant, scratch, *, packing_workers):
+        observed.append((variant.name, packing_workers))
+        return _fake_generate(variant, scratch)
+
+    monkeypatch.setattr(tool, "_process_capacity", lambda: (2, 4))
+    monkeypatch.setattr(tool, "generate", generate)
+    assert tool.main(["--output", str(tmp_path), "--jobs", "1", "--set", "Adjustable-Stop"]) == 0
+    assert observed == [(variant.name, 2) for variant in selected]
+    assert {path.name for path in tmp_path.iterdir()} == {
+        path.name for variant in selected for path in tool.destinations(tmp_path, variant).values()
+    }
+
+
+def test_weekly_groups_cover_every_published_variant_once():
+    tool = _tool()
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+    printers = json.loads(re.search(r"printer: (\[.*\])", workflow)[1])
+    sets = json.loads(re.search(r"set: (\[.*\])", workflow)[1])
+    assert len(printers) * len(sets) == 8
+    actual = [
+        variant.name
+        for printer in printers
+        for title in sets
+        for variant in tool.variants((printer,))
+        if variant.set_name == title
+    ]
+    assert sorted(actual) == sorted(variant.name for variant in tool.variants(("h2d", "x2d")))
+
+
+def test_weekly_fingerprints_use_the_public_set_route(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    import publish_guard
+
+    tool = _tool()
+    monkeypatch.setitem(sys.modules, "makerworld_exports", tool)
+    monkeypatch.setattr(tool, "_process_capacity", lambda: (2, 4))
+    monkeypatch.setattr(tool, "generate", _fake_generate)
+    publish_guard.record_fingerprints(
+        SimpleNamespace(printer="x2d", set="Adjustable-Stop", output=tmp_path)
+    )
+    result = json.loads((tmp_path / "fingerprints.json").read_text())
+    expected = {
+        path.name
+        for variant in tool.variants(("x2d",))
+        if variant.set_name == "Adjustable-Stop"
+        for path in tool.destinations(tmp_path, variant).values()
+    }
+    assert result["fingerprints"].keys() == expected
+    assert set(result) == {"commit", "environment", "fingerprints"}
 
 
 def test_writes_named_files_and_replaces_only_on_request(monkeypatch, tmp_path, capsys):

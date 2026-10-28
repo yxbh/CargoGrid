@@ -30,7 +30,19 @@ from adjustable_stop_checks import (
     _shape_volume,
     _symmetric_difference_volume,
 )
-from build123d import Align, Axis, Box, Compound, GeomType, Location, Part, Pos, ShapeList
+from build123d import (
+    Align,
+    Axis,
+    Box,
+    Compound,
+    Face,
+    GeomType,
+    Location,
+    Part,
+    Plane,
+    Pos,
+    ShapeList,
+)
 from OCP.BRep import BRep_Tool
 from OCP.BRepAdaptor import BRepAdaptor_Surface
 from OCP.OCP.collections import (
@@ -73,7 +85,7 @@ from cargo_grid.adjustable_stop_export import (
     prepare_adjustable_stop_print_job,
     write_adjustable_stop_print_project,
 )
-from cargo_grid.export import BAMBU_PROCESS_DEFAULTS, write_3mf
+from cargo_grid.export import BAMBU_PROCESS_DEFAULTS, _checked_step_roundtrip, write_3mf
 from cargo_grid.jobs import Design, Job
 from cargo_grid.packing import PrimeTower, PrintPlacement, TowerClearance
 from cargo_grid.parameters import Tile
@@ -102,6 +114,45 @@ def compact_stop_parts():
 @pytest.fixture(scope="module")
 def released_stop_parts():
     return make_adjustable_stop_parts(AdjustableStopSpec(released_illustration=True))
+
+
+def test_outer_guide_radii_and_keeper_seating(stop_parts):
+    base = stop_parts[0]
+    radii = _cylindrical_radius_counts(base)
+    assert radii["1"] == 10
+    assert radii["2"] == 52
+    top_faces = [
+        face
+        for face in base.faces()
+        if face.geom_type == GeomType.PLANE
+        and abs(face.bounding_box().min.Z - DIMENSIONS.keeper_seat) < 1e-6
+        and abs(face.bounding_box().max.Z - DIMENSIONS.keeper_seat) < 1e-6
+    ]
+    keeper_footprint = Face.make_rect(
+        DIMENSIONS.keeper_width,
+        DIMENSIONS.keeper_length,
+        Plane(
+            origin=(
+                0,
+                (DIMENSIONS.keeper_start + DIMENSIONS.keeper_end) / 2,
+                DIMENSIONS.keeper_seat,
+            )
+        ),
+    )
+    contact = Compound(top_faces).intersect(keeper_footprint)
+    assert contact is not None
+    assert sum(face.area for face in contact.faces()) == pytest.approx(
+        309.69157111568524, abs=1e-6, rel=0
+    )
+
+
+def test_fixed_base_step_roundtrip_preserves_volume_and_bounds(stop_parts, tmp_path):
+    restored, _, volume_delta, volume_budget, bounds_delta = _checked_step_roundtrip(
+        stop_parts[0], tmp_path / "fixed-base.step"
+    )
+    assert restored.is_valid and len(restored.solids()) == 1
+    assert volume_delta <= volume_budget
+    assert bounds_delta <= 1e-5
 
 
 def _overlap_volume(first, second) -> float:
@@ -787,6 +838,22 @@ def test_plain_front_centre_guides_bound_rigid_yaw_without_preloading_fingers(st
     root_seam_rows = []
     for side in (-1, 1):
         root_x = side * DIMENSIONS.rack_wall_inner
+        end = DIMENSIONS.outer_guide_tool_end
+        radius = DETAIL_EDGE_RADIUS_MM
+        floor = DIMENSIONS.floor
+        top = DIMENSIONS.guide_top
+        expected_root_seams = [
+            (
+                GeomType.LINE,
+                end - radius,
+                DIMENSIONS.rack_tooth_stations[0] + DIMENSIONS.rack_lock_offset,
+                top,
+                top,
+            ),
+            (GeomType.CIRCLE, end - radius, end, top - radius, top),
+            (GeomType.LINE, end, end, floor + radius, top - radius),
+            (GeomType.CIRCLE, end, end + radius, floor, floor + radius),
+        ]
         for edge in base.edges():
             bounds = edge.bounding_box()
             if (
@@ -804,9 +871,18 @@ def test_plain_front_centre_guides_bound_rigid_yaw_without_preloading_fingers(st
                 - CONNECTOR_PROOF_TOLERANCE_MM
                 and continuity == "C0"
             ):
-                root_seam_rows.append(
-                    {"side": side, "bounds_mm": _bounds(edge), "continuity": continuity}
-                )
+                actual = (bounds.min.Y, bounds.max.Y, bounds.min.Z, bounds.max.Z)
+                for index, (kind, *coordinates) in enumerate(expected_root_seams):
+                    if edge.geom_type == kind and actual == pytest.approx(
+                        coordinates, abs=CONNECTOR_PROOF_TOLERANCE_MM, rel=0
+                    ):
+                        expected_root_seams.pop(index)
+                        break
+                else:
+                    root_seam_rows.append(
+                        {"side": side, "bounds_mm": _bounds(edge), "continuity": continuity}
+                    )
+        assert not expected_root_seams, f"missing sharp-root edges: {side=}, {expected_root_seams}"
     if front_root_edge_count or root_seam_rows:
         raise ValueError("base retains an X=+/-24 seam in the outer-guide region")
     front_top_round_rows = []
