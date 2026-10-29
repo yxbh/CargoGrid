@@ -28,17 +28,20 @@ Plates that slice cleanly are remembered in ``.local/makerworld/slice-cache``, k
 everything that decides the result: the plate's objects, meshes and placements, the project
 and check settings, the nozzle map, the reserved tower footprint, the Bambu Studio executable
 and profile files, and this checking code. An identical plate is not sliced again, whether it
-comes from another variant in the same run or from an earlier run. Refused plates are always
-sliced again. ``--no-slice-cache`` slices every plate and leaves the cache alone; the folder can
-be deleted at any time.
+comes from another variant in the same run or from an earlier run. The settings Bambu Studio
+resolves for a project are kept there too, by checker and project settings, so a check whose
+plates are all cached starts no Bambu Studio process. Refused plates are always sliced again.
+``--no-slice-cache`` slices every plate and leaves the cache alone; the folder can be deleted
+at any time.
 
 Each finished variant, its manifest and a clean check result are kept in
 ``.local/makerworld/staging``, under a key made from the generator source files, the code in
 this script that lists and generates variants, the Python environment and the variant's
 arguments. A rerun after a crash or a refused plate
 reuses them instead of building those variants again; ``--no-resume`` builds every variant
-again. Staged builds from other source files are removed at the start of a run. The named
-files are still written only once every selected variant is present and checked.
+again. Staged builds from other source files are removed at the start of a run, unless a run
+that is still going holds them. The named files are still written only once every selected
+variant is present and checked.
 
 ``--publish FOLDER`` writes into an existing folder, such as the one the MakerWorld files are
 uploaded from, instead of ``--output``. It needs ``--bambu-studio``. Files with identical bytes
@@ -666,7 +669,7 @@ def plate_keys(
 
 
 class SliceCache:
-    """Clean plate slices from earlier runs, and plates already claimed in this run."""
+    """Clean plate slices and resolved settings from earlier runs, and plates claimed in this run."""
 
     def __init__(self, folder: Path, checker: str):
         self.folder = folder
@@ -727,12 +730,39 @@ class SliceCache:
             {"key": key, "result": "clean", **record, "checked": datetime.now().isoformat()},
         )
 
+    def _settings_path(self, generated: bytes) -> Path:
+        # The checker covers the executable, the named profiles' files and the resolving code.
+        key = {"format": CACHE_FORMAT, "checker": self.checker, "project": digest(generated)}
+        return self.folder / "settings" / f"{digest(json.dumps(key, sort_keys=True).encode())}.json"
+
+    def settings(self, generated: bytes) -> dict | None:
+        """Effective settings resolved earlier for these project settings bytes, if kept."""
+        path = self._settings_path(generated)
+        try:
+            stored = json.loads(path.read_text())
+        except (OSError, ValueError):
+            return None
+        if isinstance(stored, dict) and stored.get("key") == path.stem:
+            return stored.get("effective")
+        return None
+
+    def keep_settings(self, generated: bytes, effective: dict) -> None:
+        path = self._settings_path(generated)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            _write_json(
+                path,
+                {"key": path.stem, "effective": effective, "resolved": datetime.now().isoformat()},
+            )
+        except OSError as error:
+            say(f"Could not keep resolved settings in the slice cache: {error}")
+
 
 class Slicer:
     """One pool of Bambu Studio slices shared by every variant in a run.
 
-    At most ``jobs`` Bambu Studio processes run at once, counting each check's preparation
-    with the slices, and each one takes a memory slot.
+    At most ``jobs`` Bambu Studio processes run at once, counting profile resolution and check
+    copies with the slices, and each one takes a memory slot.
     """
 
     def __init__(
@@ -782,48 +812,62 @@ def bambu_check(
     slicer: Slicer,
     tower_bounds: dict[int, tuple[float, ...]] | None = None,
 ) -> Check:
-    """Slice every plate with PETG on each nozzle, reusing clean results the cache holds."""
+    """Slice every plate with PETG on each nozzle, reusing clean results the cache holds.
+
+    Resolving profiles and writing a check copy each take a process turn, given back before
+    waiting for any slice. A check whose settings and plates are all cached starts no Bambu
+    Studio process.
+    """
     work.mkdir(parents=True)
     reservations = tower_bounds or {}
+    cache = slicer.cache
+    effective = None
+    if cache is not None:
+        with ZipFile(project) as archive:
+            generated = archive.read(PROJECT_SETTINGS)
+        effective = cache.settings(generated)
+    if effective is None:
+        with slicer.process():
+            effective = effective_settings(project, slicer.bambu, work)
+        if cache is not None:
+            cache.keep_settings(generated, effective)
+    keys = None
+    if cache is not None:
+        try:
+            keys = plate_keys(project, effective, reservations, cache.checker)
+        except ValueError as error:
+            say(f"{project}: slicing every plate without the cache: {error}")
     result = Check([])
     tasks = []
-    # Resolving profiles, reading the model and writing check copies take a process turn,
-    # which is given back before waiting for any slice.
-    with slicer.process():
-        effective = effective_settings(project, slicer.bambu, work)
-        keys = None
-        if slicer.cache is not None:
-            try:
-                keys = plate_keys(project, effective, reservations, slicer.cache.checker)
-            except ValueError as error:
-                say(f"{project}: slicing every plate without the cache: {error}")
-        for mapping in NOZZLE_MAPS:
-            folder = work / f"petg-nozzle-{mapping[0]}"
-            folder.mkdir()
-            copy = folder / "check.3mf"
-            if keys is None:
+    for mapping in NOZZLE_MAPS:
+        folder = work / f"petg-nozzle-{mapping[0]}"
+        folder.mkdir()
+        copy = folder / "check.3mf"
+        if keys is None:
+            with slicer.process():
                 plates = check_copy(project, effective, mapping, copy)
-                tasks += [
-                    (mapping, plate, slicer.submit(copy, plate, folder, reservations.get(plate)))
-                    for plate in range(1, plates + 1)
-                ]
-                continue
-            copied = False
-            for plate, key in enumerate(keys[mapping], 1):
-                future, origin = slicer.cache.claim(key)
-                if origin == "new":
-                    try:
-                        if not copied:
+            tasks += [
+                (mapping, plate, slicer.submit(copy, plate, folder, reservations.get(plate)))
+                for plate in range(1, plates + 1)
+            ]
+            continue
+        copied = False
+        for plate, key in enumerate(keys[mapping], 1):
+            future, origin = cache.claim(key)
+            if origin == "new":
+                try:
+                    if not copied:
+                        with slicer.process():
                             check_copy(project, effective, mapping, copy)
-                            copied = True
-                        sliced = slicer.submit(copy, plate, folder, reservations.get(plate))
-                    except BaseException as error:
-                        slicer.cache.abandon(key, error)
-                        raise
-                    slicer.cache.follow(key, sliced, {"plate": plate, "nozzle_map": list(mapping)})
-                result.cached += origin == "cached"
-                result.shared += origin == "shared"
-                tasks.append((mapping, plate, future))
+                        copied = True
+                    sliced = slicer.submit(copy, plate, folder, reservations.get(plate))
+                except BaseException as error:
+                    cache.abandon(key, error)
+                    raise
+                cache.follow(key, sliced, {"plate": plate, "nozzle_map": list(mapping)})
+            result.cached += origin == "cached"
+            result.shared += origin == "shared"
+            tasks.append((mapping, plate, future))
     printer = next(p for p in PRINTERS.values() if p.model == effective["printer_model"])
     result.slices = len(tasks)
     result.problems = [
@@ -833,20 +877,6 @@ def bambu_check(
         if (problem := future.result())
     ]
     return result
-
-
-def bambu_problems(
-    project: Path,
-    bambu: Path,
-    work: Path,
-    jobs: int = 1,
-    tower_bounds: dict[int, tuple[float, ...]] | None = None,
-) -> list[str]:
-    """Slice every plate with PETG on each nozzle; list what Bambu Studio refuses."""
-    with ThreadPoolExecutor(jobs) as pool:
-        return bambu_check(
-            project, work, Slicer(bambu, pool, Capacity(jobs), jobs=jobs), tower_bounds
-        ).problems
 
 
 def reserved_towers(manifest: dict) -> dict[int, tuple[float, ...]] | None:
@@ -934,9 +964,9 @@ def commit() -> str | None:
 
 
 def _running(pid: int) -> bool:
-    """Whether a process is alive, so a stopped run's partial variant can be removed."""
+    """Whether a process is alive, so what a stopped run left behind can be removed."""
     if sys.platform == "win32":
-        return True  # signal 0 is CTRL_C_EVENT there; leave partial folders alone
+        return True  # signal 0 is CTRL_C_EVENT there; leave other runs' folders alone
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -944,6 +974,30 @@ def _running(pid: int) -> bool:
     except OSError:
         return True
     return True
+
+
+@contextmanager
+def holding(folder: Path):
+    """Mark ``folder`` as used by this run, so runs from other sources leave it alone."""
+    folder.mkdir(parents=True, exist_ok=True)
+    marker = folder / f".run-{os.getpid()}"
+    marker.touch()
+    try:
+        yield
+    finally:
+        marker.unlink(missing_ok=True)
+
+
+def held(folder: Path) -> bool:
+    """Whether a live run holds ``folder``; markers left by stopped runs are removed."""
+    live = False
+    for marker in folder.glob(".run-*"):
+        pid = marker.name.removeprefix(".run-")
+        if pid.isdigit() and _running(int(pid)):
+            live = True
+        else:
+            marker.unlink(missing_ok=True)
+    return live
 
 
 def staged_name(variant: Variant) -> str:
@@ -1287,17 +1341,21 @@ def main(argv: list[str] | None = None) -> int:
     identity = source_identity()
     staging = state_folder() / "staging"
     current = staging / digest(json.dumps(identity, sort_keys=True).encode())[:16]
-    if staging.is_dir():
-        for other in staging.iterdir():
-            if other != current and other.is_dir():
-                shutil.rmtree(other)
-                print(f"Removed {other.name}, staged from other source files", flush=True)
     capacity = Capacity(memory_slots)
     slice_jobs = args.slice_jobs if args.slice_jobs is not None else cores
     with (
+        holding(current),
         tempfile.TemporaryDirectory(prefix="cargo-grid-makerworld-") as temporary,
         ThreadPoolExecutor(slice_jobs) as slices,
     ):
+        for other in staging.iterdir():
+            if other == current or not other.is_dir():
+                continue
+            if held(other):
+                print(f"Kept {other.name}, in use by a run from other source files", flush=True)
+            else:
+                shutil.rmtree(other)
+                print(f"Removed {other.name}, staged from other source files", flush=True)
         scratch = Path(temporary)
         print(
             f"Generating {len(selected)} variants with {jobs} jobs; "

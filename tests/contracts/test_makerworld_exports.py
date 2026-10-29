@@ -6,6 +6,7 @@ import shutil
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from zipfile import ZipFile, ZipInfo
 
@@ -537,9 +538,16 @@ def test_rectangular_tower_check_uses_its_actual_reserved_envelope(tmp_path, rea
         assert "exceed reserved footprint" in problem
 
 
+def _check(tool, project, bambu, work, jobs, cache=None, tower_bounds=None):
+    """One project's Bambu Studio check on its own slice pool."""
+    with ThreadPoolExecutor(jobs) as pool:
+        slicer = tool.Slicer(bambu, pool, tool.Capacity(jobs), cache, jobs=jobs)
+        return tool.bambu_check(project, work, slicer, tower_bounds)
+
+
 @pytest.mark.parametrize("printer", PRINTERS.values(), ids=PRINTERS)
 @pytest.mark.parametrize("failed_slot", ["1", "2"])
-def test_bambu_problems_name_the_plate_and_petg_nozzle(monkeypatch, tmp_path, printer, failed_slot):
+def test_bambu_check_names_the_plate_and_petg_nozzle(monkeypatch, tmp_path, printer, failed_slot):
     tool = _tool()
     source = tmp_path / "job.3mf"
     settings = _project(source, printer=printer)
@@ -555,15 +563,12 @@ def test_bambu_problems_name_the_plate_and_petg_nozzle(monkeypatch, tmp_path, pr
         return "conflict" if (mapping[0], plate) == (failed_slot, 2) else None
 
     monkeypatch.setattr(tool, "slice_plate", fake_slice)
-    problems = tool.bambu_problems(
-        source,
-        tmp_path / "bambu",
-        tmp_path / "check",
-        jobs=2,
-        tower_bounds={2: (25.75, 12, 63.25, 48)},
+    found = _check(
+        tool, source, tmp_path / "bambu", tmp_path / "check", 2, None, {2: (25.75, 12, 63.25, 48)}
     )
     nozzle = printer.nozzles[int(failed_slot) - 1].name
-    assert problems == [f"plate 2 with PETG on the {nozzle} nozzle: conflict"]
+    assert found.problems == [f"plate 2 with PETG on the {nozzle} nozzle: conflict"]
+    assert found.slices == 4 and found.cached == found.shared == 0
     assert sorted(seen) == [(("1", "2"), 1), (("1", "2"), 2), (("2", "1"), 1), (("2", "1"), 2)]
 
 
@@ -960,7 +965,7 @@ def test_a_cache_that_cannot_be_written_warns_and_finishes(monkeypatch, tmp_path
     assert not runner.is_alive(), "a failed cache write left a check waiting"
     assert finished == [0] and len(sliced) == 4
     assert capsys.readouterr().out.count("in the slice cache: disk full") == 4
-    assert not list((_state() / "slice-cache").glob("*"))
+    assert not list((_state() / "slice-cache").glob("*.json"))
 
 
 def test_check_preparation_counts_as_a_bambu_studio_process(monkeypatch, tmp_path):
@@ -996,10 +1001,15 @@ def test_no_slice_cache_slices_every_plate_and_writes_no_cache(monkeypatch, tmp_
     sliced, arguments = _cached_run(monkeypatch, tool, tmp_path, lambda variant: ["1", "2"])
     assert tool.main(arguments) == 0
     sliced.clear()
-    before = sorted(path.name for path in (_state() / "slice-cache").iterdir())
+    before = sorted(
+        (path, path.read_bytes()) for path in (_state() / "slice-cache").rglob("*.json")
+    )
     assert tool.main([*arguments, "--no-slice-cache"]) == 0
     assert len(sliced) == 8
-    assert sorted(path.name for path in (_state() / "slice-cache").iterdir()) == before
+    assert (
+        sorted((path, path.read_bytes()) for path in (_state() / "slice-cache").rglob("*.json"))
+        == before
+    )
     assert "from the slice cache" not in capsys.readouterr().out.split("every plate sliced (4")[-1]
 
 
@@ -1013,7 +1023,47 @@ def test_unreadable_model_falls_back_to_slicing_every_plate(monkeypatch, tmp_pat
     assert tool.main(arguments) == 0
     assert len(sliced) == 16
     assert "slicing every plate without the cache: odd model" in capsys.readouterr().out
-    assert not (_state() / "slice-cache").exists()
+    assert not list((_state() / "slice-cache").glob("*.json"))
+
+
+def test_resolved_settings_are_reused_for_the_same_checker_and_project_settings(
+    monkeypatch, tmp_path
+):
+    tool = _tool()
+    project = tmp_path / "job.3mf"
+    _meshed_project(project, ["1", "2"])
+    resolved, sliced, turns = [], [], []
+    process = tool.Slicer.process
+
+    def resolve(project, bambu, work):
+        resolved.append(work)
+        return json.loads(ZipFile(project).read("Metadata/project_settings.config"))
+
+    monkeypatch.setattr(tool, "effective_settings", resolve)
+    monkeypatch.setattr(tool, "slice_plate", lambda *args, **kwargs: sliced.append(args))
+    monkeypatch.setattr(tool.Slicer, "process", lambda self: turns.append(1) or process(self))
+
+    def run(checker="checker"):
+        """Bambu Studio resolves, slices and process turns of one check."""
+        for found in (resolved, sliced, turns):
+            found.clear()
+        cache = tool.SliceCache(tmp_path / "cache", checker)
+        work = tmp_path / f"check-{len(list(tmp_path.glob('check-*')))}"
+        assert _check(tool, project, tmp_path / "bambu", work, 2, cache).problems == []
+        return len(resolved), len(sliced), len(turns)
+
+    # One resolve, two check copies and four slices, then nothing at all.
+    assert run() == (1, 4, 7)
+    assert run() == (0, 0, 0)
+    _rewrite(
+        project,
+        "Metadata/project_settings.config",
+        lambda text: text.replace("{", '{"layer_height": "0.24", ', 1),
+    )
+    assert run() == (1, 4, 7)
+    assert run("other") == (1, 4, 7)
+    assert run("other") == (0, 0, 0)
+    assert len(list((tmp_path / "cache" / "settings").glob("*.json"))) == 3
 
 
 def test_checker_identity_covers_the_executable_profiles_and_check_code(tmp_path):
@@ -1154,6 +1204,35 @@ def test_no_resume_and_changed_sources_build_every_variant_again(monkeypatch, tm
     assert "staged from other source files" in capsys.readouterr().out
 
 
+def test_staged_builds_held_by_a_live_run_survive_a_run_from_other_sources(
+    monkeypatch, tmp_path, capsys
+):
+    tool = _tool()
+    generated, sliced, output, arguments = _resumable_run(monkeypatch, tool, tmp_path)
+    staging = _state() / "staging"
+    live, stopped = staging / "live-source", staging / "stopped-source"
+    for folder, pid in ((live, os.getpid()), (stopped, 999999999)):
+        (folder / "variant").mkdir(parents=True)
+        (folder / f".run-{pid}").touch()
+    held = []
+    generate = tool.generate
+
+    def generate_while_held(variant, scratch, **kwargs):
+        held.extend(path.parent.name for path in staging.glob("*/.run-*"))
+        return generate(variant, scratch, **kwargs)
+
+    monkeypatch.setattr(tool, "generate", generate_while_held)
+    assert tool.main(arguments) == 0
+    current = next(path for path in staging.iterdir() if path not in (live, stopped))
+    assert live.is_dir() and not stopped.exists()
+    assert set(held) == {"live-source", current.name}
+    assert [path.name for path in live.glob(".run-*")] == [f".run-{os.getpid()}"]
+    assert not list(current.glob(".run-*"))
+    out = capsys.readouterr().out
+    assert "Kept live-source, in use by a run from other source files" in out
+    assert "Removed stopped-source, staged from other source files" in out
+
+
 def test_unchecked_staged_variant_is_checked_by_a_later_run(monkeypatch, tmp_path):
     tool = _tool()
     generated, sliced, output, arguments = _resumable_run(monkeypatch, tool, tmp_path)
@@ -1187,7 +1266,8 @@ def test_resumed_checks_wait_for_memory_reserved_for_generation(monkeypatch, tmp
     monkeypatch.setattr(tool, "_process_capacity", lambda: (16, 3))
     generated.clear()
     assert tool.main([*arguments, "--replace", "--jobs", "1"]) == 0
-    assert generated == [last.name] and during == [0] and len(prepared) == 2
+    # The second check may find the first one's resolved settings, which are the same.
+    assert generated == [last.name] and during == [0] and 1 <= len(prepared) <= 2
 
 
 def test_a_failed_check_stops_the_run_without_waiting_for_earlier_checks(monkeypatch, tmp_path):
@@ -1448,10 +1528,8 @@ def test_native_bambu_check_slices_a_real_zeekr_set(tmp_path):
     tool = _tool()
     variant = next(v for v in tool.variants() if "Zeekr" in v.name and "Solid" not in v.name)
     folder = tool.generate(variant, tmp_path)
-    problems = tool.bambu_problems(
-        folder / "job.3mf", Path(executable).resolve(strict=True), tmp_path / "check", jobs=4
-    )
-    assert problems == []
+    bambu = Path(executable).resolve(strict=True)
+    assert _check(tool, folder / "job.3mf", bambu, tmp_path / "check", 4).problems == []
 
 
 @pytest.mark.native
