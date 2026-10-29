@@ -14,8 +14,8 @@ example
 With ``--bambu-studio PATH`` every plate is also sliced by that Bambu Studio executable, once
 with PETG on each nozzle, before anything is written. A variant's plates are sliced as soon as
 it is generated, on one pool of slices shared by every variant. Slices and generation share
-the same memory budget; ``--slice-jobs`` limits how many slices run at once. The check copy
-gets the full printer,
+the same memory budget; ``--slice-jobs`` limits how many Bambu Studio processes run at once,
+counting the preparation of each check with the slices. The check copy gets the full printer,
 process and filament profiles from that installation and a fixed filament-to-nozzle map; the
 written project is unchanged. Any G-code path conflict or unprintable plate stops the run.
 Generated extrusion must stay inside the bed; only support features have a small XY
@@ -71,7 +71,7 @@ import subprocess
 import sys
 import tempfile
 import threading
-from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -80,7 +80,7 @@ from pathlib import Path
 from zipfile import ZIP64_LIMIT, ZIP_DEFLATED, BadZipFile, ZipFile
 
 from publish_guard import manifest_changes
-from test_selection import environment
+from test_selection import digest, environment
 
 import cargo_grid
 from cargo_grid import parameters, printers, sliced_extrusion
@@ -105,7 +105,7 @@ CACHE_FORMAT = 1
 STAGING_FORMAT = 1
 # Modules whose code decides a check result, and where this script's own check code starts.
 CHECK_MODULES = (parameters, printers, sliced_extrusion)
-CHECK_ROOTS = ("bambu_check", "Slicer", "SliceCache", "effective_settings", "CACHE_FORMAT")
+CHECK_ROOTS = ("check", "bambu_check", "Slicer", "SliceCache", "CACHE_FORMAT")
 # Where this script's code that decides a generated variant starts.
 GENERATION_ROOTS = ("variants", "generate", "staged_name", "STAGING_FORMAT")
 
@@ -120,10 +120,6 @@ def say(line: str) -> None:
     """Print one progress line in a single write, so lines from check threads stay whole."""
     sys.stdout.write(f"{line}\n")
     sys.stdout.flush()
-
-
-def digest(value: bytes) -> str:
-    return hashlib.sha256(value).hexdigest()
 
 
 def _available_memory_bytes() -> int:
@@ -576,7 +572,10 @@ def model_digests(stream) -> tuple[str, dict[str, str], dict[str, list[str]], di
     rest = bytes(rest)
     items = {}
     for match in ITEM.finditer(rest):
-        items.setdefault(ITEM_OBJECT.search(match[0])[1].decode(), []).append(digest(match[0]))
+        placed = ITEM_OBJECT.search(match[0])
+        if placed is None:
+            raise ValueError("build item without an object")
+        items.setdefault(placed[1].decode(), []).append(digest(match[0]))
     if rest.count(b"<item") != sum(map(len, items.values())):
         raise ValueError("build items with child elements")
     return digest(ITEM.sub(b"", rest)), objects, components, items
@@ -601,6 +600,12 @@ def plate_fingerprints(project: Path) -> tuple[dict, list[dict]]:
     plates = PLATE.findall(text)
     if len(plates) != text.count("<plate>"):
         raise ValueError("nested or unterminated plates")
+    # Objects reach a key only through their plate, so every instance and item must be read.
+    instances = [INSTANCE_OBJECT.findall(plate) for plate in plates]
+    if [len(found) for found in instances] != [plate.count("<model_instance>") for plate in plates]:
+        raise ValueError("a plate instance without a readable object id")
+    if not set(items) <= set(chain.from_iterable(instances)):
+        raise ValueError("a build item for an object on no plate")
     settings = {match[1]: digest(match[0].encode()) for match in OBJECT_SETTINGS.finditer(text)}
 
     def meshes(identity: str, seen: tuple[str, ...] = ()) -> list[str]:
@@ -625,10 +630,10 @@ def plate_fingerprints(project: Path) -> tuple[dict, list[dict]]:
                     "meshes": meshes(identity),
                     "items": items.get(identity, []),
                 }
-                for identity in INSTANCE_OBJECT.findall(plate)
+                for identity in found
             ],
         }
-        for plate in plates
+        for plate, found in zip(plates, instances)
     ]
 
 
@@ -696,14 +701,19 @@ class SliceCache:
         claimed = self._claimed[key]
 
         def settle(done: Future) -> None:
+            # Callback exceptions are only logged, so the claimed result is always set.
             if done.cancelled():
                 claimed.cancel()
             elif done.exception() is not None:
                 claimed.set_exception(done.exception())
             else:
-                if done.result() is None:
-                    self._store(key, record)
-                claimed.set_result(done.result())
+                try:
+                    if done.result() is None:
+                        self._store(key, record)
+                except OSError as error:
+                    say(f"Could not keep a clean plate in the slice cache: {error}")
+                finally:
+                    claimed.set_result(done.result())
 
         sliced.add_done_callback(settle)
 
@@ -712,19 +722,18 @@ class SliceCache:
 
     def _store(self, key: str, record: dict) -> None:
         self.folder.mkdir(parents=True, exist_ok=True)
-        path = self._path(key)
-        temporary = path.with_name(f"{path.name}.{threading.get_ident()}.tmp")
-        temporary.write_text(
-            json.dumps(
-                {"key": key, "result": "clean", **record, "checked": datetime.now().isoformat()},
-                indent=2,
-            )
+        _write_json(
+            self._path(key),
+            {"key": key, "result": "clean", **record, "checked": datetime.now().isoformat()},
         )
-        os.replace(temporary, path)
 
 
 class Slicer:
-    """One pool of Bambu Studio slices shared by every variant in a run."""
+    """One pool of Bambu Studio slices shared by every variant in a run.
+
+    At most ``jobs`` Bambu Studio processes run at once, counting each check's preparation
+    with the slices, and each one takes a memory slot.
+    """
 
     def __init__(
         self,
@@ -733,18 +742,27 @@ class Slicer:
         capacity: Capacity,
         cache: SliceCache | None = None,
         checker: str | None = None,
+        *,
+        jobs: int,
     ):
         self.bambu = bambu
         self.pool = pool
         self.capacity = capacity
         self.cache = cache
         self.checker = checker if cache is None else cache.checker
+        self._turns = threading.BoundedSemaphore(jobs)
+
+    @contextmanager
+    def process(self):
+        """One of the ``jobs`` turns, inside a free memory slot."""
+        with self._turns, self.capacity.slot():
+            yield
 
     def submit(self, project: Path, plate: int, work: Path, reserved_tower=None):
         return self.pool.submit(self._slice, project, plate, work, reserved_tower)
 
     def _slice(self, project: Path, plate: int, work: Path, reserved_tower):
-        with self.capacity.slot():
+        with self.process():
             return slice_plate(self.bambu, project, plate, work, reserved_tower=reserved_tower)
 
 
@@ -766,44 +784,47 @@ def bambu_check(
 ) -> Check:
     """Slice every plate with PETG on each nozzle, reusing clean results the cache holds."""
     work.mkdir(parents=True)
-    effective = effective_settings(project, slicer.bambu, work)
-    printer = next(p for p in PRINTERS.values() if p.model == effective["printer_model"])
     reservations = tower_bounds or {}
-    keys = None
-    if slicer.cache is not None:
-        try:
-            keys = plate_keys(project, effective, reservations, slicer.cache.checker)
-        except ValueError as error:
-            say(f"{project}: slicing every plate without the cache: {error}")
     result = Check([])
     tasks = []
-    for mapping in NOZZLE_MAPS:
-        folder = work / f"petg-nozzle-{mapping[0]}"
-        folder.mkdir()
-        copy = folder / "check.3mf"
-        if keys is None:
-            plates = check_copy(project, effective, mapping, copy)
-            tasks += [
-                (mapping, plate, slicer.submit(copy, plate, folder, reservations.get(plate)))
-                for plate in range(1, plates + 1)
-            ]
-            continue
-        copied = False
-        for plate, key in enumerate(keys[mapping], 1):
-            future, origin = slicer.cache.claim(key)
-            if origin == "new":
-                try:
-                    if not copied:
-                        check_copy(project, effective, mapping, copy)
-                        copied = True
-                    sliced = slicer.submit(copy, plate, folder, reservations.get(plate))
-                except BaseException as error:
-                    slicer.cache.abandon(key, error)
-                    raise
-                slicer.cache.follow(key, sliced, {"plate": plate, "nozzle_map": list(mapping)})
-            result.cached += origin == "cached"
-            result.shared += origin == "shared"
-            tasks.append((mapping, plate, future))
+    # Resolving profiles, reading the model and writing check copies take a process turn,
+    # which is given back before waiting for any slice.
+    with slicer.process():
+        effective = effective_settings(project, slicer.bambu, work)
+        keys = None
+        if slicer.cache is not None:
+            try:
+                keys = plate_keys(project, effective, reservations, slicer.cache.checker)
+            except ValueError as error:
+                say(f"{project}: slicing every plate without the cache: {error}")
+        for mapping in NOZZLE_MAPS:
+            folder = work / f"petg-nozzle-{mapping[0]}"
+            folder.mkdir()
+            copy = folder / "check.3mf"
+            if keys is None:
+                plates = check_copy(project, effective, mapping, copy)
+                tasks += [
+                    (mapping, plate, slicer.submit(copy, plate, folder, reservations.get(plate)))
+                    for plate in range(1, plates + 1)
+                ]
+                continue
+            copied = False
+            for plate, key in enumerate(keys[mapping], 1):
+                future, origin = slicer.cache.claim(key)
+                if origin == "new":
+                    try:
+                        if not copied:
+                            check_copy(project, effective, mapping, copy)
+                            copied = True
+                        sliced = slicer.submit(copy, plate, folder, reservations.get(plate))
+                    except BaseException as error:
+                        slicer.cache.abandon(key, error)
+                        raise
+                    slicer.cache.follow(key, sliced, {"plate": plate, "nozzle_map": list(mapping)})
+                result.cached += origin == "cached"
+                result.shared += origin == "shared"
+                tasks.append((mapping, plate, future))
+    printer = next(p for p in PRINTERS.values() if p.model == effective["printer_model"])
     result.slices = len(tasks)
     result.problems = [
         f"plate {plate} with PETG on the {printer.nozzles[int(mapping[0]) - 1].name} nozzle: "
@@ -824,7 +845,7 @@ def bambu_problems(
     """Slice every plate with PETG on each nozzle; list what Bambu Studio refuses."""
     with ThreadPoolExecutor(jobs) as pool:
         return bambu_check(
-            project, work, Slicer(bambu, pool, Capacity(jobs)), tower_bounds
+            project, work, Slicer(bambu, pool, Capacity(jobs), jobs=jobs), tower_bounds
         ).problems
 
 
@@ -867,8 +888,12 @@ def check(variant: Variant, folder: Path, slicer: Slicer, scratch: Path) -> list
 
 def _write_json(path: Path, value: dict) -> None:
     temporary = path.with_name(f".{path.name}.{threading.get_ident()}.tmp")
-    temporary.write_text(json.dumps(value, indent=2))
-    os.replace(temporary, path)
+    try:
+        temporary.write_text(json.dumps(value, indent=2))
+        os.replace(temporary, path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
 
 
 def source_identity() -> dict:
@@ -950,7 +975,8 @@ def build(
     """
     staging.mkdir(parents=True, exist_ok=True)
     for partial in staging.glob(".partial-*"):
-        if not _running(int(partial.name.split("-")[1])):
+        pid = partial.name.split("-")[1]
+        if pid.isdigit() and not _running(int(pid)):
             shutil.rmtree(partial, ignore_errors=True)
     share = 1 + packing_workers
     folders = {variant: staging / staged_name(variant) for variant in selected}
@@ -986,9 +1012,9 @@ def build(
     ):
         pools = (generation, checking, *((slicer.pool,) if slicer else ()))
 
-        def start_check(variant: Variant) -> None:
+        def start_check(variant: Variant) -> Future | None:
             if slicer is None:
-                return
+                return None
             if (
                 resume
                 and reuse_checks
@@ -996,21 +1022,32 @@ def build(
                 and checked_record(folders[variant], slicer.checker).is_file()
             ):
                 say(f"{variant.name}: Bambu Studio check, every plate sliced earlier")
-                return
+                return None
             checks[variant] = checking.submit(check, variant, folders[variant], slicer, scratch)
+            return checks[variant]
 
         try:
+            # Generation's memory is reserved before any check can take a slot.
+            capacity.reserve(min(jobs, len(missing)) * share)
+            generating = {
+                generation.submit(staged_generate, variant): variant for variant in missing
+            }
             for variant in ready:
                 say(f"{variant.name}: generated earlier, in {folders[variant]}")
                 start_check(variant)
-            pending = {generation.submit(staged_generate, variant): variant for variant in missing}
-            capacity.reserve(min(jobs, len(pending)) * share)
-            for done, future in enumerate(as_completed(pending), 1):
-                variant = pending[future]
-                future.result()
-                capacity.reserve(min(jobs, len(pending) - done) * share)
-                say(f"{variant.name}: generated")
-                start_check(variant)
+            # Wait for generation and checks together, so the first failure stops the run.
+            waiting = {*generating, *checks.values()}
+            while waiting:
+                finished, waiting = wait(waiting, return_when=FIRST_COMPLETED)
+                for future in finished:
+                    future.result()
+                    if future not in generating:
+                        continue
+                    variant = generating.pop(future)
+                    capacity.reserve(min(jobs, len(generating)) * share)
+                    say(f"{variant.name}: generated")
+                    if (started := start_check(variant)) is not None:
+                        waiting.add(started)
             problems = [
                 problem
                 for variant in selected
@@ -1136,14 +1173,20 @@ def publish(folder: Path, selected: list[Variant], staged: list[Path]) -> list[t
             status, summary = "new", "new"
             if name in changed:
                 describe = project_changes if name == "job.3mf" else manifest_differences
-                details = describe(destination, source / name)
-                archive.mkdir(exist_ok=True)
-                shutil.move(destination, archive / destination.name)
                 status = "changed"
-                summary = f"changed, previous copy in {archive.name}: {details}"
+                summary = f"changed, previous copy in {archive.name}: "
+                summary += describe(destination, source / name)
+            # The new bytes are in place before the old file moves, so a failed copy keeps it.
             temporary = destination.with_name(f".{destination.name}.publishing")
-            shutil.copyfile(source / name, temporary)
-            os.replace(temporary, destination)
+            try:
+                shutil.copyfile(source / name, temporary)
+                if name in changed:
+                    archive.mkdir(exist_ok=True)
+                    shutil.move(destination, archive / destination.name)
+                os.replace(temporary, destination)
+            except BaseException:
+                temporary.unlink(missing_ok=True)
+                raise
             lines.append((status, f"{destination.name}: {summary}"))
     return lines
 
@@ -1268,7 +1311,7 @@ def main(argv: list[str] | None = None) -> int:
             cache = (
                 None if args.no_slice_cache else SliceCache(state_folder() / "slice-cache", checker)
             )
-            slicer = Slicer(bambu, slices, capacity, cache, checker)
+            slicer = Slicer(bambu, slices, capacity, cache, checker, jobs=slice_jobs)
             print(
                 f"Slicing with at most {min(slice_jobs, capacity.slots)} Bambu Studio processes "
                 f"at once, within {capacity.slots} memory slots shared with generation",

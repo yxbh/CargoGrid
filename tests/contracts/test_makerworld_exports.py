@@ -2,6 +2,7 @@ import importlib.util
 import json
 import os
 import re
+import shutil
 import sys
 import threading
 import time
@@ -840,9 +841,35 @@ def test_model_digests_split_objects_and_items_and_refuse_unknown_structure():
         model.replace(b"</object></resources>", b"</resources>"),
         model.replace(b'<object id="1">', b'<objects id="1">'),
         model.replace(b'id="2"', b'id="1"'),
+        model.replace(b'<item objectid="2"', b"<item"),
     ):
         with pytest.raises(ValueError):
             tool.model_digests(io.BytesIO(broken))
+
+
+def _rewrite(path, name, change):
+    """Change one member of a test project, keeping fixed entry times."""
+    with ZipFile(path) as archive:
+        members = {member: archive.read(member) for member in archive.namelist()}
+    members[name] = change(members[name].decode()).encode()
+    with ZipFile(path, "w") as archive:
+        for member, data in members.items():
+            archive.writestr(ZipInfo(member, date_time=(2026, 1, 1, 0, 0, 0)), data)
+
+
+def test_plate_fingerprints_refuse_objects_they_cannot_place_on_a_plate(tmp_path):
+    tool = _tool()
+    path = tmp_path / "job.3mf"
+    instance = '<model_instance><metadata key="object_id" value="4" /></model_instance>'
+    for old, new, message in (
+        (instance, instance.replace('" />', '"/>'), "plate instance without a readable object"),
+        (instance, "", "build item for an object on no plate"),
+    ):
+        _meshed_project(path, ["1", "2"])
+        tool.plate_fingerprints(path)
+        _rewrite(path, "Metadata/model_settings.config", lambda text: text.replace(old, new))
+        with pytest.raises(ValueError, match=message):
+            tool.plate_fingerprints(path)
 
 
 def _cached_run(monkeypatch, tool, tmp_path, meshes_by_variant, problems=None):
@@ -916,6 +943,52 @@ def test_refused_plates_are_sliced_again_and_never_cached(monkeypatch, tmp_path)
             tool.main(arguments)
         assert sorted(plate for _, _, plate in sliced) == expected
     assert len(list((_state() / "slice-cache").glob("*.json"))) == 2
+
+
+def test_a_cache_that_cannot_be_written_warns_and_finishes(monkeypatch, tmp_path, capsys):
+    tool = _tool()
+    sliced, arguments = _cached_run(monkeypatch, tool, tmp_path, lambda variant: ["1", "2"])
+
+    def full(self, key, record):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(tool.SliceCache, "_store", full)
+    finished = []
+    runner = threading.Thread(target=lambda: finished.append(tool.main(arguments)), daemon=True)
+    runner.start()
+    runner.join(20)
+    assert not runner.is_alive(), "a failed cache write left a check waiting"
+    assert finished == [0] and len(sliced) == 4
+    assert capsys.readouterr().out.count("in the slice cache: disk full") == 4
+    assert not list((_state() / "slice-cache").glob("*"))
+
+
+def test_check_preparation_counts_as_a_bambu_studio_process(monkeypatch, tmp_path):
+    tool = _tool()
+    lock = threading.Lock()
+    running, peak = [0], [0]
+
+    def busy():
+        with lock:
+            running[0] += 1
+            peak[0] = max(peak[0], running[0])
+        time.sleep(0.05)
+        with lock:
+            running[0] -= 1
+
+    sliced, arguments = _cached_run(monkeypatch, tool, tmp_path, lambda variant: ["1", "2"])
+    slice_plate = tool.slice_plate
+    monkeypatch.setattr(
+        tool, "slice_plate", lambda *args, **kwargs: busy() or slice_plate(*args, **kwargs)
+    )
+    monkeypatch.setattr(
+        tool,
+        "effective_settings",
+        lambda project, bambu, work: busy() or _project(work / "settings.3mf"),
+    )
+    monkeypatch.setattr(tool, "_process_capacity", lambda: (16, 8))
+    assert tool.main([*arguments, "--jobs", "2", "--slice-jobs", "1"]) == 0
+    assert peak == [1] and len(sliced) == 4
 
 
 def test_no_slice_cache_slices_every_plate_and_writes_no_cache(monkeypatch, tmp_path, capsys):
@@ -1066,8 +1139,9 @@ def test_no_resume_and_changed_sources_build_every_variant_again(monkeypatch, tm
     arguments.append("--replace")
     assert tool.main(arguments) == 0
     old = _staged(tool)
-    stale = old / ".partial-999999999-x"
+    stale, odd = old / ".partial-999999999-x", old / ".partial-odd"
     stale.mkdir()
+    odd.mkdir()
     for extra, changed in (["--no-resume"], False), ([], True):
         generated.clear()
         if changed:
@@ -1075,6 +1149,7 @@ def test_no_resume_and_changed_sources_build_every_variant_again(monkeypatch, tm
             monkeypatch.setattr(tool, "source_identity", lambda: {**identity, "source": "edited"})
         assert tool.main([*arguments, *extra]) == 0
         assert len(generated) == 2
+        assert not stale.exists() and odd.exists() != changed
     assert not old.exists() and _staged(tool) != old
     assert "staged from other source files" in capsys.readouterr().out
 
@@ -1087,6 +1162,58 @@ def test_unchecked_staged_variant_is_checked_by_a_later_run(monkeypatch, tmp_pat
     generated.clear()
     assert tool.main([*arguments, "--replace"]) == 0
     assert generated == [] and len(sliced) == 6
+
+
+def test_resumed_checks_wait_for_memory_reserved_for_generation(monkeypatch, tmp_path):
+    tool = _tool()
+    first, last = [v for v in tool.variants() if v.set_name == "Adjustable-Stop"]
+    generated, sliced, output, arguments = _resumable_run(monkeypatch, tool, tmp_path)
+    unchecked = [argument for argument in arguments if argument != "--bambu-studio"][:-1]
+    assert tool.main(unchecked) == 0
+    shutil.rmtree(_staged(tool) / tool.staged_name(last))
+    prepared, during = [], []
+    effective, generate = tool.effective_settings, tool.generate
+
+    def slow_generate(variant, scratch, **kwargs):
+        time.sleep(0.3)
+        during.append(len(prepared))
+        return generate(variant, scratch, **kwargs)
+
+    monkeypatch.setattr(
+        tool, "effective_settings", lambda *args: prepared.append(args) or effective(*args)
+    )
+    monkeypatch.setattr(tool, "generate", slow_generate)
+    # One job with two search workers reserves all three memory slots while it builds.
+    monkeypatch.setattr(tool, "_process_capacity", lambda: (16, 3))
+    generated.clear()
+    assert tool.main([*arguments, "--replace", "--jobs", "1"]) == 0
+    assert generated == [last.name] and during == [0] and len(prepared) == 2
+
+
+def test_a_failed_check_stops_the_run_without_waiting_for_earlier_checks(monkeypatch, tmp_path):
+    tool = _tool()
+    first, last = [v for v in tool.variants() if v.set_name == "Adjustable-Stop"]
+    stopped = threading.Event()
+    close = tool.Capacity.close
+
+    def stop(self):
+        stopped.set()
+        close(self)
+
+    def check(project, work, slicer, tower_bounds):
+        if first.name in str(work):
+            assert stopped.wait(10), "the run waited for this check before seeing the failure"
+            return tool.Check([])
+        raise RuntimeError("profiles could not be resolved")
+
+    monkeypatch.setattr(tool.Capacity, "close", stop)
+    monkeypatch.setattr(tool, "generate", _sliceable_generate(1))
+    monkeypatch.setattr(tool, "bambu_check", check)
+    bambu, output = _fake_bambu(monkeypatch, tool, tmp_path)
+    arguments = ["--output", str(output), "--set", "Adjustable-Stop", "--jobs", "2"]
+    with pytest.raises(RuntimeError, match="profiles could not be resolved"):
+        tool.main([*arguments, "--bambu-studio", str(bambu)])
+    assert not any(output.iterdir())
 
 
 def _script_copy(tmp_path, text):
@@ -1128,7 +1255,14 @@ def test_check_code_follows_what_decides_a_result_and_ignores_the_rest(tmp_path)
         return _script_copy(tmp_path, text).check_code()
 
     original = code(source)
-    for name in ("def slice_plate", "def extrusion_problem", "def model_digests", "PROBLEMS ="):
+    for name in (
+        "def slice_plate",
+        "def extrusion_problem",
+        "def model_digests",
+        "PROBLEMS =",
+        "def check(",
+        "def reserved_towers",
+    ):
         assert name in original
     assert "def variants" not in original and "def main" not in original
     edits = {
@@ -1136,6 +1270,8 @@ def test_check_code_follows_what_decides_a_result_and_ignores_the_rest(tmp_path)
         "gcode path conflicts found": "gcode path conflict found",
         'b"</object>"': 'b"</object >"',
         "CACHE_FORMAT = 1": "CACHE_FORMAT = 2",
+        '"reserved_extrusion_bounds_mm"': '"reserved_bounds_mm"',
+        "if not found.problems and slicer.checker": "if slicer.checker",
     }
     for old, new in edits.items():
         assert old in source
@@ -1252,6 +1388,27 @@ def test_publish_moves_replaced_files_to_a_dated_folder_and_copies_only_changes(
         project,
         project.replace(".3mf", ".manifest.json"),
     ]
+
+
+def test_a_failed_publish_copy_keeps_the_previous_file(monkeypatch, tmp_path):
+    tool = _tool()
+    meshes = {"0.8mm-Nozzle": ["1", "2"], "0.4mm-Nozzle": ["1", "2"]}
+    folder, arguments = _publish_run(monkeypatch, tool, tmp_path, meshes)
+    assert tool.main(arguments) == 0
+    before = {path.name: path.read_bytes() for path in folder.iterdir()}
+    meshes["0.8mm-Nozzle"] = ["1", "3"]
+    copyfile = shutil.copyfile
+
+    def failing(source, destination, **kwargs):
+        if str(destination).endswith(".publishing"):
+            Path(destination).write_bytes(b"partial")
+            raise OSError("disk full")
+        return copyfile(source, destination, **kwargs)
+
+    monkeypatch.setattr(tool.shutil, "copyfile", failing)
+    with pytest.raises(OSError, match="disk full"):
+        tool.main(arguments)
+    assert {path.name: path.read_bytes() for path in folder.iterdir()} == before
 
 
 def test_publish_waits_for_every_check_and_needs_the_slicer(monkeypatch, tmp_path, capsys):
