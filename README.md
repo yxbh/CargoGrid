@@ -73,7 +73,7 @@ How well the floor keeps dust out, and what it does to fit, flatness and strengt
 
 ## Browse and generate accessories
 
-At the standard 60/13 settings, a 350x320x325 mm build volume fits all 105 accessories: female and male ramps, attachment plates, five vertical tile brackets, eight normal stops, two angled stops, round-hole rods and upper braces, edge and corner pieces, and support rails with their connectors. Edge and corner pieces come in 10, 20 and 30 mm widths. With the full hole pattern they carry the other half of the tiles' edge holes; with no holes or interior-only holes they are plain. A different unit size or build volume can change what fits.
+At the standard 60/13 settings, a 350x320x325 mm build volume fits all 107 accessories: female and male ramps, attachment plates, five vertical tile brackets, eight normal stops, two angled stops, round-hole rods and upper braces, edge and corner pieces, and support rails with their connectors. Edge and corner pieces come in 10, 20 and 30 mm widths. With the full hole pattern they carry the other half of the tiles' edge holes; with no holes or interior-only holes they are plain. A different unit size or build volume can change what fits.
 
 ![Three plates, five tile brackets, eight normal stops and two angled stops that use the X attachment interface.](docs/images/x-attachments.png)
 
@@ -115,19 +115,21 @@ The outer-finger centres are at X=+/-15.8 mm, each carries three 8 mm-pitch teet
 uv run cargo-grid extras adjustable-stop --printer h2d --bambu --material "Bambu PETG Basic @BBL H2D 0.8 nozzle" PETG "#688197" --material "Bambu PLA Basic @BBL H2D 0.8 nozzle" PLA "#0A2989" --nozzle-diameter-mm 0.8 --layer-height-mm 0.32 --auto-roof-support --no-stl --output outputs/adjustable-stop
 ```
 
+The two inside vertical roots where the outer guide pads meet the rack walls at X=+/-24, Y=49 mm are intentionally sharp; the other exposed guide-pad edges keep their 1 mm rounds. The earlier printed base had rounded roots. The sharp-root change has not been physically tested; see [the geometry notes](docs/geometry.md#adjustable-native-cad-stop).
+
 The published one-plate H2D kits are generated as the `Adjustable-Stop` set in `tools/makerworld_exports.py`. Each contains the base, moving wall, keeper and accepted undimpled v10b #1 collar clip, with global normal Auto support on and PLA Basic for the interface. All four objects inherit that setting; the slicer decides where support is needed. The clip's 0.80 mm rear clearance was sized for sag in its unsupported 10.10 mm rear bridge, so support can change its printed fit. Remove support and try the clip before relying on its retention. The 0.8 mm/0.32 mm PETG geometry and unsupported clip have physical test results; the identical 0.4 mm/0.24 mm CAD export is supported but its fit, flex, bridge shape, retention and strength have not been physically tested. The Python API can also write source-oriented STEP, STL and core 3MF artifacts without adding another top-level CLI command.
 
 Free exterior base, wall and reinforcement-ridge edges use 2 mm radii; finger, squeeze-pad, reinforcement-transition and feasible keeper edges use 1 mm radii. Both underside anchors retain the same R2 tip and root treatment. Native X, ratchet, tooth-carrier stop, guide, bearing, anchor and screw working geometry stays sharp where rounding would alter the interface. The keeper's two top side edges remain sharp to retain the 1.3 mm land beside each provisional 7 mm countersink mouth, and six wall-root side transitions remain sharp because the coupled BREP fillet does not construct there even at 0.05 mm. These exceptions preserve the existing load path and require visual and physical review rather than implying all edges are rounded.
 
 The front posts are independently authored Cargo-Grid BREP geometry rather than literal copied facets from the earlier external 3MF workflow. Their 0.08 mm inset straight stems, 0.1 mm transitions and unchanged R2 tips match the vertical tile brackets. No vertex, topology or digest equality to the earlier mesh is claimed. The original two-opening tile remains a separate accessory and is not included in this output.
 
-The native source export is not a Bambu project and does not select a print orientation or process preset; use the H2D extra for that. The adjustable stop remains outside the 81-design catalogue. The released-finger option and the one-pitch collision screen are prescribed rigid geometry, not an elastic or force simulation. The 3.7 mm release stroke leaves 0.7 mm nominal radial tip clearance after disengagement. One H2D 0.8 mm/0.32 mm PETG print supplied the current base, pusher, keeper and clip fit observations, but does not establish click and squeeze force, automatic ratcheting, creep, fatigue or strength. Bags remain supported by the mat, and the stop has no load or crash rating.
+The native source export is not a Bambu project and does not select a print orientation or process preset; use the H2D extra for that. The adjustable stop remains outside the catalogue. The released-finger option and the one-pitch collision screen are prescribed rigid geometry, not an elastic or force simulation. The 3.7 mm release stroke leaves 0.7 mm nominal radial tip clearance after disengagement. One H2D 0.8 mm/0.32 mm PETG print supplied the current base, pusher, keeper and clip fit observations, but does not establish click and squeeze force, automatic ratcheting, creep, fatigue or strength. Bags remain supported by the mat, and the stop has no load or crash rating.
 
 The keeper is one 61.6x18 mm block from its Z=16.85 mm seat to its Z=26 mm top. The four screw axes, 3.4 mm bores, 2.7 mm base pilots and M3x16 recommendation stay fixed; the provisional 7 mm 90-degree mouths are 1.8 mm deep and retain 1.3 mm of side land. R3.35 local bosses around the R1.35 pilots leave 2 mm nominal radial ligament without changing their axes or depth. The pusher remains clear throughout the 0..48 mm adjustment range, including the prescribed two-finger release pose. After the last lock at 48 mm, the larger tooth carriers permit 4 mm controlled overtravel and contact the solid keeper at 52 mm; 52 mm is a stop, not another lock. Do not force the pusher beyond that contact: remove the four keeper screws and lift off the keeper first, squeeze the two outer pads through the 3.7 mm release travel, then withdraw the pusher.
 
 ## Make the full H2D catalogue
 
-This command makes a ready-packed project for a Bambu Lab H2D with 0.8 mm or 0.4 mm nozzles: 24 tile sizes with the full 10 mm hole pattern and all 105 accessories, on named plates grouped by family. It only works with the standard 60 mm unit, 13 mm thickness and no fit offset; you can add `--solid-bottom-thickness-mm`. Edges and corners share plates by outward width, and each object's name still says which edge, corner variant and male/female joint it has.
+This command makes a ready-packed project for a Bambu Lab H2D with 0.8 mm or 0.4 mm nozzles: 24 tile sizes with the full 10 mm hole pattern and all 107 accessories, on named plates grouped by family. It only works with the standard 60 mm unit, 13 mm thickness and no fit offset; you can add `--solid-bottom-thickness-mm`. Edges and corners share plates by outward width, and each object's name still says which edge, corner variant and male/female joint it has.
 
 ```sh
 uv run cargo-grid catalogue --printer h2d --bambu --material "Bambu PETG Basic @BBL H2D 0.8 nozzle" PETG "#637b70" --nozzle-diameter-mm 0.8 --layer-height-mm 0.32 --no-stl --output outputs/full-catalogue
@@ -156,6 +158,22 @@ uv run python tools/makerworld_exports.py --printer x2d --output outputs/makerwo
 
 The script slices every plate with PETG on either nozzle before writing any named files. X2D slots 1/2 are Bambu's main/auxiliary nozzles; H2D slots 1/2 are left/right. A refused plate stops the batch. Existing files are left alone unless you pass `--replace`; uploading is separate. `--set Full-Catalogue`, `--set Zeekr-7X-Expansion-Set`, `--set Pull-Handle-Set`, `--set Adjustable-Stop` or `--set Cross-Post-Set` limits the rebuild, and either selection option can be repeated. Omit `--printer` for the existing H2D files, or use `--printer h2d --printer x2d` for both printers.
 
+Each variant's plates are sliced as soon as that variant is generated, and slices from every variant share one pool. Generation and slicing share one memory budget: by default there is one Bambu Studio process per core, fewer while other variants are still being generated or when memory is short. Preparing a variant's check (resolving its profiles and writing the copy that gets sliced) counts as one of those processes. `--slice-jobs N` lowers the limit.
+
+Plates that slice cleanly are remembered in `.local/makerworld/slice-cache`. The key covers everything that decides the result: the plate's objects, meshes and placements, the project and check settings, the nozzle map, the reserved tower, the Bambu Studio executable and profiles, and the checking code. A plate that matches one already checked, in the same run or an earlier one, isn't sliced again, and the profile settings Bambu Studio resolved for a project are kept as well, so a check whose plates are all cached doesn't start Bambu Studio. A change that keeps every plate's objects re-slices only the plates it touches; adding or removing an object renumbers the objects on later plates, so those are sliced again too. The ordinary and 1.92 mm solid-bottom catalogues share their unchanged accessory plates. Refused plates are always sliced again, and `--no-slice-cache` slices everything.
+
+Finished variants are kept in `.local/makerworld/staging` until the generator source, the script's list of variants or the Python environment changes; a run from other source files that is still going keeps its own. If a run stops part way, after a crash or a refused plate, the same command picks up where it stopped and only builds what is missing; `--no-resume` builds everything again. Named files are still written only once every selected variant is present and checked.
+
+To update the folder you upload from, use `--publish` instead of `--output`:
+
+```sh
+uv run python tools/makerworld_exports.py --printer h2d --printer x2d --publish "$MAKERWORLD_FOLDER" --bambu-studio "$BAMBU_STUDIO"
+```
+
+It needs `--bambu-studio`. Files whose bytes haven't changed are left alone. Before a file is replaced, it moves into an `old-<date>` folder next to it, named after the date of the files being replaced. The script prints a line for each file: identical, new, or which plates and designs (or manifest fields) changed. It doesn't upload anything.
+
+Published files are byte-reproducible on Apple Silicon macOS with the same generator and dependencies. Weekly publication checks use that platform; identical bytes across different platforms are not promised.
+
 Dual-nozzle projects initialize the complete purge table for both nozzles using Bambu Studio 02.08.02.61's defaults. This avoids an uninitialized auxiliary-nozzle table on loading, without changing automatic filament matching or claiming a calibrated flushing volume.
 
 The slicer check allows only support paths up to 0.5 mm beyond the reach shared by both nozzles; models, towers and bed edges stay strict. Bambu Studio 02.08.02.61 accepts the measured 0.14 mm support spread, but its physical effect has not been observed.
@@ -168,9 +186,9 @@ uv run cargo-grid catalogue --printer x2d --bambu --material "Bambu PETG Basic @
 
 For 0.4 mm nozzles, use 0.24 mm layers and the `Bambu PETG Basic @BBL X2D 0.4 nozzle` and `Bambu PLA Basic @BBL X2D 0.4 nozzle` materials. The X2D processes are 0.32 mm Balanced Quality and 0.24 mm Standard. Both printer selections supply the standard 60/13 geometry and the machine's physical build envelope.
 
-The X2D auto-support catalogue includes the 3x4 and 4x3 tiles as well as 1x4, 2x4, 4x1, 4x2 and the four-cell support rail. Its full-hole, ordinary/1.92 mm-bottom projects use an 18 mm-wide rectangular prime tower, with ribs off, on every catalogue plate; Bambu cannot store that shape per plate. Four-cell groups put it at front-left X=35.5, Y=15; ordinary groups keep it front-right at X=223, Y=15 to avoid extra plates. The planner reserves its brim and nozzle-change wipe lines separately from the models. The long tiles retain a 5 mm front/back inset and at least 5 mm at the right; the 3x4 turns 180 degrees and the 4x3 turns 90 degrees so their male sides face the tower. Prime volumes, automatic support feet and the named processes' support thresholds stay unchanged. Tower stability on tall plates, including the 120 mm brackets and stops, needs a physical print check. Other X2D sets and all H2D projects keep the default tower.
+The X2D auto-support catalogue includes the 3x4 and 4x3 tiles as well as 1x4, 2x4, 4x1, 4x2 and the four-cell support rail. Its full-hole, ordinary/1.92 mm-bottom projects use an 18 mm-wide rectangular prime tower, with ribs off, on every catalogue plate; Bambu cannot store that shape per plate. Plates with four-cell parts put it at front-left X=35.5, Y=15; other plates keep it front-right at X=223, Y=15 to avoid extra plates. The four-cell tiles follow the other tiles, and the four-cell rail shares the last rails plate. The planner reserves its brim and nozzle-change wipe lines separately from the models. The long tiles retain a 5 mm front/back inset and at least 5 mm at the right; the 3x4 turns 180 degrees and the 4x3 turns 90 degrees so their male sides face the tower. Prime volumes, automatic support feet and the named processes' support thresholds stay unchanged. Tower stability on tall plates, including the 120 mm brackets and stops, needs a physical print check. Other X2D sets and all H2D projects keep the default tower.
 
-The 4x4 and five-cell designs remain omitted. The existing 240 mm above-mat rod fits diagonally: its horizontal Y=90-degree pose gets another Z=45-degree turn, with the exact transform recorded in the manifest. No shorter rod or scaled geometry is needed. The Zeekr set is only an expansion set; its manifest still names the large standard rear-panel tiles printed separately. No X2D physical fit, support-removal or strength result is implied, and the narrower tower is not a physical stability result.
+The 4x4 and five-cell designs remain omitted. The existing 240 mm above-mat rod fits diagonally: its horizontal Y=90-degree pose gets another Z=45-degree turn, with the exact transform recorded in the manifest. It isn't shortened or scaled to fit. The Zeekr set is only an expansion set; its manifest still names the large standard rear-panel tiles printed separately. No X2D physical fit, support-removal or strength result is implied, and the narrower tower is not a physical stability result.
 
 ## Make the Zeekr 7X expansion set
 
@@ -253,9 +271,9 @@ Peg posts print upside down, standing on their flat top, so the pegs grow straig
 
 ## Round-hole rods and upper braces
 
-Rods fit the mat's round holes, with a collar resting on its top. Choose 120 or 240 mm above-mat height; the peg adds another 12 mm at standard tile thickness. Upper braces connect two Ø10 mm shafts at 60 or 120 mm centres. That spacing stays in physical millimetres when unit size changes.
+Rods fit the mat's round holes, with a collar resting on its top. The catalogue has rods 40, 60, 120 and 240 mm above the mat; the two short ones make low fences for small items, and `--rod-height-mm` takes other heights. The peg adds another 12 mm at standard tile thickness. Upper braces connect two Ø10 mm shafts at 60 or 120 mm centres. That spacing stays in physical millimetres when unit size changes.
 
-![Two round-hole rods and two labelled upper braces, with scale shared within each family.](docs/images/rods-and-braces.png)
+![Four round-hole rods and two labelled upper braces, with scale shared within each family.](docs/images/rods-and-braces.png)
 
 ```sh
 uv run cargo-grid part --family rod --rod-height-mm 120 --peg-diameter-mm 10 --build-width-mm 350 --build-depth-mm 320 --build-height-mm 325 --bambu --material "Model PETG" PETG "#637b70" --nozzle-diameter-mm 0.8 --layer-height-mm 0.32 --output outputs/rod
@@ -481,7 +499,9 @@ export_adjustable_stop_print_project(
 )
 ```
 
-Contributor checks and release steps are in the [release checklist](docs/release-checklist.md). The accessory page has separate [gallery reproduction instructions](docs/attachments.md#reproduce-the-images).
+For development, `uv run pytest -q` runs the small contract checks. Seed a local dependency map with `uv run python tools/test_selection.py run --full`, then use `uv run python tools/test_selection.py run` for affected checks, including selected slow cases. CI reuses branch-scoped dependency maps; a missing map runs the full suite. The [test guide](tests/README.md) explains selection and the local publish guard required for source and published-export changes.
+
+Release steps are in the [release checklist](docs/release-checklist.md). The accessory page has separate [gallery reproduction instructions](docs/attachments.md#reproduce-the-images).
 
 ## License and reference boundary
 

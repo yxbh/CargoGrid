@@ -30,7 +30,19 @@ from adjustable_stop_checks import (
     _shape_volume,
     _symmetric_difference_volume,
 )
-from build123d import Align, Axis, Box, Compound, GeomType, Location, Part, Pos, ShapeList
+from build123d import (
+    Align,
+    Axis,
+    Box,
+    Compound,
+    Face,
+    GeomType,
+    Location,
+    Part,
+    Plane,
+    Pos,
+    ShapeList,
+)
 from OCP.BRep import BRep_Tool
 from OCP.BRepAdaptor import BRepAdaptor_Surface
 from OCP.OCP.collections import (
@@ -73,7 +85,7 @@ from cargo_grid.adjustable_stop_export import (
     prepare_adjustable_stop_print_job,
     write_adjustable_stop_print_project,
 )
-from cargo_grid.export import BAMBU_PROCESS_DEFAULTS, write_3mf
+from cargo_grid.export import BAMBU_PROCESS_DEFAULTS, _checked_step_roundtrip, write_3mf
 from cargo_grid.jobs import Design, Job
 from cargo_grid.packing import PrimeTower, PrintPlacement, TowerClearance
 from cargo_grid.parameters import Tile
@@ -102,6 +114,45 @@ def compact_stop_parts():
 @pytest.fixture(scope="module")
 def released_stop_parts():
     return make_adjustable_stop_parts(AdjustableStopSpec(released_illustration=True))
+
+
+def test_outer_guide_radii_and_keeper_seating(stop_parts):
+    base = stop_parts[0]
+    radii = _cylindrical_radius_counts(base)
+    assert radii["1"] == 10
+    assert radii["2"] == 52
+    top_faces = [
+        face
+        for face in base.faces()
+        if face.geom_type == GeomType.PLANE
+        and abs(face.bounding_box().min.Z - DIMENSIONS.keeper_seat) < 1e-6
+        and abs(face.bounding_box().max.Z - DIMENSIONS.keeper_seat) < 1e-6
+    ]
+    keeper_footprint = Face.make_rect(
+        DIMENSIONS.keeper_width,
+        DIMENSIONS.keeper_length,
+        Plane(
+            origin=(
+                0,
+                (DIMENSIONS.keeper_start + DIMENSIONS.keeper_end) / 2,
+                DIMENSIONS.keeper_seat,
+            )
+        ),
+    )
+    contact = Compound(top_faces).intersect(keeper_footprint)
+    assert contact is not None
+    assert sum(face.area for face in contact.faces()) == pytest.approx(
+        309.69157111568524, abs=1e-6, rel=0
+    )
+
+
+def test_fixed_base_step_roundtrip_preserves_volume_and_bounds(stop_parts, tmp_path):
+    restored, _, volume_delta, volume_budget, bounds_delta = _checked_step_roundtrip(
+        stop_parts[0], tmp_path / "fixed-base.step"
+    )
+    assert restored.is_valid and len(restored.solids()) == 1
+    assert volume_delta <= volume_budget
+    assert bounds_delta <= 1e-5
 
 
 def _overlap_volume(first, second) -> float:
@@ -395,16 +446,17 @@ def test_approved_parts_are_three_valid_native_solids(stop_parts):
         )
     )
     assert DIMENSIONS.wall_thickness == 8
-    assert tuple(pusher.bounding_box().size) == pytest.approx((60, 138.3, 120.25))
-    assert pusher.bounding_box().min.Y == pytest.approx(-38.3)
-    assert pusher.bounding_box().min.Z == pytest.approx(5.1)
-    assert pusher.bounding_box().max.Z == pytest.approx(125.35)
-    assert base.bounding_box().min.Z == pytest.approx(-12.8)
-    assert tuple(base.bounding_box().size)[:2] == pytest.approx((60, 120))
-    assert base.bounding_box().min.Y == pytest.approx(10)
-    assert base.bounding_box().max.Y == pytest.approx(130)
-    assert keeper.bounding_box().min.Y == pytest.approx(31)
-    assert keeper.bounding_box().max.Y == pytest.approx(49)
+    base_bounds, pusher_bounds, keeper_bounds = (part.bounding_box() for part in stop_parts)
+    assert tuple(pusher_bounds.size) == pytest.approx((60, 138.3, 120.25))
+    assert pusher_bounds.min.Y == pytest.approx(-38.3)
+    assert pusher_bounds.min.Z == pytest.approx(5.1)
+    assert pusher_bounds.max.Z == pytest.approx(125.35)
+    assert base_bounds.min.Z == pytest.approx(-12.8)
+    assert tuple(base_bounds.size)[:2] == pytest.approx((60, 120))
+    assert base_bounds.min.Y == pytest.approx(10)
+    assert base_bounds.max.Y == pytest.approx(130)
+    assert keeper_bounds.min.Y == pytest.approx(31)
+    assert keeper_bounds.max.Y == pytest.approx(49)
     assert DIMENSIONS.extension == pytest.approx(48)
     assert DIMENSIONS.prong_shortening == pytest.approx(6.5)
     assert DIMENSIONS.flexible_beam_length == pytest.approx(65.5)
@@ -439,8 +491,9 @@ def test_base_has_two_identical_60_mm_pitch_underbody_anchors(stop_parts):
 def test_front_connectors_reuse_shared_native_panel_brep(compact_stop_parts):
     _, pusher, _ = compact_stop_parts
     source = make_bidirectional_panel_connector()
-    assert source.bounding_box().min.Z == pytest.approx(-12.8)
-    assert source.bounding_box().max.Z == pytest.approx(2)
+    bounds = source.bounding_box()
+    assert bounds.min.Z == pytest.approx(-12.8)
+    assert bounds.max.Z == pytest.approx(2)
     front_y = -DIMENSIONS.wall_thickness + DIMENSIONS.pusher_y_offset
     for height in CONNECTOR_CENTRES_ABOVE_PUSHER_FLOOR_MM:
         connector = source.rotate(Axis.X, -90).moved(
@@ -452,8 +505,9 @@ def test_front_connectors_reuse_shared_native_panel_brep(compact_stop_parts):
                 )
             )
         )
-        assert front_y - connector.bounding_box().min.Y == pytest.approx(12.8)
-        assert connector.bounding_box().max.Y == pytest.approx(front_y + 2)
+        bounds = connector.bounding_box()
+        assert front_y - bounds.min.Y == pytest.approx(12.8)
+        assert bounds.max.Y == pytest.approx(front_y + 2)
         assert _overlap_volume(connector, pusher) == pytest.approx(connector.volume)
 
 
@@ -598,6 +652,7 @@ def test_matched_ratchet_ramps_contact_and_clear_through_one_pitch(stop_parts):
     )
     base_locks = _ratchet_lock_faces(base, moving=False)
     moving_locks = _ratchet_lock_faces(contact_pusher, moving=True)
+    base_lock_bounds = [(face, face.bounding_box()) for face in base_locks]
     if len(base_locks) != 2 * (DIMENSIONS.positions + 2) or len(moving_locks) != 6:
         raise ValueError("ratchet proof could not identify every locking face")
     positions = []
@@ -617,18 +672,19 @@ def test_matched_ratchet_ramps_contact_and_clear_through_one_pitch(stop_parts):
         contact_distances = []
         for moving_face in moving_locks:
             moved = moving_face.moved(Location((0, translation_y, 0)))
-            moved_y = moved.bounding_box().min.Y
-            side = -1 if moved.bounding_box().max.X < 0 else 1
+            moved_bounds = moved.bounding_box()
+            moved_y = moved_bounds.min.Y
+            side = -1 if moved_bounds.max.X < 0 else 1
             candidates = [
-                face
-                for face in base_locks
-                if (-1 if face.bounding_box().max.X < 0 else 1) == side
-                and abs(face.bounding_box().min.Y - moved_y) < CONNECTOR_PROOF_TOLERANCE_MM
+                (face, bounds)
+                for face, bounds in base_lock_bounds
+                if (-1 if bounds.max.X < 0 else 1) == side
+                and abs(bounds.min.Y - moved_y) < CONNECTOR_PROOF_TOLERANCE_MM
             ]
             if len(candidates) != 1:
                 raise ValueError("could not pair a moving lock face with its rack face")
-            fixed = candidates[0]
-            area = _projected_xz_overlap_area(moved, fixed)
+            fixed, fixed_bounds = candidates[0]
+            area = _projected_xz_overlap_area(moved, fixed, bounds=(moved_bounds, fixed_bounds))
             distance = moved.distance_to(fixed)
             if area <= 0 or distance > CONNECTOR_PROOF_TOLERANCE_MM:
                 raise ValueError("ratchet locking faces lost positive-area surface contact")
@@ -782,6 +838,22 @@ def test_plain_front_centre_guides_bound_rigid_yaw_without_preloading_fingers(st
     root_seam_rows = []
     for side in (-1, 1):
         root_x = side * DIMENSIONS.rack_wall_inner
+        end = DIMENSIONS.outer_guide_tool_end
+        radius = DETAIL_EDGE_RADIUS_MM
+        floor = DIMENSIONS.floor
+        top = DIMENSIONS.guide_top
+        expected_root_seams = [
+            (
+                GeomType.LINE,
+                end - radius,
+                DIMENSIONS.rack_tooth_stations[0] + DIMENSIONS.rack_lock_offset,
+                top,
+                top,
+            ),
+            (GeomType.CIRCLE, end - radius, end, top - radius, top),
+            (GeomType.LINE, end, end, floor + radius, top - radius),
+            (GeomType.CIRCLE, end, end + radius, floor, floor + radius),
+        ]
         for edge in base.edges():
             bounds = edge.bounding_box()
             if (
@@ -799,9 +871,18 @@ def test_plain_front_centre_guides_bound_rigid_yaw_without_preloading_fingers(st
                 - CONNECTOR_PROOF_TOLERANCE_MM
                 and continuity == "C0"
             ):
-                root_seam_rows.append(
-                    {"side": side, "bounds_mm": _bounds(edge), "continuity": continuity}
-                )
+                actual = (bounds.min.Y, bounds.max.Y, bounds.min.Z, bounds.max.Z)
+                for index, (kind, *coordinates) in enumerate(expected_root_seams):
+                    if edge.geom_type == kind and actual == pytest.approx(
+                        coordinates, abs=CONNECTOR_PROOF_TOLERANCE_MM, rel=0
+                    ):
+                        expected_root_seams.pop(index)
+                        break
+                else:
+                    root_seam_rows.append(
+                        {"side": side, "bounds_mm": _bounds(edge), "continuity": continuity}
+                    )
+        assert not expected_root_seams, f"missing sharp-root edges: {side=}, {expected_root_seams}"
     if front_root_edge_count or root_seam_rows:
         raise ValueError("base retains an X=+/-24 seam in the outer-guide region")
     front_top_round_rows = []

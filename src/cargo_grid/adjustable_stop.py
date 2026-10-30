@@ -887,8 +887,6 @@ def _make_base(
                     and (_lies_at(edge, "Z", d.floor) or _lies_at(edge, "Z", d.guide_top))
                     and bounds.min.X >= min(inner, root) - EDGE_SELECTION_TOLERANCE_MM
                     and bounds.max.X <= max(inner, root) + EDGE_SELECTION_TOLERANCE_MM
-                    or _lies_at(edge, "Y", d.outer_guide_tool_end)
-                    and _lies_at(edge, "X", root)
                 ):
                     outer_guide_edges.append(edge)
                     break
@@ -896,7 +894,7 @@ def _make_base(
             base,
             outer_guide_edges,
             radius=DETAIL_EDGE_RADIUS_MM,
-            expected=12,
+            expected=10,
             feature="merged outer-guide R1 exposed edge",
         )
         for side in (-1, 1):

@@ -896,7 +896,7 @@ def write_gallery(
         "",
         "[Back to the beginner guide](../README.md) / [Thumbnail dimensions, hashes and source provenance](images/attachments/manifest.json)",
         "",
-        "Round-hole rods stand 120 or 240 mm above the mat. Their Ø18 mm stop collar sits on the mat; the Ø10 mm shaft and the peg diameter don't change with unit size. The two catalogue upper braces use 10 mm bores to join the 10 mm shafts at 60 or 120 mm centres, whatever the unit size. The [rod and brace overview](images/rods-and-braces.png) shows all four catalogue parts.",
+        "Round-hole rods stand 40, 60, 120 or 240 mm above the mat. Their Ø18 mm stop collar sits on the mat; the Ø10 mm shaft and the peg diameter don't change with unit size. The two catalogue upper braces use 10 mm bores to join the 10 mm shafts at 60 or 120 mm centres, whatever the unit size. The [rod and brace overview](images/rods-and-braces.png) shows all six catalogue parts.",
         "",
         "Keep bags resting on the mat. Braces are held only by friction and don't lock the height; they may slide or jam. These parts have no hooks and no load or crash rating. Bambu projects lay only the rods on their side (Y=90 degrees) with normal Auto support; braces stay flat with their bores upright and no support. Remove rod support before fitting.",
         "",
@@ -948,7 +948,7 @@ def write_gallery(
         "",
         "For a repaired outer-corner-half update, use `--update-corner-halves` with those two revision options. This rerenders only the catalogue-selected variants 1, 2, 4 and 5 across their three outward widths, retaining the established outer-corner image scale and every unrelated image byte.",
         "",
-        "For a rod-and-brace update, use `--update-rods` with those revision options. It renders only the two rods and two nominal 10 mm braces, then creates their four thumbnails and one overview. All other image bytes and provenance stay unchanged.",
+        "For a rod-and-brace update, use `--update-rods` with those revision options. It renders only the four rods and two nominal 10 mm braces, then creates their six thumbnails and one overview. All other image bytes and provenance stay unchanged.",
         "",
         (
             "The manifest's top-level provenance belongs to the retained baseline images. Incrementally rendered thumbnails and overviews each carry their own provenance; this is not a full-gallery rerender. "
@@ -1155,7 +1155,7 @@ def compose_ramps(work: Path, provenance: dict) -> None:
 
 
 def compose_rods(work: Path, provenance: dict) -> None:
-    """Add or replace only the four rod/brace thumbnails and their overview."""
+    """Add or replace only the six rod/brace thumbnails and their overview."""
     compose_families(
         work, provenance, {"rod", "rod-brace"}, "rods-and-braces.png", "Rod and brace update"
     )
@@ -1213,7 +1213,7 @@ def main() -> None:
     update.add_argument(
         "--update-rods",
         action="store_true",
-        help="render and compose only four rod/brace thumbnails and their overview",
+        help="render and compose only six rod/brace thumbnails and their overview",
     )
     parser.add_argument("--geometry-revision", default=GEOMETRY_REVISION)
     parser.add_argument("--workbench-revision", default=WORKBENCH_REVISION)

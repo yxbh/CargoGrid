@@ -133,6 +133,25 @@ def _size(design):
     return (box.size.X, box.size.Y, box.size.Z)
 
 
+@pytest.mark.parametrize("auto", [False, True])
+def test_group_sizes_are_measured_once_and_do_not_survive_the_request(auto):
+    designs = [_design(str(index), (10, 20, 3)) for index in range(2)]
+    groups = [PlateGroup("Small", designs, 4)]
+    calls = []
+
+    def size(design):
+        calls.append(design)
+        return _size(design)
+
+    options = dict(size=size, auto_roof_support=auto, layer_height_mm=0.32)
+    first = plan_plates(groups, H2D.common_build(), **options)
+    assert not first.unfit and calls == designs
+    calls.clear()
+    designs[0].shape = Box(400, 20, 3)
+    second = plan_plates(groups, H2D.common_build(), **options)
+    assert second.unfit == designs[:1] and calls == designs
+
+
 def test_diagonal_fallback_is_opt_in_and_keeps_the_horizontal_pose_and_source():
     rod = Design(
         "long",
@@ -398,6 +417,64 @@ def test_rectangular_tower_rescues_both_wide_tiles_at_the_ordinary_right_inset(l
     assert not plan.unfit and plan.plate_count == 2
     assert [(p.x, p.y, p.rotation) for p in plan.placements] == [(64.9, 5, 0), (64.9, 5, 90)]
     assert all(common.contains_box(p.x, p.y, 186, 246, 13) for p in plan.placements)
+
+
+TAIL_BUILD = BuildVolume(100, 100, 10, exclusions=(Exclusion(0, 0, 20, 100),))
+
+
+def _tail_plan(last_size, *, tail=True):
+    calls = []
+
+    def measured(design):
+        calls.append(design.name)
+        return _size(design)
+
+    designs = [_design("first", (70, 70, 5)), _design("last", last_size)]
+    rail = PlateGroup(None, [_design("rail", (40, 90, 5))], 4, build=TAIL_BUILD)
+    plan = plan_plates(
+        [PlateGroup("Rails", designs, 4, tail=rail if tail else None)],
+        BuildVolume(100, 100, 10),
+        size=measured,
+    )
+    return plan, calls
+
+
+@pytest.mark.parametrize("last_size,shared", [((30, 30, 5), True), ((50, 50, 5), False)])
+def test_tail_shares_the_last_plate_only_when_everything_fits_there(last_size, shared):
+    plain, _ = _tail_plan(last_size, tail=False)
+    plan, calls = _tail_plan(last_size)
+    assert sorted(calls) == ["first", "last", "rail"]
+    assert plain.plate_count == 2
+    # Earlier plates are untouched; the last plate is packed again under the tail's layout.
+    assert plan.designs[0].name == "first" and plan.placements[0] == plain.placements[0]
+    assert [d.name for d in plan.designs] == ["first", "last", "rail"]
+    assert [p.plate for p in plan.placements] == ([0, 1, 1] if shared else [0, 1, 2])
+    assert plan.plate_builds[0] == BuildVolume(100, 100, 10)
+    assert plan.plate_builds[plan.placements[2].plate] == TAIL_BUILD
+    assert plan.plate_builds[1] == (TAIL_BUILD if shared else BuildVolume(100, 100, 10))
+    assert all(p.x >= 20 for p in plan.placements[1:] if plan.plate_builds[p.plate] == TAIL_BUILD)
+    assert list(plan.plate_names.values()) == [
+        f"Rails {plate + 1}" for plate in range(plan.plate_count)
+    ]
+    assert not plan.unfit and plan.group_gaps == {"Rails": 4}
+
+
+def test_a_tail_without_ordinary_plates_takes_the_group_title():
+    rail = PlateGroup(None, [_design("rail", (40, 90, 5))], 4, build=TAIL_BUILD)
+    plan = plan_plates(
+        [PlateGroup("Rails", [_design("huge", (120, 120, 5))], 4, tail=rail)],
+        BuildVolume(100, 100, 10),
+        size=_size,
+    )
+    assert [d.name for d in plan.unfit] == ["huge"]
+    assert [d.name for d in plan.designs] == ["rail"]
+    assert plan.plate_names == {0: "Rails"} and plan.plate_builds == {0: TAIL_BUILD}
+
+
+def test_projected_tails_are_rejected():
+    tail = PlateGroup(None, [_design("rail", (40, 90, 5))], 4, projected=True)
+    with pytest.raises(ValueError, match="tails use rectangle packing"):
+        plan_plates([PlateGroup("Rails", [], 4, tail=tail)], BuildVolume(100, 100, 10), size=_size)
 
 
 @pytest.mark.parametrize("width", [0, 1.99, float("nan"), float("inf")])

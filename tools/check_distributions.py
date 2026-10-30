@@ -17,10 +17,12 @@ ROOT_FILES = {
     ".gitignore",
     "PKG-INFO",
     ".github/workflows/ci.yml",
+    ".github/actions/setup-tests/action.yml",
     "tools/check_distributions.py",
     "tools/check_test_durations.py",
-    "tools/ci_memory_sampler.py",
     "tools/makerworld_exports.py",
+    "tools/test_selection.py",
+    "tools/publish_guard.py",
     "tools/render_docs.py",
     "AGENTS.md",
     "docs/images/attachments/manifest.json",
@@ -33,7 +35,7 @@ DOCUMENTATION_IMAGES = {
     "docs/images/ramps.png",
     "docs/images/interface-sizes.png",
     "docs/images/rods-and-braces.png",
-    *(f"docs/images/attachments/rod-{height}.png" for height in (120, 240)),
+    *(f"docs/images/attachments/rod-{height}.png" for height in (40, 60, 120, 240)),
     *(f"docs/images/attachments/rod-brace-{spacing}-d10.png" for spacing in (60, 120)),
     *(
         f"docs/images/attachments/{family}-{number}{suffix}.png"

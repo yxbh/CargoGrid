@@ -35,7 +35,7 @@ def test_smaller_printer_accounts_for_the_whole_bounded_inventory(
     }
     assert missing_tiles == {(x, y) for x in range(1, 6) for y in range(1, 6)} - expected
     all_names = [d.name for d in job.designs] + [entry["name"] for entry in job.omitted]
-    assert len(all_names) == len(set(all_names)) == 130
+    assert len(all_names) == len(set(all_names)) == 132
     rod = next(
         d
         for d in job.designs
@@ -89,6 +89,46 @@ def _arguments(nozzle=0.8):
         str(profiles.layer_height_mm),
         "--auto-roof-support",
     ]
+
+
+def _plate_families(job):
+    return list(
+        dict.fromkeys(
+            name.rsplit(" ", 1)[0] if name.rsplit(" ", 1)[-1].isdigit() else name
+            for _, name in sorted(job.plate_names.items())
+        )
+    )
+
+
+def _rail_plates(job):
+    plates = sorted(p for p, name in job.plate_names.items() if name.startswith("Rails"))
+    rail = next(
+        placement
+        for design, placement in zip(job.designs, job.print_placements)
+        if design.parameters.get("family") == "support" and design.parameters["nx"] == 4
+    )
+    return plates, rail
+
+
+@pytest.mark.parametrize("layer", [0.32, 0.24])
+def test_four_cell_parts_stay_with_their_families(catalogue_stand_ins, layer):
+    job = dual_safe_catalogue_job(X2D, auto_roof_support=True, layer_height_mm=layer)
+    assert _plate_families(job) == ["Tiles", "Four-cell tiles", *EXPECTED_GROUP_ORDER[1:]]
+    plates, rail = _rail_plates(job)
+    assert rail.plate == plates[-1]
+    assert sum(p.plate == rail.plate for p in job.print_placements) > 1
+    assert all(p.x >= 64.9 for p in job.print_placements if p.plate == rail.plate)
+    assert job.prime_tower_positions[rail.plate] == (35.5, 15)
+    assert job.prime_tower_clearances[rail.plate].right == 1.5
+    assert all(job.prime_tower_positions[p] == (223, 15) for p in plates[:-1])
+    four_cell = [
+        placement.plate
+        for design, placement in zip(job.designs, job.print_placements)
+        if "family" not in design.parameters
+        and 4 in (design.parameters["nx"], design.parameters["ny"])
+    ]
+    assert {job.plate_names[p].rsplit(" ", 1)[0] for p in four_cell} == {"Four-cell tiles"}
+    assert all(job.prime_tower_positions[p] == (35.5, 15) for p in four_cell)
 
 
 @pytest.mark.parametrize(
@@ -210,7 +250,7 @@ def test_real_x2d_catalogue_solids_and_prepared_placements_stay_in_reach(
     job = dual_safe_catalogue_job(X2D, auto_roof_support=True)
     assert real_catalogue_group
     assert len(real_catalogue_group) == len(set(real_catalogue_group))
-    assert len(job.designs) + len(job.omitted) == 130
+    assert len(job.designs) + len(job.omitted) == 132
     assert {
         tuple(d.parameters[k] for k in ("nx", "ny"))
         for d in job.designs
@@ -255,6 +295,12 @@ def test_real_x2d_catalogue_solids_and_prepared_placements_stay_in_reach(
     assert max(rod.bambu_size[:2]) < 191
     if group == "30mm edges and corners - complete holes":
         _assert_wide_perimeter_plan(job, group)
+    if group == "Rails and connectors":
+        plates, rail = _rail_plates(job)
+        assert len(plates) == 2 and rail.plate == plates[-1]
+        assert sum(p.plate == rail.plate for p in job.print_placements) == 4
+        assert (rail.x, rail.y) == (64.9, 5)
+        assert job.prime_tower_positions[rail.plate] == (35.5, 15)
 
 
 def _assert_wide_perimeter_plan(job, group):

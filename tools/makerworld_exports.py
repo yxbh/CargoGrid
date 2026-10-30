@@ -13,7 +13,10 @@ example
 ``CargoGrid_H2D_Full-Catalogue_Solid-Bottom-1.92mm_Auto-Support_0.8mm-Nozzle``.
 
 With ``--bambu-studio PATH`` every plate is also sliced by that Bambu Studio executable, once
-with PETG on each nozzle, before anything is written. The check copy gets the full printer,
+with PETG on each nozzle, before anything is written. A variant's plates are sliced as soon as
+it is generated, on one pool of slices shared by every variant. Slices and generation share
+the same memory budget; ``--slice-jobs`` limits how many Bambu Studio processes run at once,
+counting the preparation of each check with the slices. The check copy gets the full printer,
 process and filament profiles from that installation and a fixed filament-to-nozzle map; the
 written project is unchanged. Any G-code path conflict or unprintable plate stops the run.
 Generated extrusion must stay inside the bed; only support features have a small XY
@@ -22,18 +25,49 @@ manifest's reserved footprint.
 MakerWorld re-slices uploads and rejects the same conflicts, which the Bambu Studio GUI only
 shows as a warning on the plate being previewed.
 
+Plates that slice cleanly are remembered in ``.local/makerworld/slice-cache``, keyed by
+everything that decides the result: the plate's objects, meshes and placements, the project
+and check settings, the nozzle map, the reserved tower footprint, the Bambu Studio executable
+and profile files, and this checking code. An identical plate is not sliced again, whether it
+comes from another variant in the same run or from an earlier run. The settings Bambu Studio
+resolves for a project are kept there too, by checker and project settings, so a check whose
+plates are all cached starts no Bambu Studio process. Refused plates are always sliced again.
+``--no-slice-cache`` slices every plate and leaves the cache alone; the folder can be deleted
+at any time.
+
+Each finished variant, its manifest and a clean check result are kept in
+``.local/makerworld/staging``, under a key made from the generator source files, the code in
+this script that lists and generates variants, the Python environment and the variant's
+arguments. A rerun after a crash or a refused plate
+reuses them instead of building those variants again; ``--no-resume`` builds every variant
+again. Staged builds from other source files are removed at the start of a run, unless a run
+that is still going holds them. The named files are still written only once every selected
+variant is present and checked.
+
+``--publish FOLDER`` writes into an existing folder, such as the one the MakerWorld files are
+uploaded from, instead of ``--output``. It needs ``--bambu-studio``. Files with identical bytes
+are left alone; each replaced file is moved into ``old-<date>`` in that folder first, dated by
+the replaced files, and a line per file says what changed: which plates and designs in a
+project, which fields in a manifest. Nothing is uploaded.
+
 ``--set NAME`` builds only that set, for every nozzle; repeat it for more than one set.
 ``--printer x2d`` selects the 256 mm printer instead of the default H2D; repeat the option
 with ``--printer h2d --printer x2d`` to build both.
 
-    uv run python tools/makerworld_exports.py --output FOLDER [--replace] [--jobs N]
+    uv run python tools/makerworld_exports.py (--output FOLDER [--replace] | --publish FOLDER)
+        [--jobs N]
         [--printer h2d|x2d ...]
         [--set Full-Catalogue|Zeekr-7X-Expansion-Set|Pull-Handle-Set|Adjustable-Stop|
                Cross-Post-Set ...]
         [--bambu-studio /Applications/BambuStudio.app/Contents/MacOS/BambuStudio]
+        [--slice-jobs N] [--no-slice-cache] [--no-resume]
 """
 
 import argparse
+import ast
+import filecmp
+import hashlib
+import itertools
 import json
 import os
 import re
@@ -41,11 +75,20 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from concurrent.futures import ThreadPoolExecutor
+import threading
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime
+from itertools import chain
 from pathlib import Path
-from zipfile import ZIP_DEFLATED, ZipFile
+from zipfile import ZIP64_LIMIT, ZIP_DEFLATED, BadZipFile, ZipFile
 
+from publish_guard import manifest_changes
+from test_selection import digest, environment
+
+import cargo_grid
+from cargo_grid import parameters, printers, sliced_extrusion
 from cargo_grid.footprints import PACKING_WORKERS_ENV
 from cargo_grid.printers import PRINTERS, DualNozzlePrinter, NozzleProfiles, bambu_flush_settings
 from cargo_grid.sliced_extrusion import reach_problem
@@ -60,7 +103,30 @@ CROSS_POST_SET = (("extras", "cross-post"), "Cross-Post-Set")
 EXTRA_SETS = (HANDLE_SET, ADJUSTABLE_STOP_SET, CROSS_POST_SET)
 SET_NAMES = tuple(title for _, title in (*SETS, *EXTRA_SETS))
 SUFFIXES = {"job.3mf": ".3mf", "manifest.json": ".manifest.json"}
+# Budget for one generator, search worker or Bambu Studio process. A slice of an H2D
+# catalogue plate, the largest project, peaked at 2.4 GB with Bambu Studio 02.08.02.61.
 PROCESS_MEMORY_BYTES = 3 * 1024**3
+# Local state: the slice cache and staged variants. Tests point this elsewhere.
+STATE_ENV = "CARGO_GRID_MAKERWORLD_STATE"
+CACHE_FORMAT = 1
+STAGING_FORMAT = 1
+# Modules whose code decides a check result, and where this script's own check code starts.
+CHECK_MODULES = (parameters, printers, sliced_extrusion)
+CHECK_ROOTS = ("check", "bambu_check", "Slicer", "SliceCache", "CACHE_FORMAT")
+# Where this script's code that decides a generated variant starts.
+GENERATION_ROOTS = ("variants", "generate", "staged_name", "STAGING_FORMAT")
+
+
+def state_folder() -> Path:
+    return Path(
+        os.environ.get(STATE_ENV) or Path(__file__).resolve().parents[1] / ".local" / "makerworld"
+    )
+
+
+def say(line: str) -> None:
+    """Print one progress line in a single write, so lines from check threads stay whole."""
+    sys.stdout.write(f"{line}\n")
+    sys.stdout.flush()
 
 
 def _available_memory_bytes() -> int:
@@ -109,6 +175,48 @@ def _process_capacity() -> tuple[int, int]:
     memory = _available_memory_bytes()
     usable = max(0, memory - max(2 * 1024**3, memory // 4))
     return cores, max(1, usable // PROCESS_MEMORY_BYTES)
+
+
+class Capacity:
+    """Memory slots shared by variant generation and Bambu Studio slices.
+
+    Generation reserves its slots for the variants it is building or still has to build; a
+    slice starts only when one of the remaining slots is free.
+    """
+
+    def __init__(self, slots: int):
+        self.slots = max(1, slots)
+        self._reserved = 0
+        self._running = 0
+        self._closed = False
+        self._condition = threading.Condition()
+
+    def reserve(self, count: int) -> None:
+        with self._condition:
+            self._reserved = count
+            self._condition.notify_all()
+
+    def close(self) -> None:
+        """Refuse slices that have not started, after a failure elsewhere in the run."""
+        with self._condition:
+            self._closed = True
+            self._condition.notify_all()
+
+    @contextmanager
+    def slot(self):
+        with self._condition:
+            self._condition.wait_for(
+                lambda: self._closed or self._reserved + self._running < self.slots
+            )
+            if self._closed:
+                raise RuntimeError("the run stopped before this slice started")
+            self._running += 1
+        try:
+            yield
+        finally:
+            with self._condition:
+                self._running -= 1
+                self._condition.notify_all()
 
 
 @dataclass(frozen=True)
@@ -260,8 +368,8 @@ def effective_settings(project: Path, bambu: Path, work: Path) -> dict:
     return effective
 
 
-def check_copy(project: Path, effective: dict, mapping: tuple[str, ...], target: Path) -> int:
-    """Write a sliceable copy with a fixed nozzle map; return its plate count."""
+def check_settings(effective: dict, mapping: tuple[str, ...]) -> str:
+    """The check copy's project settings: the effective settings with a fixed nozzle map."""
     settings = dict(effective)
     count = len(settings["filament_settings_id"])
     extruders = len(settings["nozzle_diameter"])
@@ -275,22 +383,41 @@ def check_copy(project: Path, effective: dict, mapping: tuple[str, ...], target:
         extruder_nozzle_stats=["Standard#1"] * extruders,
     )
     settings.update(bambu_flush_settings(count, extruders))
+    return json.dumps(settings, indent=2)
+
+
+def check_copy(project: Path, effective: dict, mapping: tuple[str, ...], target: Path) -> int:
+    """Write a sliceable copy with a fixed nozzle map; return its plate count."""
+    settings = check_settings(effective, mapping)
+    mapping = tuple(mapping[: len(effective["filament_settings_id"])])
     plates = 0
-    with ZipFile(project) as original, ZipFile(target, "w", ZIP_DEFLATED) as copy:
+    # The copy is only read by Bambu Studio, so the large model is streamed at a fast level.
+    with (
+        ZipFile(project) as original,
+        ZipFile(target, "w", ZIP_DEFLATED, compresslevel=1) as copy,
+    ):
         for entry in original.infolist():
-            data = original.read(entry)
             if entry.filename == "Metadata/project_settings.config":
-                data = json.dumps(settings, indent=2).encode()
+                copy.writestr(entry.filename, settings)
             elif entry.filename == "Metadata/model_settings.config":
-                text = data.decode()
+                text = original.read(entry).decode()
                 plates = text.count("<plate>")
-                text = text.replace(
-                    '<metadata key="filament_map_mode" value="Auto For Match" />',
-                    '<metadata key="filament_map_mode" value="Manual" />'
-                    f'<metadata key="filament_maps" value="{" ".join(mapping)}" />',
+                copy.writestr(
+                    entry.filename,
+                    text.replace(
+                        '<metadata key="filament_map_mode" value="Auto For Match" />',
+                        '<metadata key="filament_map_mode" value="Manual" />'
+                        f'<metadata key="filament_maps" value="{" ".join(mapping)}" />',
+                    ),
                 )
-                data = text.encode()
-            copy.writestr(entry, data)
+            else:
+                with (
+                    original.open(entry) as source,
+                    copy.open(
+                        entry.filename, "w", force_zip64=entry.file_size >= ZIP64_LIMIT
+                    ) as destination,
+                ):
+                    shutil.copyfileobj(source, destination, 16 * 1024**2)
     return plates
 
 
@@ -327,45 +454,810 @@ def slice_plate(
     return found[0].strip() if found else f"Bambu Studio exited with code {code}"
 
 
-def bambu_problems(
+def check_code() -> str:
+    """Source of the definitions in this script that a check result depends on.
+
+    Editing the variant list or how files are written keeps cached plates.
+    """
+    return script_code(CHECK_ROOTS)
+
+
+def script_code(roots: tuple[str, ...]) -> str:
+    """Source of the definitions in this script reached from ``roots`` by the names they use."""
+    source = Path(__file__).read_text()
+    definitions = {}
+    for node in ast.parse(source).body:
+        if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+            definitions[node.name] = node
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            for target in node.targets if isinstance(node, ast.Assign) else [node.target]:
+                definitions.update(
+                    (name.id, node) for name in ast.walk(target) if isinstance(name, ast.Name)
+                )
+    pending, used = list(roots), {}
+    while pending:
+        name = pending.pop()
+        if name in used or name not in definitions:
+            continue
+        used[name] = definitions[name]
+        pending += [node.id for node in ast.walk(used[name]) if isinstance(node, ast.Name)]
+    return "\n".join(ast.get_source_segment(source, used[name]) for name in sorted(used))
+
+
+def checker_identity(bambu: Path) -> str:
+    """Digest of the Bambu Studio executable, its profile files and the checking code."""
+    resources = _profiles(bambu).parents[1]
+    hasher = hashlib.sha256(f"{sys.version}\0{check_code()}\n".encode())
+    named = [("executable", bambu)]
+    info = bambu.parents[1] / "Info.plist"
+    if info.is_file():
+        named.append(("Info.plist", info))
+    for folder in (resources / "profiles", resources / "printers"):
+        named += [
+            (path.relative_to(resources).as_posix(), path)
+            for path in sorted(folder.rglob("*"))
+            if path.is_file()
+        ]
+    named += [(module.__name__, Path(module.__file__)) for module in CHECK_MODULES]
+    for name, path in named:
+        hasher.update(f"{name}\0{digest(path.read_bytes())}\n".encode())
+    return hasher.hexdigest()
+
+
+MODEL = "3D/3dmodel.model"
+PLATE_SETTINGS = "Metadata/model_settings.config"
+PROJECT_SETTINGS = "Metadata/project_settings.config"
+# Component lists are read from objects up to this size; a larger object must be a mesh.
+WHOLE_OBJECT_BYTES = 1024**2
+TAG_ID = re.compile(rb'\sid="([^"]+)"')
+COMPONENT = re.compile(rb'<component\b[^>]*\bobjectid="([^"]+)"')
+ITEM = re.compile(rb"<item\b[^>]*/>")
+ITEM_OBJECT = re.compile(rb'\bobjectid="([^"]+)"')
+OBJECT_SETTINGS = re.compile(r'<object id="([^"]+)">.*?</object>', re.S)
+PLATE = re.compile(r"<plate>.*?</plate>", re.S)
+INSTANCE_OBJECT = re.compile(r'<metadata key="object_id" value="([^"]+)" />')
+
+
+def model_digests(stream) -> tuple[str, dict[str, str], dict[str, list[str]], dict[str, list]]:
+    """Digest each resource object and build item of a 3MF model, and everything else.
+
+    Streams the model, which holds every mesh of a catalogue. Returns the digest of the bytes
+    outside objects and items, object digests and component ids by object id, and item digests
+    by the object they place. Anything unexpected raises ``ValueError``.
+    """
+    rest = bytearray()
+    objects, components = {}, {}
+    buffer = b""
+    current = None
+    for chunk in chain(iter(lambda: stream.read(16 * 1024**2), b""), [b""]):
+        final = not chunk
+        buffer += chunk
+        view = memoryview(buffer)
+        position = 0
+        while True:
+            if current is None:
+                start = buffer.find(b"<object", position)
+                if start < 0:
+                    # Keep a possible partial "<object" for the next chunk.
+                    stop = len(buffer) if final else max(position, len(buffer) - 6)
+                    rest += view[position:stop]
+                    position = stop
+                    break
+                rest += view[position:start]
+                position = start
+                close = buffer.find(b">", start)
+                if close < 0:
+                    if final:
+                        raise ValueError("unterminated <object> tag")
+                    break
+                identity = TAG_ID.search(buffer, start, close + 1)
+                if buffer[start + 7 : start + 8] not in b" \t\r\n>" or identity is None:
+                    raise ValueError("unexpected <object> tag")
+                current = [identity[1].decode(), hashlib.sha256(), bytearray(), 0]
+            end = buffer.find(b"</object>", position)
+            if end < 0 and final:
+                raise ValueError(f"unterminated object {current[0]}")
+            stop = end + 9 if end >= 0 else max(position, len(buffer) - 8)
+            identity, hasher, head, size = current
+            hasher.update(view[position:stop])
+            head += view[position : min(stop, position + max(0, WHOLE_OBJECT_BYTES - len(head)))]
+            current[3] = size = size + stop - position
+            position = stop
+            if end < 0:
+                break
+            if identity in objects:
+                raise ValueError(f"object {identity} appears twice")
+            if size > WHOLE_OBJECT_BYTES and b"<component" in head:
+                raise ValueError(f"object {identity} is too large to read its components")
+            components[identity] = [match.decode() for match in COMPONENT.findall(head)]
+            objects[identity] = hasher.hexdigest()
+            current = None
+        view.release()
+        buffer = buffer[position:]
+        if final:
+            break
+    rest = bytes(rest)
+    items = {}
+    for match in ITEM.finditer(rest):
+        placed = ITEM_OBJECT.search(match[0])
+        if placed is None:
+            raise ValueError("build item without an object")
+        items.setdefault(placed[1].decode(), []).append(digest(match[0]))
+    if rest.count(b"<item") != sum(map(len, items.values())):
+        raise ValueError("build items with child elements")
+    return digest(ITEM.sub(b"", rest)), objects, components, items
+
+
+def plate_fingerprints(project: Path) -> tuple[dict, list[dict]]:
+    """What one plate's slice depends on in a project, apart from its project settings.
+
+    Returns what every plate shares (other archive members, the model and plate settings
+    outside objects and plates, and the plate count), then each plate's own settings block
+    with the settings, meshes, components and placements of its objects.
+    """
+    with ZipFile(project) as archive:
+        members = [
+            (entry.filename, digest(archive.read(entry)))
+            for entry in archive.infolist()
+            if entry.filename not in (MODEL, PLATE_SETTINGS, PROJECT_SETTINGS)
+        ]
+        with archive.open(MODEL) as stream:
+            model, objects, components, items = model_digests(stream)
+        text = archive.read(PLATE_SETTINGS).decode()
+    plates = PLATE.findall(text)
+    if len(plates) != text.count("<plate>"):
+        raise ValueError("nested or unterminated plates")
+    # Objects reach a key only through their plate, so every instance and item must be read.
+    instances = [INSTANCE_OBJECT.findall(plate) for plate in plates]
+    if [len(found) for found in instances] != [plate.count("<model_instance>") for plate in plates]:
+        raise ValueError("a plate instance without a readable object id")
+    if not set(items) <= set(chain.from_iterable(instances)):
+        raise ValueError("a build item for an object on no plate")
+    settings = {match[1]: digest(match[0].encode()) for match in OBJECT_SETTINGS.finditer(text)}
+
+    def meshes(identity: str, seen: tuple[str, ...] = ()) -> list[str]:
+        if identity in seen or identity not in objects:
+            raise ValueError(f"object {identity} is missing or contains itself")
+        return [objects[identity]] + [
+            value for child in components[identity] for value in meshes(child, (*seen, identity))
+        ]
+
+    shared = {
+        "members": members,
+        "model": model,
+        "plate_settings": digest(PLATE.sub("", OBJECT_SETTINGS.sub("", text)).encode()),
+        "plates": len(plates),
+    }
+    return shared, [
+        {
+            "plate": digest(plate.encode()),
+            "objects": [
+                {
+                    "settings": settings.get(identity),
+                    "meshes": meshes(identity),
+                    "items": items.get(identity, []),
+                }
+                for identity in found
+            ],
+        }
+        for plate, found in zip(plates, instances)
+    ]
+
+
+def plate_keys(
+    project: Path, effective: dict, reservations: dict, checker: str
+) -> dict[tuple[str, ...], list[str]]:
+    """Cache keys of every plate for each nozzle map, in plate order."""
+    shared, plates = plate_fingerprints(project)
+    keys = {}
+    for mapping in NOZZLE_MAPS:
+        settings = digest(check_settings(effective, mapping).encode())
+        keys[mapping] = [
+            digest(
+                json.dumps(
+                    {
+                        "format": CACHE_FORMAT,
+                        "checker": checker,
+                        "check_settings": settings,
+                        "nozzle_map": mapping,
+                        "project": shared,
+                        "plate": plate,
+                        "reserved_tower": reservations.get(number),
+                    },
+                    sort_keys=True,
+                ).encode()
+            )
+            for number, plate in enumerate(plates, 1)
+        ]
+    return keys
+
+
+class SliceCache:
+    """Clean plate slices and resolved settings from earlier runs, and plates claimed in this run."""
+
+    def __init__(self, folder: Path, checker: str):
+        self.folder = folder
+        self.checker = checker
+        self._lock = threading.Lock()
+        self._claimed: dict[str, Future] = {}
+
+    def _path(self, key: str) -> Path:
+        return self.folder / f"{key}.json"
+
+    def claim(self, key: str) -> tuple[Future, str]:
+        """The plate's result and where it comes from: cached, shared or new.
+
+        Whoever gets ``new`` must slice the plate and pass its future to ``follow``, or call
+        ``abandon``; other variants in this run wait for that result.
+        """
+        with self._lock:
+            if key in self._claimed:
+                return self._claimed[key], "shared"
+            future = Future()
+            try:
+                stored = json.loads(self._path(key).read_text())
+            except (OSError, ValueError):
+                stored = None
+            if stored and stored.get("key") == key and stored.get("result") == "clean":
+                future.set_result(None)
+                return future, "cached"
+            self._claimed[key] = future
+            return future, "new"
+
+    def follow(self, key: str, sliced: Future, record: dict) -> None:
+        claimed = self._claimed[key]
+
+        def settle(done: Future) -> None:
+            # Callback exceptions are only logged, so the claimed result is always set.
+            if done.cancelled():
+                claimed.cancel()
+            elif done.exception() is not None:
+                claimed.set_exception(done.exception())
+            else:
+                try:
+                    if done.result() is None:
+                        self._store(key, record)
+                except OSError as error:
+                    say(f"Could not keep a clean plate in the slice cache: {error}")
+                finally:
+                    claimed.set_result(done.result())
+
+        sliced.add_done_callback(settle)
+
+    def abandon(self, key: str, error: BaseException) -> None:
+        self._claimed[key].set_exception(error)
+
+    def _store(self, key: str, record: dict) -> None:
+        self.folder.mkdir(parents=True, exist_ok=True)
+        _write_json(
+            self._path(key),
+            {"key": key, "result": "clean", **record, "checked": datetime.now().isoformat()},
+        )
+
+    def _settings_path(self, generated: bytes) -> Path:
+        # The checker covers the executable, the named profiles' files and the resolving code.
+        key = {"format": CACHE_FORMAT, "checker": self.checker, "project": digest(generated)}
+        return self.folder / "settings" / f"{digest(json.dumps(key, sort_keys=True).encode())}.json"
+
+    def settings(self, generated: bytes) -> dict | None:
+        """Effective settings resolved earlier for these project settings bytes, if kept."""
+        path = self._settings_path(generated)
+        try:
+            stored = json.loads(path.read_text())
+        except (OSError, ValueError):
+            return None
+        if isinstance(stored, dict) and stored.get("key") == path.stem:
+            return stored.get("effective")
+        return None
+
+    def keep_settings(self, generated: bytes, effective: dict) -> None:
+        path = self._settings_path(generated)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            _write_json(
+                path,
+                {"key": path.stem, "effective": effective, "resolved": datetime.now().isoformat()},
+            )
+        except OSError as error:
+            say(f"Could not keep resolved settings in the slice cache: {error}")
+
+
+class Slicer:
+    """One pool of Bambu Studio slices shared by every variant in a run.
+
+    At most ``jobs`` Bambu Studio processes run at once, counting profile resolution and check
+    copies with the slices, and each one takes a memory slot.
+    """
+
+    def __init__(
+        self,
+        bambu: Path,
+        pool: ThreadPoolExecutor,
+        capacity: Capacity,
+        cache: SliceCache | None = None,
+        checker: str | None = None,
+        *,
+        jobs: int,
+    ):
+        self.bambu = bambu
+        self.pool = pool
+        self.capacity = capacity
+        self.cache = cache
+        self.checker = checker if cache is None else cache.checker
+        self._turns = threading.BoundedSemaphore(jobs)
+
+    @contextmanager
+    def process(self):
+        """One of the ``jobs`` turns, inside a free memory slot."""
+        with self._turns, self.capacity.slot():
+            yield
+
+    def submit(self, project: Path, plate: int, work: Path, reserved_tower=None):
+        return self.pool.submit(self._slice, project, plate, work, reserved_tower)
+
+    def _slice(self, project: Path, plate: int, work: Path, reserved_tower):
+        with self.process():
+            return slice_plate(self.bambu, project, plate, work, reserved_tower=reserved_tower)
+
+
+@dataclass
+class Check:
+    """What the Bambu Studio check found for one project."""
+
+    problems: list[str]
+    slices: int = 0
+    cached: int = 0
+    shared: int = 0
+
+
+def bambu_check(
     project: Path,
-    bambu: Path,
     work: Path,
-    jobs: int,
+    slicer: Slicer,
     tower_bounds: dict[int, tuple[float, ...]] | None = None,
-) -> list[str]:
-    """Slice every plate with PETG on each nozzle; list what Bambu Studio refuses."""
+) -> Check:
+    """Slice every plate with PETG on each nozzle, reusing clean results the cache holds.
+
+    Resolving profiles and writing a check copy each take a process turn, given back before
+    waiting for any slice. A check whose settings and plates are all cached starts no Bambu
+    Studio process.
+    """
     work.mkdir(parents=True)
-    effective = effective_settings(project, bambu, work)
-    printer = next(p for p in PRINTERS.values() if p.model == effective["printer_model"])
+    reservations = tower_bounds or {}
+    cache = slicer.cache
+    effective = None
+    if cache is not None:
+        with ZipFile(project) as archive:
+            generated = archive.read(PROJECT_SETTINGS)
+        effective = cache.settings(generated)
+    if effective is None:
+        with slicer.process():
+            effective = effective_settings(project, slicer.bambu, work)
+        if cache is not None:
+            cache.keep_settings(generated, effective)
+    keys = None
+    if cache is not None:
+        try:
+            keys = plate_keys(project, effective, reservations, cache.checker)
+        except ValueError as error:
+            say(f"{project}: slicing every plate without the cache: {error}")
+    result = Check([])
     tasks = []
     for mapping in NOZZLE_MAPS:
         folder = work / f"petg-nozzle-{mapping[0]}"
         folder.mkdir()
         copy = folder / "check.3mf"
-        plates = check_copy(project, effective, mapping, copy)
-        tasks += [(mapping, copy, plate, folder) for plate in range(1, plates + 1)]
-    with ThreadPoolExecutor(jobs) as pool:
-        reservations = tower_bounds or {}
-        results = list(
-            pool.map(
-                lambda task: slice_plate(
-                    bambu, *task[1:], reserved_tower=reservations.get(task[2])
-                ),
-                tasks,
-            )
-        )
-    return [
+        if keys is None:
+            with slicer.process():
+                plates = check_copy(project, effective, mapping, copy)
+            tasks += [
+                (mapping, plate, slicer.submit(copy, plate, folder, reservations.get(plate)))
+                for plate in range(1, plates + 1)
+            ]
+            continue
+        copied = False
+        for plate, key in enumerate(keys[mapping], 1):
+            future, origin = cache.claim(key)
+            if origin == "new":
+                try:
+                    if not copied:
+                        with slicer.process():
+                            check_copy(project, effective, mapping, copy)
+                        copied = True
+                    sliced = slicer.submit(copy, plate, folder, reservations.get(plate))
+                except BaseException as error:
+                    cache.abandon(key, error)
+                    raise
+                cache.follow(key, sliced, {"plate": plate, "nozzle_map": list(mapping)})
+            result.cached += origin == "cached"
+            result.shared += origin == "shared"
+            tasks.append((mapping, plate, future))
+    printer = next(p for p in PRINTERS.values() if p.model == effective["printer_model"])
+    result.slices = len(tasks)
+    result.problems = [
         f"plate {plate} with PETG on the {printer.nozzles[int(mapping[0]) - 1].name} nozzle: "
         f"{problem}"
-        for (mapping, _, plate, _), problem in zip(tasks, results)
-        if problem
+        for mapping, plate, future in tasks
+        if (problem := future.result())
     ]
+    return result
+
+
+def reserved_towers(manifest: dict) -> dict[int, tuple[float, ...]] | None:
+    """Rectangular tower footprints the slices must stay inside, by plate."""
+    tower = manifest["export"].get("prime_tower", {})
+    if "prime_tower_width" not in tower.get("process_settings", {}):
+        return None
+    return {
+        plate["plate"]: tuple(plate["reserved_extrusion_bounds_mm"]) for plate in tower["plates"]
+    }
+
+
+def check(variant: Variant, folder: Path, slicer: Slicer, scratch: Path) -> list[str]:
+    manifest = json.loads((folder / "manifest.json").read_text())
+    found = bambu_check(
+        folder / "job.3mf", scratch / f"{variant.name}-check", slicer, reserved_towers(manifest)
+    )
+    result = (
+        f"{len(found.problems)} plate slices refused" if found.problems else "every plate sliced"
+    )
+    reused = []
+    if found.cached:
+        reused.append(f"{found.cached} from the slice cache")
+    if found.shared:
+        reused.append(f"{found.shared} shared with another variant")
+    detail = f"{found.slices} plate slices" + (f": {', '.join(reused)}" if reused else "")
+    say(f"{variant.name}: Bambu Studio check, {result} ({detail})")
+    if not found.problems and slicer.checker is not None:
+        _write_json(
+            checked_record(folder, slicer.checker),
+            {
+                "checker": slicer.checker,
+                "slices": found.slices,
+                "checked": datetime.now().isoformat(),
+            },
+        )
+    return [f"{variant.name}: {problem}" for problem in found.problems]
+
+
+def _write_json(path: Path, value: dict) -> None:
+    temporary = path.with_name(f".{path.name}.{threading.get_ident()}.tmp")
+    try:
+        temporary.write_text(json.dumps(value, indent=2))
+        os.replace(temporary, path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def source_identity() -> dict:
+    """What decides generated projects: the generator files, this script's variants and Python.
+
+    Only the code reached from ``GENERATION_ROOTS`` counts, so editing the check or publishing
+    steps keeps staged variants.
+    """
+    package = Path(cargo_grid.__file__).resolve().parent
+    hasher = hashlib.sha256(f"{script_code(GENERATION_ROOTS)}\n".encode())
+    files = [
+        (path.relative_to(package).as_posix(), path)
+        for path in sorted(package.rglob("*"))
+        if path.is_file() and "__pycache__" not in path.parts and not path.name.startswith(".")
+    ]
+    for name, path in files:
+        hasher.update(f"{name}\0{digest(path.read_bytes())}\n".encode())
+    return {
+        "format": STAGING_FORMAT,
+        "source": hasher.hexdigest(),
+        "environment": environment(Path(__file__).resolve().parents[1]),
+    }
+
+
+def commit() -> str | None:
+    """The checked-out commit, marked when there are local changes; recorded, not a key."""
+    root = Path(__file__).resolve().parents[1]
+    try:
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, check=True
+        ).stdout.strip()
+        dirty = subprocess.run(
+            ["git", "status", "--porcelain"], cwd=root, capture_output=True, text=True, check=True
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return f"{head}+local-changes" if dirty else head
+
+
+def _running(pid: int) -> bool:
+    """Whether a process is alive, so what a stopped run left behind can be removed."""
+    if sys.platform == "win32":
+        return True  # signal 0 is CTRL_C_EVENT there; leave other runs' folders alone
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
+@contextmanager
+def holding(folder: Path):
+    """Mark ``folder`` as used by this run, so runs from other sources leave it alone."""
+    folder.mkdir(parents=True, exist_ok=True)
+    marker = folder / f".run-{os.getpid()}"
+    marker.touch()
+    try:
+        yield
+    finally:
+        marker.unlink(missing_ok=True)
+
+
+def held(folder: Path) -> bool:
+    """Whether a live run holds ``folder``; markers left by stopped runs are removed."""
+    live = False
+    for marker in folder.glob(".run-*"):
+        pid = marker.name.removeprefix(".run-")
+        if pid.isdigit() and _running(int(pid)):
+            live = True
+        else:
+            marker.unlink(missing_ok=True)
+    return live
+
+
+def staged_name(variant: Variant) -> str:
+    return f"{variant.name}-{digest(json.dumps(variant.arguments).encode())[:12]}"
+
+
+def checked_record(folder: Path, checker: str) -> Path:
+    return folder / f"check-{checker[:16]}.json"
+
+
+def build(
+    selected: list[Variant],
+    staging: Path,
+    scratch: Path,
+    *,
+    jobs: int,
+    packing_workers: int,
+    capacity: Capacity,
+    slicer: Slicer | None = None,
+    resume: bool = True,
+    reuse_checks: bool = True,
+    record: dict | None = None,
+) -> tuple[list[Path], list[str]]:
+    """Generate and check every variant, keeping each finished one in ``staging``.
+
+    A variant already staged under the same key is reused when ``resume`` is set, and so is
+    its clean check when ``reuse_checks`` is also set. Each check starts as soon as its variant
+    exists.
+    """
+    staging.mkdir(parents=True, exist_ok=True)
+    for partial in staging.glob(".partial-*"):
+        pid = partial.name.split("-")[1]
+        if pid.isdigit() and not _running(int(pid)):
+            shutil.rmtree(partial, ignore_errors=True)
+    share = 1 + packing_workers
+    folders = {variant: staging / staged_name(variant) for variant in selected}
+    ready = [
+        variant for variant in selected if resume and (folders[variant] / "variant.json").is_file()
+    ]
+    missing = [variant for variant in selected if variant not in ready]
+
+    def staged_generate(variant: Variant) -> Path:
+        partial = Path(tempfile.mkdtemp(prefix=f".partial-{os.getpid()}-", dir=staging))
+        try:
+            folder = generate(variant, partial, packing_workers=packing_workers)
+            _write_json(
+                folder / "variant.json",
+                {
+                    **(record or {}),
+                    "name": variant.name,
+                    "arguments": list(variant.arguments),
+                    "generated": datetime.now().isoformat(),
+                },
+            )
+            if folders[variant].exists():
+                shutil.rmtree(folders[variant])
+            folder.rename(folders[variant])
+        finally:
+            shutil.rmtree(partial, ignore_errors=True)
+        return folders[variant]
+
+    checks = {}
+    with (
+        ThreadPoolExecutor(jobs) as generation,
+        ThreadPoolExecutor(len(selected)) as checking,
+    ):
+        pools = (generation, checking, *((slicer.pool,) if slicer else ()))
+
+        def start_check(variant: Variant) -> Future | None:
+            if slicer is None:
+                return None
+            if (
+                resume
+                and reuse_checks
+                and slicer.checker is not None
+                and checked_record(folders[variant], slicer.checker).is_file()
+            ):
+                say(f"{variant.name}: Bambu Studio check, every plate sliced earlier")
+                return None
+            checks[variant] = checking.submit(check, variant, folders[variant], slicer, scratch)
+            return checks[variant]
+
+        try:
+            # Generation's memory is reserved before any check can take a slot.
+            capacity.reserve(min(jobs, len(missing)) * share)
+            generating = {
+                generation.submit(staged_generate, variant): variant for variant in missing
+            }
+            for variant in ready:
+                say(f"{variant.name}: generated earlier, in {folders[variant]}")
+                start_check(variant)
+            # Wait for generation and checks together, so the first failure stops the run.
+            waiting = {*generating, *checks.values()}
+            while waiting:
+                finished, waiting = wait(waiting, return_when=FIRST_COMPLETED)
+                for future in finished:
+                    future.result()
+                    if future not in generating:
+                        continue
+                    variant = generating.pop(future)
+                    capacity.reserve(min(jobs, len(generating)) * share)
+                    say(f"{variant.name}: generated")
+                    if (started := start_check(variant)) is not None:
+                        waiting.add(started)
+            problems = [
+                problem
+                for variant in selected
+                if variant in checks
+                for problem in checks[variant].result()
+            ]
+        except BaseException:
+            capacity.close()
+            for pool in pools:
+                pool.shutdown(wait=False, cancel_futures=True)
+            raise
+    return [folders[variant] for variant in selected], problems
+
+
+BATCH_SUFFIX = re.compile(r"_batch_\d+$")
+PLATE_NAME = re.compile(r'<metadata key="plater_name" value="([^"]*)" />')
+OBJECT_NAME = re.compile(r'<metadata key="name" value="([^"]*)" />')
+
+
+def _outline(project: Path) -> dict:
+    """A project's plates with their names, its designs by name and its project settings."""
+    _, fingerprints = plate_fingerprints(project)
+    with ZipFile(project) as archive:
+        text = archive.read(PLATE_SETTINGS).decode()
+        settings = digest(archive.read(PROJECT_SETTINGS))
+    names = {
+        match[1]: BATCH_SUFFIX.sub("", name[1])
+        for match in OBJECT_SETTINGS.finditer(text)
+        if (name := OBJECT_NAME.search(match[0]))
+    }
+    plates, designs = [], {}
+    for number, (plate, fingerprint) in enumerate(zip(PLATE.findall(text), fingerprints), 1):
+        name = PLATE_NAME.search(plate)
+        plates.append((f"{number} {name[1]}" if name else str(number), fingerprint))
+        for identity, item in zip(INSTANCE_OBJECT.findall(plate), fingerprint["objects"]):
+            designs.setdefault(names.get(identity, identity), []).append(item["meshes"])
+    return {
+        "plates": plates,
+        "designs": {name: sorted(meshes) for name, meshes in designs.items()},
+        "settings": settings,
+    }
+
+
+def project_changes(old: Path, new: Path) -> str:
+    """Which plates, designs and settings differ between two versions of a project."""
+    try:
+        before, after = _outline(old), _outline(new)
+    except (OSError, KeyError, ValueError, BadZipFile) as error:
+        return f"contents differ ({error})"
+    found = []
+    plates = [
+        label
+        for (label, fingerprint), (_, previous) in zip(after["plates"], before["plates"])
+        if fingerprint != previous
+    ]
+    if plates:
+        found.append(f"plates changed: {', '.join(plates)}")
+    if len(after["plates"]) != len(before["plates"]):
+        found.append(f"{len(before['plates'])} plates before, {len(after['plates'])} now")
+    old_designs, new_designs = before["designs"], after["designs"]
+    for label, names in (
+        (
+            "designs changed",
+            [n for n in new_designs if old_designs.get(n, new_designs[n]) != new_designs[n]],
+        ),
+        ("designs added", [n for n in new_designs if n not in old_designs]),
+        ("designs removed", [n for n in old_designs if n not in new_designs]),
+    ):
+        if names:
+            found.append(f"{label}: {', '.join(sorted(names))}")
+    if after["settings"] != before["settings"]:
+        found.append("project settings changed")
+    return "; ".join(found) or "same plates, designs and settings; other archive bytes differ"
+
+
+def manifest_differences(old: Path, new: Path) -> str:
+    try:
+        fields = [
+            change["path"]
+            for change in manifest_changes(json.loads(old.read_text()), json.loads(new.read_text()))
+        ]
+    except (OSError, ValueError) as error:
+        return f"contents differ ({error})"
+    if not fields:
+        return "same fields, different formatting"
+    return f"{len(fields)} fields changed, such as {', '.join(fields[:3])}"
+
+
+def publish(folder: Path, selected: list[Variant], staged: list[Path]) -> list[tuple[str, str]]:
+    """Copy new and changed files into ``folder``; return each file's status and summary.
+
+    Before a file is replaced it moves to ``old-<date>``, dated by the earliest modification
+    time of that variant's replaced files, or ``old-<date>-2`` and so on when that folder
+    already holds a file of the same name. Identical files are not touched.
+    """
+    lines = []
+    for variant, source in zip(selected, staged):
+        targets = destinations(folder, variant)
+        changed = {
+            name: destination
+            for name, destination in targets.items()
+            if destination.exists() and not filecmp.cmp(source / name, destination, shallow=False)
+        }
+        archive = None
+        if changed:
+            date = min(
+                datetime.fromtimestamp(path.stat().st_mtime) for path in changed.values()
+            ).date()
+            archive = next(
+                candidate
+                for count in itertools.count(1)
+                if not any(
+                    (candidate := folder / f"old-{date}{'' if count == 1 else f'-{count}'}")
+                    .joinpath(path.name)
+                    .exists()
+                    for path in changed.values()
+                )
+            )
+        for name, destination in targets.items():
+            if destination.exists() and name not in changed:
+                lines.append(("identical", f"{destination.name}: identical"))
+                continue
+            status, summary = "new", "new"
+            if name in changed:
+                describe = project_changes if name == "job.3mf" else manifest_differences
+                status = "changed"
+                summary = f"changed, previous copy in {archive.name}: "
+                summary += describe(destination, source / name)
+            # The new bytes are in place before the old file moves, so a failed copy keeps it.
+            temporary = destination.with_name(f".{destination.name}.publishing")
+            try:
+                shutil.copyfile(source / name, temporary)
+                if name in changed:
+                    archive.mkdir(exist_ok=True)
+                    shutil.move(destination, archive / destination.name)
+                os.replace(temporary, destination)
+            except BaseException:
+                temporary.unlink(missing_ok=True)
+                raise
+            lines.append((status, f"{destination.name}: {summary}"))
+    return lines
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--output", type=Path, required=True, help="folder for the named files")
+    target = parser.add_mutually_exclusive_group(required=True)
+    target.add_argument("--output", type=Path, help="folder for the named files")
+    target.add_argument(
+        "--publish",
+        type=Path,
+        help="existing folder to update, keeping replaced files in old-<date>; needs --bambu-studio",
+    )
     parser.add_argument(
         "--replace", action="store_true", help="replace files with the same names in --output"
     )
@@ -396,9 +1288,26 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         help="Bambu Studio executable used to slice every plate before anything is written",
     )
+    parser.add_argument(
+        "--slice-jobs",
+        type=int,
+        help="Bambu Studio slices at once; default one per core, within the shared memory budget",
+    )
+    parser.add_argument(
+        "--no-slice-cache",
+        action="store_true",
+        help="slice every plate again and leave the slice cache untouched",
+    )
+    parser.add_argument(
+        "--no-resume",
+        action="store_true",
+        help="build every variant again instead of reusing ones a stopped run finished",
+    )
     args = parser.parse_args(argv)
     if args.jobs is not None and args.jobs < 1:
         parser.error("--jobs must be at least 1")
+    if args.slice_jobs is not None and (args.slice_jobs < 1 or args.bambu_studio is None):
+        parser.error("--slice-jobs must be at least 1 and needs --bambu-studio")
     selected = [
         variant
         for variant in variants(tuple(args.printers or ("h2d",)))
@@ -411,14 +1320,21 @@ def main(argv: list[str] | None = None) -> int:
     cores, memory_slots = _process_capacity()
     jobs = min(args.jobs if args.jobs is not None else min(cores, memory_slots), len(selected))
     packing_workers = max(1, min(cores // jobs, memory_slots // jobs - 1))
-    if not args.output.is_dir():
+    if args.publish is not None:
+        if args.bambu_studio is None:
+            parser.error("--publish needs --bambu-studio, so only checked files are published")
+        if args.replace:
+            parser.error("--publish keeps replaced files in old-<date>; --replace is for --output")
+        if not args.publish.is_dir():
+            parser.error(f"--publish must be an existing folder: {args.publish}")
+    elif not args.output.is_dir():
         parser.error(f"--output must be an existing folder: {args.output}")
     if args.bambu_studio is not None and not args.bambu_studio.is_file():
         parser.error(f"--bambu-studio must be the Bambu Studio executable: {args.bambu_studio}")
     existing = [
         path
         for variant in selected
-        for path in destinations(args.output, variant).values()
+        for path in (destinations(args.output, variant).values() if args.output else ())
         if path.exists()
     ]
     if existing and not args.replace:
@@ -426,53 +1342,78 @@ def main(argv: list[str] | None = None) -> int:
             f"{len(existing)} files already exist, such as {existing[0].name}; "
             "pass --replace to overwrite them"
         )
-    with tempfile.TemporaryDirectory(prefix="cargo-grid-makerworld-") as temporary:
+    identity = source_identity()
+    staging = state_folder() / "staging"
+    current = staging / digest(json.dumps(identity, sort_keys=True).encode())[:16]
+    capacity = Capacity(memory_slots)
+    slice_jobs = args.slice_jobs if args.slice_jobs is not None else cores
+    with (
+        holding(current),
+        tempfile.TemporaryDirectory(prefix="cargo-grid-makerworld-") as temporary,
+        ThreadPoolExecutor(slice_jobs) as slices,
+    ):
+        for other in staging.iterdir():
+            if other == current or not other.is_dir():
+                continue
+            if held(other):
+                print(f"Kept {other.name}, in use by a run from other source files", flush=True)
+            else:
+                shutil.rmtree(other)
+                print(f"Removed {other.name}, staged from other source files", flush=True)
         scratch = Path(temporary)
         print(
             f"Generating {len(selected)} variants with {jobs} jobs; "
             f"at most {packing_workers} search workers per variant",
             flush=True,
         )
-        with ThreadPoolExecutor(jobs) as pool:
-            folders = list(
-                pool.map(
-                    lambda variant: generate(variant, scratch, packing_workers=packing_workers),
-                    selected,
-                )
-            )
+        slicer = None
         if args.bambu_studio is not None:
             bambu = args.bambu_studio.resolve()
-            problems = []
-            for variant, folder in zip(selected, folders):
-                manifest = json.loads((folder / "manifest.json").read_text())
-                tower = manifest["export"].get("prime_tower", {})
-                tower_bounds = (
-                    {
-                        plate["plate"]: tuple(plate["reserved_extrusion_bounds_mm"])
-                        for plate in tower["plates"]
-                    }
-                    if "prime_tower_width" in tower.get("process_settings", {})
-                    else None
-                )
-                found = bambu_problems(
-                    folder / "job.3mf",
-                    bambu,
-                    scratch / f"{variant.name}-check",
-                    jobs,
-                    tower_bounds,
-                )
-                result = f"{len(found)} plate slices refused" if found else "every plate sliced"
-                print(f"{variant.name}: Bambu Studio check, {result}")
-                problems += [f"{variant.name}: {problem}" for problem in found]
-            if problems:
-                raise RuntimeError(
-                    "Bambu Studio refused these plates; nothing was written:\n"
-                    + "\n".join(problems)
-                )
+            checker = checker_identity(bambu)
+            cache = (
+                None if args.no_slice_cache else SliceCache(state_folder() / "slice-cache", checker)
+            )
+            slicer = Slicer(bambu, slices, capacity, cache, checker, jobs=slice_jobs)
+            print(
+                f"Slicing with at most {min(slice_jobs, capacity.slots)} Bambu Studio processes "
+                f"at once, within {capacity.slots} memory slots shared with generation",
+                flush=True,
+            )
+        folders, problems = build(
+            selected,
+            current,
+            scratch,
+            jobs=jobs,
+            packing_workers=packing_workers,
+            capacity=capacity,
+            slicer=slicer,
+            resume=not args.no_resume,
+            reuse_checks=not args.no_slice_cache,
+            record={"commit": commit(), **identity},
+        )
+        if problems:
+            raise RuntimeError(
+                "Bambu Studio refused these plates; nothing was written:\n"
+                + "\n".join(problems)
+                + f"\nFinished variants stay in {current} for the next run."
+            )
+        if args.publish is not None:
+            lines = publish(args.publish, selected, folders)
+            print(f"Published to {args.publish}:")
+            for _, line in lines:
+                print(f"  {line}")
+            print(
+                ", ".join(
+                    f"{sum(status == kind for status, _ in lines)} {kind}"
+                    for kind in ("identical", "changed", "new")
+                ),
+                flush=True,
+            )
         for variant, folder in zip(selected, folders):
-            for source, destination in destinations(args.output, variant).items():
-                shutil.move(folder / source, destination)
-            export = json.loads(destinations(args.output, variant)["manifest.json"].read_text())
+            if args.output is not None:
+                for source, destination in destinations(args.output, variant).items():
+                    shutil.copyfile(folder / source, destination)
+            export = json.loads((folder / "manifest.json").read_text())
             plates = export["export"]["plates"]
             parts = sum(item["quantity"] for plate in plates for item in plate["items"])
             print(f"{variant.name}: {len(plates)} plates, {parts} parts")

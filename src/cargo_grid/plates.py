@@ -156,6 +156,43 @@ class PlateGroup:
     tower_clearance: TowerClearance | None = None
     front_left_tower: bool = False
     max_layout_attempts: int = PACKING_SEARCH_ATTEMPTS
+    # Rectangle-packed designs that need another plate area or tower. They join the designs on
+    # the group's last plate, under the tail's layout, when all of them fit on that one plate;
+    # otherwise they follow on plates of their own. The plates keep the group's title.
+    tail: "PlateGroup | None" = None
+
+
+@dataclass
+class _GroupPack:
+    """A group's designs on local plates, before the plan numbers them."""
+
+    sources: list[Design]
+    designs: list[Design]
+    placements: list[PrintPlacement]
+    footprints: list[ProjectedFootprint | None]
+    build: BuildVolume
+    reservation: TowerReservation | None
+    gap: float
+    unfit: list[Design]
+    nested: bool = False
+    record: dict | None = None
+
+    @property
+    def plate_count(self) -> int:
+        return max((placement.plate for placement in self.placements), default=-1) + 1
+
+    def split(self, plate: int) -> tuple["_GroupPack", list[Design]]:
+        """The plates before ``plate``, and the source designs on ``plate``."""
+        keep = [i for i, placement in enumerate(self.placements) if placement.plate < plate]
+        carried = [s for s, p in zip(self.sources, self.placements) if p.plate == plate]
+        earlier = replace(
+            self,
+            **{
+                name: [getattr(self, name)[i] for i in keep]
+                for name in ("sources", "designs", "placements", "footprints")
+            },
+        )
+        return earlier, carried
 
 
 def diagonal_fit(design: Design, build: BuildVolume) -> Design | None:
@@ -270,10 +307,10 @@ class _DualNozzleTowerLayout(_TowerLayout):
         if estimate.width_mm is not None:
             self.reason = (
                 "X2D catalogue plates use a rectangular tower on the right for ordinary groups "
-                "and the left for measured four-cell groups, preserving prime volumes and "
-                "automatic support feet; reserve its estimated depth, automatic brim and "
-                "nozzle-change wipe reach; measured four-cell groups use 1.5 mm clearance on "
-                "its right, and ordinary groups keep 6.5 mm on every side"
+                "and the left for plates with measured four-cell parts, preserving prime volumes "
+                "and automatic support feet; reserve its estimated depth, automatic brim and "
+                "nozzle-change wipe reach; plates with four-cell parts use 1.5 mm clearance on "
+                "its right, and other plates keep 6.5 mm on every side"
             )
 
     def reserve(self, height: float, *, front_left: bool = False) -> TowerReservation:
@@ -418,7 +455,8 @@ def plan_plates(
     base area and add the support-foot allowance to the group gap. Designs that do not fit
     their group's area are returned in ``unfit`` for the caller to omit or reject. On named printers
     the tower position follows Bambu's estimate for ``layer_height_mm`` and the group's
-    tallest design, so Bambu Studio keeps it when it opens the project.
+    tallest design, so Bambu Studio keeps it when it opens the project. A group's ``tail`` is
+    packed with the designs on its last plate as one group, so that plate uses the tail's layout.
     """
     printer = printer_for_common_build(build)
     if tower_width_mm is not None and (
@@ -429,13 +467,18 @@ def plan_plates(
     plan = PlatePlan([], [], {}, {}, {})
     towered_plates: dict[int, TowerReservation] = {}
     towered_groups, towered_gaps = [], []
-    for group in groups:
+    measured_sizes: dict[int, tuple[float, float, float]] = {}
+
+    def pack(group: PlateGroup) -> _GroupPack:
         positive("plate group gap", group.gap, zero=True)
+        for design in group.designs:
+            if id(design) not in measured_sizes:
+                measured_sizes[id(design)] = size(design)
         towered = tower is not None and bool(group.designs)
         gap = group.gap + AUTO_SUPPORT_FOOT_ALLOWANCE_MM if towered else group.gap
         reservation = (
             tower.reserve(
-                max(size(design)[2] for design in group.designs),
+                max(measured_sizes[id(design)][2] for design in group.designs),
                 front_left=group.front_left_tower,
             )
             if towered
@@ -457,31 +500,27 @@ def plan_plates(
                     ),
                 )
                 reservation = replace(reservation, build=group_build)
-        plan.group_gaps[group.title] = gap
-        members = []
+        result = _GroupPack([], [], [], [], group_build, reservation, gap, [])
         for design in group.designs:
-            if group_build.placement(size(design)) is None:
+            if group_build.placement(measured_sizes[id(design)]) is None:
                 rotated = diagonal_fit(design, group_build) if diagonal_fallback else None
                 if rotated is None:
-                    plan.unfit.append(design)
-                else:
-                    members.append(rotated)
+                    result.unfit.append(design)
+                    continue
+                result.designs.append(rotated)
             else:
-                members.append(design)
+                result.designs.append(design)
+            result.sources.append(design)
+        members = result.designs
         if not members:
-            continue
-        if towered:
-            towered_groups.append(group.title)
-            towered_gaps.append(gap)
+            return result
 
-        def placed_size(design):
-            return (
-                design.bambu_size
-                if design.recommended_print_rotation_z is not None
-                else size(design)
-            )
-
-        sizes = [placed_size(d) for d in members]
+        sizes = [
+            design.bambu_size
+            if design.recommended_print_rotation_z is not None
+            else measured_sizes[id(design)]
+            for design in members
+        ]
         rectangular = pack_sizes(sizes, group_build, gap=gap, pack=True)
         packed, footprints, nested = rectangular, [None] * len(members), False
         rectangle_score = packing_score(rectangular, sizes)
@@ -508,14 +547,14 @@ def plan_plates(
                     obstacles=obstacles,
                 )
             except ValueError as error:
-                plan.projected_packing[group.title] = {
+                result.record = {
                     "status": "rectangle fallback",
                     "reason": str(error),
                 }
             else:
                 if packing_score(candidate, sizes) < rectangle_score:
                     packed, footprints, nested = candidate, candidate_footprints, True
-                plan.projected_packing[group.title] = {
+                result.record = {
                     "status": "applied" if nested else "rectangle preferred",
                     "rectangle_plates": max(p.plate for p in rectangular) + 1,
                     "projected_plates": max(p.plate for p in candidate) + 1,
@@ -526,28 +565,62 @@ def plan_plates(
                     "maximum_layout_attempts": attempts,
                     "random_seed": PACKING_SEARCH_SEED,
                 }
-        offset = plan.plate_count
-        count = max(placement.plate for placement in packed) + 1
-        for local in range(count):
-            if group.title is not None:
-                plan.plate_names[offset + local] = (
-                    group.title if count == 1 else f"{group.title} {local + 1}"
-                )
-            plan.plate_builds[offset + local] = group_build
-        if nested:
-            plan.projected_clearances.update({plate + offset: gap for plate in range(count)})
-        for design, placement in zip(members, packed):
-            plate = placement.plate + offset
-            if towered:
-                plan.prime_tower_positions[plate] = reservation.origin
-                plan.prime_tower_reaches[plate] = reservation.reach
-                plan.prime_tower_clearances[plate] = reservation.clearance
-                towered_plates[plate] = reservation
-            plan.designs.append(design)
-            plan.placements.append(
-                PrintPlacement(plate, placement.x, placement.y, placement.rotation)
+        result.placements, result.footprints, result.nested = packed, footprints, nested
+        return result
+
+    for group in groups:
+        if group.tail is not None and group.tail.projected:
+            raise ValueError("plate group tails use rectangle packing")
+        packed = pack(group)
+        plan.group_gaps[group.title] = packed.gap
+        plan.unfit.extend(packed.unfit)
+        if packed.record is not None:
+            plan.projected_packing[group.title] = packed.record
+        segments = [packed]
+        if group.tail is not None and group.tail.designs:
+            earlier, carried = packed.split(packed.plate_count - 1)
+            merged = (
+                pack(replace(group.tail, designs=[*carried, *group.tail.designs]))
+                if carried
+                else None
             )
-        plan.projected_footprints.extend(footprints)
+            if merged is not None and merged.plate_count == 1 and not merged.unfit:
+                segments = [earlier, merged]
+            else:
+                tail = pack(group.tail)
+                plan.unfit.extend(tail.unfit)
+                segments.append(tail)
+        segments = [segment for segment in segments if segment.placements]
+        if any(segment.reservation is not None for segment in segments):
+            towered_groups.append(group.title)
+            towered_gaps.extend(s.gap for s in segments if s.reservation is not None)
+        start = offset = plan.plate_count
+        count = sum(segment.plate_count for segment in segments)
+        for segment in segments:
+            for local in range(segment.plate_count):
+                if group.title is not None:
+                    plan.plate_names[offset + local] = (
+                        group.title if count == 1 else f"{group.title} {offset + local - start + 1}"
+                    )
+                plan.plate_builds[offset + local] = segment.build
+            if segment.nested:
+                plan.projected_clearances.update(
+                    {plate + offset: segment.gap for plate in range(segment.plate_count)}
+                )
+            reservation = segment.reservation
+            for design, placement in zip(segment.designs, segment.placements):
+                plate = placement.plate + offset
+                if reservation is not None:
+                    plan.prime_tower_positions[plate] = reservation.origin
+                    plan.prime_tower_reaches[plate] = reservation.reach
+                    plan.prime_tower_clearances[plate] = reservation.clearance
+                    towered_plates[plate] = reservation
+                plan.designs.append(design)
+                plan.placements.append(
+                    PrintPlacement(plate, placement.x, placement.y, placement.rotation)
+                )
+            plan.projected_footprints.extend(segment.footprints)
+            offset += segment.plate_count
     if tower is not None:
         reaches = list(plan.prime_tower_reaches.values())
         plan.prime_tower = (
