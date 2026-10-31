@@ -1,4 +1,4 @@
-"""Render the documented finite catalogue with the project's CAD workbench."""
+"""Render the documented finite catalogue with the project's CAD workbench and its CAD Explorer."""
 
 import argparse
 import hashlib
@@ -6,9 +6,12 @@ import json
 import math
 import os
 import re
+import shutil
 import struct
 import subprocess
+import sys
 from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import asdict, dataclass
 from html import escape
 from pathlib import Path
@@ -26,8 +29,8 @@ from cargo_grid.rods import Rod, RodBrace
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILD = BuildVolume(350, 320, 325)
-WORKBENCH_REVISION = "c3f63ef8d8604d3ec7eeba40a229047887c03d86"
-GEOMETRY_REVISION = "839b1b83ef628a40fe69842d55b43246215fbd6b"
+WORKBENCH_REVISION = "f5de8f59f8031eee4e12c5f67498c2448b9c6078"
+GEOMETRY_REVISION = "417a4ef7cc7afc654575dc72479810ea3cbc7cb3"
 GEOMETRY_FILES = (
     "parameters.py",
     "interfaces.py",
@@ -39,8 +42,21 @@ GEOMETRY_FILES = (
     "layout.py",
     "packing.py",
 )
-CAMERA = "45:32"
-BACKGROUND = "#f2f1ec"
+# CAD Explorer azimuth:elevation in degrees: azimuth 0 looks from the front (-Y) and 90 from the right (+X).
+CAMERA = "135:32"
+BACKGROUND = "#f9f9f6"
+# The Explorer fits a part's bounding sphere and draws without supersampling, so render at about twice the size
+# the pictures use; composing scales each render down to its family's scale.
+RENDER_SIZES = {"overview": (2000, 1300), "thumbnail": (1200, 720)}
+# Picture-only part colours. The Explorer shows STEP colours as given under its Inspect lighting, so these are the
+# shades the pictures should show: green parts, grey-green strips, rails and rods, and lighter separate tiles.
+COLOURS = {
+    "part": "#728a7d",
+    "strip, rail and rod": "#7d8681",
+    "solid-web tile": "#78887e",
+    "floor tile": "#848b86",
+    "wall tile": "#8b928f",
+}
 IMAGE_NAMES = (
     "hero.png",
     "x-attachments.png",
@@ -262,7 +278,7 @@ def documentation_shape(key: str):
         plate = make_accessory(Accessory("plate", interface=interface)).moved(
             Location((0, 0, interface.height + interface.plug_depth + 4))
         )
-        tile.color, plate.color = Color("#b9c6c0"), Color("#637b70")
+        tile.color, plate.color = Color(COLOURS["floor tile"]), Color(COLOURS["part"])
         shape = Compound(children=[tile, plate], label=key)
         if not shape.is_valid or len(shape.solids()) != 2:
             raise ValueError(f"Invalid exploded interface comparison: {key}")
@@ -293,9 +309,9 @@ def documentation_shape(key: str):
         else:
             wall = wall.rotate(Axis.X, 90).moved(Location((0, base_y * 60, 19.1)))
         floor.color, bracket.color, wall.color = (
-            Color("#b9c6c0"),
-            Color("#637b70"),
-            Color("#c2cecb"),
+            Color(COLOURS["floor tile"]),
+            Color(COLOURS["part"]),
+            Color(COLOURS["wall tile"]),
         )
         shape = Compound(children=[floor, bracket, wall], label=key)
         if not shape.is_valid or len(shape.solids()) != 3:
@@ -312,16 +328,16 @@ def documentation_shape(key: str):
             )
         )
         shape.label = key
-        color = "#637b70" if key == "tile-default" else "#4b5752"
+        color = COLOURS["part" if key == "tile-default" else "solid-web tile"]
     else:
         item = next(item for item in inventory() if item.key == key)
         shape = make_accessory(item.spec)
-        color = (
-            "#637b70"
+        color = COLOURS[
+            "part"
             if item.spec.family
             in ("ramp", "plate", "vertical-tile-bracket", "vertical-stop", "lock-45")
-            else "#626b68"
-        )
+            else "strip, rail and rod"
+        ]
     if not shape.is_valid or len(shape.solids()) != 1 or shape.volume <= 0:
         raise ValueError(f"Invalid documentation geometry: {key}")
     shape.color = Color(color)
@@ -329,13 +345,40 @@ def documentation_shape(key: str):
 
 
 def projected_spans(size) -> tuple[float, float]:
-    azimuth, elevation = map(math.radians, (45, 32))
+    azimuth, elevation = (math.radians(float(value)) for value in CAMERA.split(":"))
     x, y, z = size
     return (
-        abs(math.sin(azimuth)) * x + abs(math.cos(azimuth)) * y,
-        math.sin(elevation) * (math.cos(azimuth) * x + math.sin(azimuth) * y)
+        abs(math.cos(azimuth)) * x + abs(math.sin(azimuth)) * y,
+        math.sin(elevation) * (abs(math.sin(azimuth)) * x + abs(math.cos(azimuth)) * y)
         + math.cos(elevation) * z,
     )
+
+
+def placed_render(work: Path, key: str, pixels_per_mm: float, size: tuple[int, int]):
+    """Scale a raw render to pixels_per_mm and centre it, clipped, on its own backdrop of `size`.
+
+    The scale comes from the orthographic camera the Explorer reported drawing, and the part's bounding-box
+    centre stays in the middle, as in the raw render.
+    """
+    from PIL import Image
+
+    rendered = json.loads((work / "renders" / f"{key}.json").read_text())
+    camera = rendered["camera"]
+    with Image.open(work / "renders" / f"{key}.png") as raw:
+        raw = raw.convert("RGB")
+    if (
+        camera["projection"] != "orthographic"
+        or camera["view"] != CAMERA
+        or [rendered["width"], rendered["height"]] != [raw.width, raw.height]
+    ):
+        raise ValueError(f"Raw render does not match the recorded camera: {key}")
+    factor = pixels_per_mm * camera["viewHeight"] / raw.height
+    resized = raw.resize(
+        (round(raw.width * factor), round(raw.height * factor)), Image.Resampling.LANCZOS
+    )
+    placed = Image.new("RGB", size, raw.getpixel((0, 0)))
+    placed.paste(resized, ((size[0] - resized.width) // 2, (size[1] - resized.height) // 2))
+    return placed
 
 
 def png_size(path: Path) -> tuple[int, int]:
@@ -438,13 +481,17 @@ def _validate_provenance(provenance: dict | None, label: str) -> None:
         raise ValueError(f"Invalid per-image provenance: {label}")
 
 
-def run(command, log: Path, environment: dict) -> None:
-    with log.open("w") as output:
-        result = subprocess.run(
-            command, cwd=ROOT, env=environment, stdout=output, stderr=subprocess.STDOUT
-        )
+def run(command, log: Path, environment: dict, answer: Path | None = None) -> None:
+    """Run a workbench tool from the project root; `answer` keeps its standard output apart from its log."""
+    with log.open("w") as messages, answer.open("w") if answer else nullcontext(messages) as output:
+        result = subprocess.run(command, cwd=ROOT, env=environment, stdout=output, stderr=messages)
     if result.returncode:
-        raise RuntimeError(f"Documentation tool failed; inspect {log.relative_to(ROOT)}")
+        where = (
+            log.relative_to(ROOT)
+            if answer is None
+            else f"{log.relative_to(ROOT)} and {answer.relative_to(ROOT)}"
+        )
+        raise RuntimeError(f"Documentation tool failed; inspect {where}")
 
 
 def render_items(
@@ -460,6 +507,13 @@ def render_items(
     ).strip()
     if revision != workbench_revision:
         raise ValueError(f"Use the requested workbench revision {workbench_revision}")
+    if subprocess.check_output(
+        ["git", "-C", str(workbench), "status", "--porcelain", "--untracked-files=no"], text=True
+    ).strip():
+        raise ValueError("Commit or discard workbench changes; provenance names a clean revision")
+    node = shutil.which("node")
+    if node is None:
+        raise ValueError("CAD Explorer renders need Node.js on the path")
     verify_geometry_source(geometry_revision)
     source_tree = subprocess.check_output(
         ["git", "rev-parse", f"{geometry_revision}:src/cargo_grid"], cwd=ROOT, text=True
@@ -468,13 +522,19 @@ def render_items(
         ["git", "rev-parse", f"{geometry_revision}^{{commit}}"], cwd=ROOT, text=True
     ).strip()
     recipe_hash = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
-    python = workbench / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     tools = workbench / ".agents/skills/cad/scripts"
+    explorer = workbench / "explorer/scripts/explorer.mjs"
     environment = os.environ.copy()
     environment["PYTHONPATH"] = os.pathsep.join((str(ROOT), str(ROOT / "src")))
     environment["PYTHONDONTWRITEBYTECODE"] = "1"
     for subdir in ("source", "steps", "renders", "facts", "logs"):
         (work / subdir).mkdir(parents=True, exist_ok=True)
+    # The Explorer draws from its git-ignored build; rebuild it if its inputs differ from this checkout's.
+    run(
+        [node, str(workbench / "explorer/scripts/build.mjs")],
+        work / "logs" / "explorer-build.log",
+        environment,
+    )
     items = hero_items() + interface_scale_items() + inventory() + bracket_assembly_items()
     if only and not only <= {item.key for item in items}:
         raise ValueError("Unknown --only item")
@@ -482,19 +542,24 @@ def render_items(
         if only and item.key not in only:
             continue
         key = item.key
-        source, step, image, facts = (
+        source, step, image, camera, facts = (
             work / "source" / f"{key}.py",
             work / "steps" / f"{key}.step",
             work / "renders" / f"{key}.png",
+            work / "renders" / f"{key}.json",
             work / "facts" / f"{key}.json",
         )
         cache = {"source_tree": source_tree, "workbench": revision, "recipe": recipe_hash}
         if (
             image.exists()
+            and camera.exists()
             and facts.exists()
             and json.loads(facts.read_text()).get("cache") == cache
         ):
             continue
+        # A picture is only reused when this run drew it, never left over from a run that failed later.
+        image.unlink(missing_ok=True)
+        camera.unlink(missing_ok=True)
         source.write_text(
             "import json\nfrom pathlib import Path\nfrom tools.render_docs import documentation_shape\n\n"
             "def gen_step():\n"
@@ -505,7 +570,7 @@ def render_items(
         )
         run(
             [
-                str(python),
+                sys.executable,
                 str(tools / "step"),
                 source.relative_to(ROOT).as_posix(),
                 "-o",
@@ -516,7 +581,7 @@ def render_items(
         )
         run(
             [
-                str(python),
+                sys.executable,
                 str(tools / "inspect"),
                 "refs",
                 step.relative_to(ROOT).as_posix(),
@@ -530,38 +595,30 @@ def render_items(
         inspection = json.loads((work / "logs" / f"{key}-inspect.json").read_text())
         if not inspection["ok"] or inspection["errors"]:
             raise ValueError(f"STEP inspection failed: {key}")
-        width, height = (1000, 650) if item.spec is None else (600, 360)
+        width, height = RENDER_SIZES["overview" if item.spec is None else "thumbnail"]
         run(
             [
-                str(python),
-                str(tools / "render"),
-                "view",
+                node,
+                str(explorer),
+                "render",
                 step.relative_to(ROOT).as_posix(),
-                "--output",
                 image.relative_to(ROOT).as_posix(),
-                "--camera",
+                "--size",
+                f"{width}x{height}",
+                "--view",
                 CAMERA,
-                "--width",
-                str(width),
-                "--height",
-                str(height),
+                "--projection",
+                "orthographic",
+                "--appearance",
+                "inspect",
+                "--outlines",
+                "on",
                 "--background",
                 BACKGROUND,
-                "--preset",
-                "solid",
-                "--color-by",
-                "step",
-                "--edges",
-                "thin",
-                "--no-axes",
-                "--quality",
-                "high",
-                "--no-daemon",
-                "--timeout-seconds",
-                "120",
             ],
             work / "logs" / f"{key}-render.log",
             environment,
+            answer=camera,
         )
         print(f"Rendered {key}", flush=True)
     if (
@@ -619,9 +676,8 @@ def thumbnail_entries(
     keys: set[str] | None = None,
     scale_overrides: dict[str, float] | None = None,
     write_manifest: bool = True,
+    overview_items: dict[str, list[str]] | None = None,
 ) -> list[dict]:
-    from PIL import Image
-
     verify_geometry_source(provenance["generator_commit"])
     target = ROOT / "docs/images/attachments"
     target.mkdir(parents=True, exist_ok=True)
@@ -673,20 +729,7 @@ def thumbnail_entries(
                 or inspection["tokens"][0]["stepHash"] != step_sha
             ):
                 raise ValueError(f"Cached STEP inspection no longer matches: {item.key}")
-            with Image.open(source) as raw:
-                raw = raw.convert("RGB")
-                sx, sy = projected_spans(fact["size_mm"])
-                units_per_pixel = 1.03 * max(sy, sx * raw.height / raw.width) / raw.height
-                factor = scale * units_per_pixel
-                resized = raw.resize(
-                    (round(raw.width * factor), round(raw.height * factor)),
-                    Image.Resampling.LANCZOS,
-                )
-                image = Image.new("RGB", THUMBNAIL_SIZE, raw.getpixel((0, 0)))
-                image.paste(
-                    resized,
-                    ((image.width - resized.width) // 2, (image.height - resized.height) // 2),
-                )
+            image = placed_render(work, item.key, scale, THUMBNAIL_SIZE)
             path = target / f"{item.key}.png"
             image.save(path, optimize=True)
             entries.append(
@@ -719,6 +762,7 @@ def thumbnail_entries(
         "workbench_commit": provenance["workbench_commit"],
         "catalogue_build_mm": {"width_x": 350, "depth_y": 320, "height_z": 325},
         "camera": CAMERA,
+        "camera_convention": "CAD Explorer azimuth:elevation in degrees; azimuth 0 looks from the front (-Y), 90 from the right (+X)",
         "scale": "Common physical scale within each family; families differ.",
         "source_render_recipe_sha256": provenance["recipe_sha256"],
         "overview_images": [
@@ -728,6 +772,7 @@ def thumbnail_entries(
                 "bytes": (ROOT / "docs/images" / name).stat().st_size,
                 "sha256": hashlib.sha256((ROOT / "docs/images" / name).read_bytes()).hexdigest(),
                 "provenance": provenance,
+                **({"items": overview_items[name]} if overview_items else {}),
             }
             for name in IMAGE_NAMES
         ],
@@ -792,18 +837,7 @@ def composite(
         scale = scales[item.spec.family if family_scales else None]
         x = margin + (index % columns) * cell_width
         y = header + (index // columns) * row_height
-        with Image.open(work / "renders" / f"{item.key}.png") as raw:
-            raw = raw.convert("RGB")
-            sx, sy = projected_spans(facts[item.key]["size_mm"])
-            units_per_pixel = 1.03 * max(sy, sx * raw.height / raw.width) / raw.height
-            factor = scale * units_per_pixel
-            rendered = raw.resize(
-                (round(raw.width * factor), round(raw.height * factor)), Image.Resampling.LANCZOS
-            )
-        canvas.paste(
-            rendered,
-            (x + (cell_width - rendered.width) // 2, y + (image_height - rendered.height) // 2),
-        )
+        canvas.paste(placed_render(work, item.key, scale, (cell_width, image_height)), (x, y))
         draw.text((x + 12, y + image_height + 6), item.title, font=label, fill=ink)
         draw.text((x + 12, y + image_height + 50), item.detail, font=detail, fill=muted)
     output = ROOT / "docs/images" / filename
@@ -842,15 +876,7 @@ def compose_all(work: Path, provenance: dict) -> None:
             2,
         )
     )
-    sheets.append(
-        composite(
-            work,
-            [item for item in items if item.spec.family == "ramp"],
-            "ramps.png",
-            "Floor-to-mat ramps",
-            3,
-        )
-    )
+    sheets.append(ramp_overview(work))
     sheets.append(rod_overview(work))
     sheets.append(
         composite(
@@ -861,7 +887,11 @@ def compose_all(work: Path, provenance: dict) -> None:
             3,
         )
     )
-    thumbnails = thumbnail_entries(work, provenance)
+    thumbnails = thumbnail_entries(
+        work,
+        provenance,
+        overview_items={Path(sheet["file"]).name: sheet["items"] for sheet in sheets},
+    )
     write_gallery(thumbnails, provenance)
     report = {
         **provenance,
@@ -934,13 +964,13 @@ def write_gallery(
         "",
         "## Reproduce the images",
         "",
-        "Use a CAD-Pilot checkout at the recorded workbench revision with its render dependencies installed. Cargo-Grid doesn't add them as runtime dependencies. From this repository root, run:",
+        "Use a CAD-Pilot checkout at the recorded workbench revision, with no uncommitted changes, set up as its README describes: Playwright's Chromium installed and CAD Explorer built. Node.js must be on the path. Cargo-Grid doesn't add any of these as dependencies. From this repository root, run:",
         "",
         "```sh",
-        "PYTHONPATH=src <workbench-python> tools/render_docs.py --workbench <workbench-checkout> --geometry-revision <committed-generator-revision> --workbench-revision <recorded-workbench-revision>",
+        "uv run python tools/render_docs.py --workbench <workbench-checkout> --geometry-revision <committed-generator-revision> --workbench-revision <recorded-workbench-revision>",
         "```",
         "",
-        f"Use the workbench's Python interpreter with Pillow already available; paths are supplied locally, not committed. In PowerShell, set `$env:PYTHONPATH='src'` before invoking that interpreter. A full run checks geometry modules against the recorded commit, invokes STEP/inspection/render tools, then creates {len(IMAGE_NAMES)} overview PNGs and {len(items)} family-scaled thumbnails. `--compose-only` reuses verified local STEP-derived renders; `--check` verifies the committed files and their one-to-one inventory mapping without Pillow. Intermediate STEP files and raw renders remain ignored. Layout is deterministic; raster bytes can depend on graphics/Pillow versions.",
+        f"This project's environment runs the workbench's STEP and inspection tools, and Pillow composes the pictures; paths are supplied locally, not committed. A full run checks geometry modules against the recorded commit, generates and inspects each STEP, has CAD Explorer's `render` draw it orthographically from azimuth {CAMERA.split(':')[0]}, elevation {CAMERA.split(':')[1]} (the Explorer's convention: azimuth 0 looks from the front, 90 from the right) and takes each picture's scale from the camera that render reports. It then creates {len(IMAGE_NAMES)} overview PNGs and {len(items)} family-scaled thumbnails. `--compose-only` reuses verified local STEP-derived renders; `--check` verifies the committed files and their one-to-one inventory mapping without Pillow. Intermediate STEP files and raw renders remain ignored. Layout is deterministic; raster bytes can depend on the graphics stack and the Chromium and Pillow versions.",
         "",
         "For a ramp-only update, add `--update-ramps --geometry-revision <committed-generator-revision> --workbench-revision <recorded-workbench-revision>`. This renders all ten ramps and recomposes only the ramp overview. Other pictures and their original provenance stay unchanged; no earlier render cache is needed.",
         "",
@@ -1149,6 +1179,16 @@ def rod_overview(work: Path) -> dict:
     )
 
 
+def ramp_overview(work: Path) -> dict:
+    return composite(
+        work,
+        [item for item in inventory() if item.spec.family == "ramp"],
+        "ramps.png",
+        "Floor-to-mat ramps: female pockets and male tabs",
+        3,
+    )
+
+
 def compose_ramps(work: Path, provenance: dict) -> None:
     """Replace only the complete ramp family, preserving all other rendered evidence."""
     compose_families(work, provenance, {"ramp"}, "ramps.png", "Ramp update")
@@ -1165,15 +1205,7 @@ def compose_families(
     work: Path, provenance: dict, families: set[str], overview_name: str, scope: str
 ) -> None:
     def overview(work: Path) -> dict:
-        if families == {"rod", "rod-brace"}:
-            return rod_overview(work)
-        return composite(
-            work,
-            [item for item in inventory() if item.spec.family == "ramp"],
-            overview_name,
-            "Floor-to-mat ramps: female pockets and male tabs",
-            3,
-        )
+        return rod_overview(work) if families == {"rod", "rod-brace"} else ramp_overview(work)
 
     _compose_selected_update(
         work,

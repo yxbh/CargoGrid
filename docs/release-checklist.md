@@ -60,7 +60,7 @@ Unavailable checks skip.
 
 Native CLI import/export isn't a print test. When Bambu settings or modifiers change, slice the affected job with the intended machine, process and materials. Check material roles, nozzle mapping, support contact, X-socket clearance, model/support paths and tower reach. Keep profiles, G-code and logs in ignored output directories.
 
-If a separate CAD workbench is needed, use its documented interpreter and launchers from this repository root. Generate a fresh project-relative STEP, inspect that same file and record the workbench revision with the local evidence. Do not copy workbench files into this repository.
+If a separate CAD workbench is needed, run its cad tools from this repository root with this project's environment (`uv run python <workbench>/.agents/skills/cad/scripts/step ...`), as its cad skill describes. Generate a fresh project-relative STEP, inspect that same file and record the workbench revision with the local evidence. Do not copy workbench files into this repository.
 
 ## Check the physical assumptions
 
@@ -78,4 +78,4 @@ After the release commit has been reviewed, create the release input from tracke
 
 Exclude local lock files, environments, caches, reference meshes, system profiles, G-code, study output and runtime diagnostics. The documentation images are the exception: seven overview images, 107 accessory thumbnails and their provenance manifest. The source archive contains exactly 114 PNGs; the runtime wheel contains none. A partial image update keeps the source and tool revisions of the images it doesn't touch and records separate provenance for the new ones.
 
-Run `tools/render_docs.py --check` to confirm image hashes, links and one-to-one inventory coverage. Tagging, uploading packages/models and merging remain separate maintainer actions.
+Run `tools/render_docs.py --check` to confirm image hashes, links and one-to-one inventory coverage. To draw the pictures again, follow [Reproduce the images](attachments.md#reproduce-the-images): CAD Explorer renders each one from a CAD-Pilot checkout at the recorded workbench revision. Tagging, uploading packages/models and merging remain separate maintainer actions.

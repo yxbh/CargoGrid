@@ -85,10 +85,16 @@ def test_gallery_text_composition_keeps_standard_bores_without_rendering(
 
     for name in ("documentation_shape", "render_items", "thumbnail_entries", "composite"):
         monkeypatch.setattr(gallery, name, no_geometry_or_images)
-    gallery.write_gallery(manifest["items"], provenance, incremental="Rod and brace update")
+    gallery.write_gallery(manifest["items"], provenance)
     actual = (tmp_path / "docs/attachments.md").read_text()
-    marker = "The manifest's top-level provenance belongs to the retained baseline images."
-    assert actual.split(marker, 1)[0] == expected.split(marker, 1)[0]
+
+    def without_revisions(text):
+        return [line for line in text.splitlines() if "source revision:" not in line]
+
+    assert without_revisions(actual) == without_revisions(expected)
+    revisions = next(line for line in expected.splitlines() if "source revision:" in line)
+    for field in ("generator_commit", "generator_tree", "workbench_commit"):
+        assert gallery.revision_tag(provenance[field]) in revisions
     assert "10 mm bores" in actual
     assert "10.2" not in actual and "10.4" not in actual
 
@@ -120,7 +126,15 @@ def test_thumbnail_manifest_has_unique_rows_and_family_scale(gallery):
     ]
     assert len(perimeters) == 60
     assert all("provenance" in entry for entry in perimeters)
-    assert "not a full-gallery" in manifest["provenance_scope"]
+    revisions = {
+        (entry["provenance"]["generator_commit"], entry["provenance"]["workbench_commit"])
+        for entry in [*entries, *manifest["overview_images"]]
+        if entry.get("provenance")
+    }
+    if revisions != {(manifest["geometry_commit"], manifest["workbench_commit"])} or not all(
+        entry.get("provenance") for entry in [*entries, *manifest["overview_images"]]
+    ):
+        assert "not a full-gallery" in manifest["provenance_scope"]
     round_parts = [entry for entry in entries if entry["family"] in ("rod", "rod-brace")]
     assert len(round_parts) == 6
     rod_overview = next(
@@ -168,6 +182,121 @@ def test_missing_render_source_at_revision_is_a_clear_mismatch(gallery, monkeypa
     monkeypatch.setattr(gallery, "GEOMETRY_FILES", ("missing-render-source.py",))
     with pytest.raises(ValueError, match="source is missing"):
         gallery.verify_geometry_source(revision)
+
+
+def _repository(path, file):
+    """A one-commit Git repository holding `file`, and its revision."""
+    import subprocess
+
+    (path / file).parent.mkdir(parents=True)
+    (path / file).write_text("committed\n")
+    for command in (
+        ["init", "-q"],
+        ["add", file],
+        ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "c"],
+    ):
+        subprocess.run(["git", *command], cwd=path, check=True)
+    return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=path, text=True).strip()
+
+
+def test_render_items_draws_each_step_with_the_explorer(gallery, tmp_path, monkeypatch):
+    workbench, project = tmp_path / "workbench", tmp_path / "project"
+    revision = _repository(workbench, "README.md")
+    _repository(project, "src/cargo_grid/__init__.py")
+    commands = []
+
+    def run(command, log, environment, answer=None):
+        commands.append(command)
+        if command[1].endswith("inspect"):
+            log.write_text(json.dumps({"ok": True, "errors": []}))
+        if command[2:3] == ["render"]:
+            answer.write_text("{}")
+
+    monkeypatch.setattr(gallery, "ROOT", project)
+    monkeypatch.setattr(gallery, "run", run)
+    monkeypatch.setattr(gallery, "verify_geometry_source", lambda revision: None)
+    monkeypatch.setattr(gallery.shutil, "which", lambda name: f"/bin/{name}")
+    # A picture left by an earlier run that failed after drawing it is never reused.
+    stale = project / "outputs/work/renders/plate-1x1.png"
+    stale.parent.mkdir(parents=True)
+    stale.write_bytes(b"stale")
+    gallery.render_items(
+        workbench,
+        project / "outputs/work",
+        {"tile-default", "plate-1x1"},
+        geometry_revision="HEAD",
+        workbench_revision=revision,
+    )
+    tools = workbench / ".agents/skills/cad/scripts"
+    assert commands[0] == ["/bin/node", str(workbench / "explorer/scripts/build.mjs")]
+    assert [command[:2] for command in commands[1:]] == [
+        [sys.executable, str(tools / "step")],
+        [sys.executable, str(tools / "inspect")],
+        ["/bin/node", str(workbench / "explorer/scripts/explorer.mjs")],
+    ] * 2
+    assert not stale.exists()
+    renders = [command[2:] for command in commands if command[2:3] == ["render"]]
+    for (_, step, image, *options), size in zip(renders, ("2000x1300", "1200x720"), strict=True):
+        assert Path(step).suffix == ".step" and Path(image).suffix == ".png"
+        assert options == [
+            "--size",
+            size,
+            "--view",
+            "135:32",
+            "--projection",
+            "orthographic",
+            "--appearance",
+            "inspect",
+            "--outlines",
+            "on",
+            "--background",
+            "#f9f9f6",
+        ]
+
+
+def test_render_items_refuses_an_uncommitted_workbench(gallery, tmp_path):
+    workbench = tmp_path / "workbench"
+    revision = _repository(workbench, "README.md")
+    (workbench / "README.md").write_text("changed\n")
+    with pytest.raises(ValueError, match="Commit or discard"):
+        gallery.render_items(workbench, tmp_path / "work", None, workbench_revision=revision)
+
+
+def test_placed_render_uses_the_reported_camera_scale(gallery, tmp_path):
+    pytest.importorskip("PIL")
+    from PIL import Image, ImageChops
+
+    renders = tmp_path / "renders"
+    renders.mkdir()
+    raw = Image.new("RGB", (200, 100), (242, 241, 236))
+    raw.paste((60, 70, 65), (90, 45, 110, 55))
+    raw.save(renders / "part.png")
+    camera = {"view": gallery.CAMERA, "projection": "orthographic", "viewHeight": 50}
+    answer = {"width": 200, "height": 100, "camera": camera}
+    (renders / "part.json").write_text(json.dumps(answer))
+    # 0.5 mm per raw pixel: the 20 x 10 pixel block is 10 x 5 mm, drawn at 4 pixels per mm.
+    placed = gallery.placed_render(tmp_path, "part", 4, (60, 40))
+    assert placed.size == (60, 40)
+    mask = ImageChops.difference(placed, Image.new("RGB", placed.size, (242, 241, 236)))
+    assert mask.point(lambda value: 255 if value > 60 else 0).getbbox() == (10, 10, 50, 30)
+    for change in (
+        {"camera": {**camera, "projection": "perspective"}},
+        {"camera": {**camera, "view": "45:32"}},
+        {"width": 400},
+    ):
+        (renders / "part.json").write_text(json.dumps({**answer, **change}))
+        with pytest.raises(ValueError, match="recorded camera"):
+            gallery.placed_render(tmp_path, "part", 4, (60, 40))
+
+
+def test_projected_spans_follow_the_back_right_camera(gallery):
+    import math
+
+    root_two, elevation = math.sqrt(2), math.radians(32)
+    assert gallery.projected_spans((246, 246, 13)) == pytest.approx(
+        (246 * root_two, math.sin(elevation) * 246 * root_two + math.cos(elevation) * 13)
+    )
+    assert gallery.projected_spans((60, 0, 0)) == pytest.approx(gallery.projected_spans((0, 60, 0)))
 
 
 def test_retained_thumbnail_scale_rejects_subset_overflow(gallery):
