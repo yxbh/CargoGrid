@@ -234,6 +234,7 @@ def test_retired_options_are_ordinary_unknown_arguments(retired, tmp_path, capsy
         ("extras", "zeekr-7x"),
         ("extras", "pull-handle"),
         ("extras", "adjustable-stop"),
+        ("extras", "cross-post"),
     ],
 )
 def test_printer_supplies_build_and_standard_interface(printer, command):

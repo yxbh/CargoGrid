@@ -149,14 +149,14 @@ Catalogue perimeter and rod/brace families try shared multi-plate outline nestin
 
 The Bambu Lab X2D is the smaller-bed dual-nozzle option. It keeps the same PETG Basic body, PLA Basic interface, global normal Auto support and automatic filament matching as the H2D projects. Its bed is 256x256 mm, but both nozzles share only X 20.5..256, Y 0..256 and Z up to 256. Model, support-foot and prime-tower allowances reduce that further. Parts are never scaled to fit; each manifest lists the omitted designs and why. These are X2D projects, not a claim that a dual-material profile works on every single-nozzle 256 mm printer.
 
-The shared MakerWorld script generates both 0.8 mm/0.32 mm and 0.4 mm/0.24 mm projects. It includes the catalogue and Zeekr expansion set with and without a 1.92 mm solid bottom, plus the pull-handle and adjustable-stop kits. Set `BAMBU_STUDIO` to your installed Bambu Studio executable, then run:
+The shared MakerWorld script generates both 0.8 mm/0.32 mm and 0.4 mm/0.24 mm projects. It includes the catalogue and Zeekr expansion set with and without a 1.92 mm solid bottom, plus the pull-handle, adjustable-stop and cross-post sets. Set `BAMBU_STUDIO` to your installed Bambu Studio executable, then run:
 
 ```sh
 mkdir -p outputs/makerworld-x2d
 uv run python tools/makerworld_exports.py --printer x2d --output outputs/makerworld-x2d --bambu-studio "$BAMBU_STUDIO"
 ```
 
-The script slices every plate with PETG on either nozzle before writing any named files. X2D slots 1/2 are Bambu's main/auxiliary nozzles; H2D slots 1/2 are left/right. A refused plate stops the batch. Existing files are left alone unless you pass `--replace`; uploading is separate. `--set Full-Catalogue`, `--set Zeekr-7X-Expansion-Set`, `--set Pull-Handle-Set` or `--set Adjustable-Stop` limits the rebuild, and either selection option can be repeated. Omit `--printer` for the existing H2D files, or use `--printer h2d --printer x2d` for both printers.
+The script slices every plate with PETG on either nozzle before writing any named files. X2D slots 1/2 are Bambu's main/auxiliary nozzles; H2D slots 1/2 are left/right. A refused plate stops the batch. Existing files are left alone unless you pass `--replace`; uploading is separate. `--set Full-Catalogue`, `--set Zeekr-7X-Expansion-Set`, `--set Pull-Handle-Set`, `--set Adjustable-Stop` or `--set Cross-Post-Set` limits the rebuild, and either selection option can be repeated. Omit `--printer` for the existing H2D files, or use `--printer h2d --printer x2d` for both printers.
 
 Each variant's plates are sliced as soon as that variant is generated, and slices from every variant share one pool. Generation and slicing share one memory budget: by default there is one Bambu Studio process per core, fewer while other variants are still being generated or when memory is short. Preparing a variant's check (resolving its profiles and writing the copy that gets sliced) counts as one of those processes. `--slice-jobs N` lowers the limit.
 
@@ -246,6 +246,28 @@ For 0.4 mm nozzles, use `--nozzle-diameter-mm 0.4 --layer-height-mm 0.24`, `--ma
 Both handles lie on their front, which needs little support and lays the posts along the direction of a sideways pull. The strap-bar handle rests on the grip and strap-bar edges, the other on the grip and its front bottom edge. Both need support; clean it off the plugs before fitting. With `--auto-roof-support`, as in the published files, the project opens with Bambu's global Auto support switched on, PETG with a PLA Basic contact layer, the same [auto roof support](#auto-roof-support-for-catalogues-and-extras) the catalogue uses, and each plate gets a prime tower. Leave those options out for PETG-only support switched on for each handle instead. For a custom build, omit `--printer` and give all three build dimensions.
 
 The grip, posts and hand opening are sized for a hand, so they don't change with unit size. Instead the handle takes the fewest whole cells that are at least 120 x 60 mm, with an X plug in every cell: 4 x 2 cells at 30 mm units, 3 x 2 at 45 mm. Tile thickness sets the plug depth, as on other X attachments. On very thick tiles the long plugs stop the strap-bar handle from lying steadily on its front while printing, so at the standard unit size it is refused above about 21.5 mm. `--printer` fixes the standard settings. The command rejects hole and solid-bottom options, because the handles have none of those features. An earlier strap-bar prototype printed in the same pose plugged into a tile well and its PETG-only support came off cleanly. This version's taller hand opening, the PLA support interface, the version without the strap bar, other unit sizes and thicknesses, how firmly the plugs hold and how hard you can pull haven't been tested. The plugs are held only by their fit, so don't lift the floor by the handle. There's no load rating.
+
+## Make the cross posts
+
+`extras cross-post` makes posts that hold boxes, crates and tubs in place on the mat. Each arm runs along a grid line, so a box corner sits in any of the four quadrants against two arm faces, and one post holds the corners of up to four boxes where they meet. The tee post drops one arm for a row of boxes or the mat edge; the corner post keeps two arms for a single box corner. The X post turns its four arms onto the diagonals, for loads set at 45 degrees. All four come 60 and 120 mm tall. The set isn't part of the main catalogue.
+
+There's no base plate: the 14 mm arms stand straight on the mat, so a box corner sits flat on the mat right up against the post instead of riding up on a plate. The top 12 mm of each arm leans in by 3 mm, which guides a box into place as you lower it.
+
+Posts come with two mounts. Peg posts have a peg under the centre and under each arm tip, half a unit out, so they fit the round holes at every half-unit point: cell corners, edge midpoints and over the X sockets, where the centre peg just stands in the open socket and the tip pegs hold the post. The centre peg is a snug 10 mm; the tip pegs are 9.7 mm, leaving about the same 0.15 mm gap a side as the tips of the X plug's lobes, so they line the post up without several tight pegs fighting each other across a tile seam. That gives a position every 30 mm along each grid line at the standard unit, twice as many as a post that plugs into the X sockets. X-plug posts use the same X plug as the other attachments and fit over the sockets only; use them on tiles made with `--no-holes`. An X-plug X post is the cross turned 45 degrees, with its arms over the plug's lobes. A peg X post's tips reach the diagonal holes half a unit away in both directions, so its arms are longer (49 mm from the centre) and it fits over sockets and at edge midpoints, but not at cell corners, where only its centre peg would find a hole. The set has one of each shape, mount and height, with the peg posts on one named plate and the X-plug posts on another:
+
+```bash
+uv run cargo-grid extras cross-post --printer h2d --bambu --material "Bambu PETG Basic @BBL H2D 0.8 nozzle" PETG "#637b70" --material "Bambu PLA Basic @BBL H2D 0.8 nozzle" PLA "#0A2989" --nozzle-diameter-mm 0.8 --layer-height-mm 0.32 --auto-roof-support --no-stl --output outputs/cross-post-set
+```
+
+To print several of one post, use `part` with `--copy-count`. `--post-arms` chooses `cross`, `tee`, `corner` or `x`, `--post-mount` chooses `pegs` or `x-plug`, `--post-height-mm` sets the height above the mat (30 to 240 mm) and `--peg-diameter-mm` sets the centre peg from 9 to 10.5 mm, with the tip pegs always 0.3 mm smaller:
+
+```bash
+uv run cargo-grid part --family cross-post --post-arms cross --post-height-mm 90 --copy-count 4 --build-width-mm 256 --build-depth-mm 256 --build-height-mm 256 --output outputs/cross-posts
+```
+
+Box faces sit 7 mm from the centre line of each arm, which is a grid line except on X posts. At the standard unit, a box fits snugly between two posts when its side is a multiple of 30 mm less 14 mm (76, 106, 136 mm and so on); anything else leaves up to 30 mm of play. Each arm reaches 37 mm from the post centre, so two posts whose arms point at each other along one grid line need to be at least 90 mm apart. Closer than that, turn a tee or corner post so that arm points away. Peg X posts in neighbouring cells would both reach the shared corner hole, so leave a cell between them; X-plug X posts in neighbouring cells clear each other by about 3.6 mm.
+
+Peg posts print upside down, standing on their flat top, so the pegs grow straight up and no support is needed. X-plug posts print standing on the plug, with support under the arms beside it; clean it off before fitting. Upside down, the plug's lobes would need support all the way up from the bed. With `--auto-roof-support`, as in the published `Cross-Post-Set` files, both plates get a prime tower and the PLA support interface, as for the pull handles. Arm size, the lead-in and the pegs stay in millimetres at every unit size; the tip pegs move to half the unit size and tile thickness sets how deep the pegs or plug go. Tiles with units under 43 mm don't keep a round hole at every half-unit point, so the set leaves the peg posts out there and `part` refuses them. The command rejects hole and solid-bottom options. None of the posts have been printed yet: peg and plug fit, how a five-peg post seats across a tile seam, support removal and strength are all untested. The posts are held only by their fit and have no load or crash rating, so strap heavy loads down separately.
 
 ## Round-hole rods and upper braces
 
@@ -381,7 +403,7 @@ uv run cargo-grid layout --help
 uv run cargo-grid catalogue --help
 ```
 
-`part` makes one design, `layout` fills a rectangle you give it, `catalogue` makes every design that fits your build volume, `extras zeekr-7x` makes the Zeekr 7X expansion set and `extras pull-handle` makes the pull handle set.
+`part` makes one design, `layout` fills a rectangle you give it, `catalogue` makes every design that fits your build volume, `extras zeekr-7x` makes the Zeekr 7X expansion set, `extras pull-handle` makes the pull handle set and `extras cross-post` makes the cross posts.
 
 Common options:
 
@@ -453,6 +475,15 @@ from cargo_grid.accessories import Accessory
 from cargo_grid.catalogue import accessory_design
 
 bracket = accessory_design(Accessory("vertical-tile-bracket", nx=1, ny=1, panel_height_cells=2))
+```
+
+Cross-post example:
+
+```python
+from cargo_grid.cross_post_set import cross_post_design
+from cargo_grid.cross_posts import CrossPost
+
+tee = cross_post_design(CrossPost("tee", "pegs", height_mm=90))
 ```
 
 Adjustable-stop print-project example:

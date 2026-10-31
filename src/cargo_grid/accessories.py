@@ -20,6 +20,7 @@ from typing import Literal
 from build123d import Axis, Edge, Face, GeomType, Location, Part, Solid, Vector, Wire
 from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet
 
+from cargo_grid.cross_posts import CROSS_POST_FAMILY
 from cargo_grid.interfaces import (
     dovetail_face,
     horizontal_edges,
@@ -1010,6 +1011,11 @@ def bambu_print_policy(parameters: dict) -> BambuPrintPolicy:
         rotation_x = pull_handle_print_rotation_x(
             parameters["strap_bar"], Interface(**parameters["interface"])
         )
+    elif family == CROSS_POST_FAMILY:
+        # Peg posts stand on their flat top so the pegs grow straight up without support.
+        # Upside down, an X plug's lobes would need support from the bed to the post height;
+        # standing on the plug, only the short arm undersides beside it do.
+        rotation_x = 180.0 if parameters.get("mount") == "pegs" else None
     else:
         rotation_x = (
             None
@@ -1030,6 +1036,12 @@ def bambu_print_policy(parameters: dict) -> BambuPrintPolicy:
     elif family == PULL_HANDLE_FAMILY:
         # Both versions print on their front, over the hand opening and the strap bar.
         object_settings = {"enable_support": "1", "support_type": "normal(auto)"}
+    elif family == CROSS_POST_FAMILY:
+        object_settings = (
+            {"enable_support": "1", "support_type": "normal(auto)"}
+            if parameters.get("mount") == "x-plug"
+            else {}
+        )
     else:
         object_settings = dict(BAMBU_OBJECT_SETTINGS.get(family, {}))
     return BambuPrintPolicy(rotation_x, rotation_y, object_settings)

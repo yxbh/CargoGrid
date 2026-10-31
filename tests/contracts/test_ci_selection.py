@@ -228,7 +228,7 @@ def test_weekly_parts_need_complete_inventory_and_exact_reviewed_fingerprints(
         "environment": cached_mapping["environment"],
         "fingerprints": {
             f"variant-{index}{suffix}": "before"
-            for index in range(24)
+            for index in range(publish_guard.PUBLISHED_PAIRS)
             for suffix in (".3mf", ".manifest.json")
         },
     }
@@ -249,7 +249,7 @@ def test_weekly_parts_need_complete_inventory_and_exact_reviewed_fingerprints(
     )
     with pytest.raises(ValueError, match="duplicate"):
         merge_fingerprints([path, path], None, "", report)
-    with pytest.raises(ValueError, match="all 24"):
+    with pytest.raises(ValueError, match=f"all {publish_guard.PUBLISHED_PAIRS}"):
         merge_fingerprints([], None, "", report)
 
 
@@ -308,6 +308,8 @@ def test_publish_guard_snapshots_both_commits_and_rejects_dependency_drift(
     monkeypatch.setattr(publish_guard, "ROOT", tmp_path)
     monkeypatch.setattr(publish_guard, "git", git)
     monkeypatch.setattr(publish_guard, "build", build)
+    # Each archived source declares its own inventory; these stand-ins declare 24.
+    monkeypatch.setattr(publish_guard, "declared_pairs", lambda source: 24)
     monkeypatch.setattr(
         publish_guard,
         "environment",

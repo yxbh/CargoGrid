@@ -36,6 +36,7 @@ from cargo_grid.bambu import (
 from cargo_grid.bambu import (
     Material as Material,
 )
+from cargo_grid.cross_posts import CROSS_POST_FAMILY
 from cargo_grid.footprints import (
     ProjectedFootprint,
     projected_meshes_footprint,
@@ -908,7 +909,8 @@ def export_job(
                     "lock-45",
                     "vertical-stop",
                     "pull-handle",
-                ),
+                )
+                or (family == CROSS_POST_FAMILY and design.parameters.get("mount") == "x-plug"),
             )
             if family != "tile":
                 compatibility["geometry_warning"] = None

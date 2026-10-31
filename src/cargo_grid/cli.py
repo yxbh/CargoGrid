@@ -17,6 +17,9 @@ from cargo_grid.catalogue import (
     catalogue_job,
     dual_safe_catalogue_job,
 )
+from cargo_grid.cross_post_set import cross_post_design
+from cargo_grid.cross_post_set import extras_job as cross_post_extras_job
+from cargo_grid.cross_posts import ARM_LAYOUTS, CROSS_POST_FAMILY, MOUNTS, CrossPost
 from cargo_grid.export import BambuSettings, Material, export_job
 from cargo_grid.jobs import Job, layout_job, tile_design
 from cargo_grid.layout import exact_layout
@@ -40,7 +43,7 @@ from cargo_grid.roof_support import RoofSupportSettings
 from cargo_grid.stacking import StackSettings
 from cargo_grid.vehicles import zeekr_7x
 
-EXTRAS_RECIPES = ("zeekr-7x", "pull-handle", "adjustable-stop")
+EXTRAS_RECIPES = ("zeekr-7x", "pull-handle", "adjustable-stop", "cross-post")
 PRINTER_FIXED_DEFAULTS = {
     "build_margin_mm": 0,
     "build_reserve_width_mm": 0,
@@ -87,7 +90,14 @@ def _part_dimensions(args) -> tuple[int, int]:
     family = args.family
     two_axis = {"tile", "plate", "vertical-tile-bracket", "vertical-stop", "lock-45"}
     linear = {"edge-x", "edge-y", "support"}
-    dimensionless = {"corner-in", "corner-out", "support-bit", "support-end", *ROD_FAMILIES}
+    dimensionless = {
+        "corner-in",
+        "corner-out",
+        "support-bit",
+        "support-end",
+        *ROD_FAMILIES,
+        CROSS_POST_FAMILY,
+    }
     if family in two_axis:
         if length is not None:
             raise ValueError(f"{family} uses --width-cells and --depth-cells, not --length-cells")
@@ -199,13 +209,13 @@ def _check_solid_bottom(args, interface: Interface) -> None:
         raise ValueError("stacking does not support --solid-bottom-thickness-mm yet")
 
 
-def _check_pull_handle_options(args) -> None:
+def _check_no_tile_options(args) -> None:
     if (
         getattr(args, "holes", None) is not None
         or getattr(args, "hole_diameter_mm", None) is not None
         or args.hole_scope != "full"
     ):
-        raise ValueError("round-hole options apply to tiles; the pull-handle set has no tiles")
+        raise ValueError(f"round-hole options apply to tiles; the {args.recipe} set has no tiles")
 
 
 def _roof_support(args) -> RoofSupportSettings | None:
@@ -351,7 +361,8 @@ def parser() -> argparse.ArgumentParser:
                     "zeekr-7x: Zeekr 7X expansion set of 40 mm straight edges plus the measured "
                     "rear-panel contour caps and ramps; pull-handle: two-unit X-plug pull "
                     "handle with and without a strap bar; adjustable-stop: adjustable four-object "
-                    "dual-nozzle print kit"
+                    "dual-nozzle print kit; cross-post: cross, tee and corner box-corner posts "
+                    "with round-hole pegs or an X plug"
                 ),
             )
         for axis, meaning in (
@@ -525,8 +536,8 @@ def parser() -> argparse.ArgumentParser:
             p.add_argument(
                 "--family",
                 default="tile",
-                choices=["tile", *FAMILIES, *ROD_FAMILIES],
-                help="ramp joins a tile edge; vertical-tile-bracket carries a separate tile; vertical-stop is a filled cargo wedge",
+                choices=["tile", *FAMILIES, *ROD_FAMILIES, CROSS_POST_FAMILY],
+                help="ramp joins a tile edge; vertical-tile-bracket carries a separate tile; vertical-stop is a filled cargo wedge; cross-post holds box corners",
             )
             p.add_argument(
                 "--width-cells",
@@ -612,7 +623,23 @@ def parser() -> argparse.ArgumentParser:
                 "--peg-diameter-mm",
                 type=_positive_mm,
                 metavar="MM",
-                help="rod mounting peg diameter, not shaft diameter; defaults to 10 mm",
+                help="rod mounting peg diameter, not shaft diameter, or a peg-mounted cross post's centre peg (its tip pegs are 0.3 mm smaller); defaults to 10 mm",
+            )
+            p.add_argument(
+                "--post-arms",
+                choices=tuple(ARM_LAYOUTS),
+                help="cross-post arm layout: cross (four arms, default), tee (three) or corner (two)",
+            )
+            p.add_argument(
+                "--post-mount",
+                choices=MOUNTS,
+                help="cross-post mount: pegs in the round holes at any half-unit point (default) or an X plug over a socket",
+            )
+            p.add_argument(
+                "--post-height-mm",
+                type=_positive_mm,
+                metavar="MM",
+                help="cross-post height above the mat, in mm; defaults to 60",
             )
             p.add_argument(
                 "--brace-spacing-mm",
@@ -692,7 +719,7 @@ def _resolved_hole_diameter(args) -> float | None:
 
 def _part_specification(
     args, interface: Interface, hole_diameter: float | None
-) -> Tile | Accessory | Rod | RodBrace:
+) -> Tile | Accessory | Rod | RodBrace | CrossPost:
     """Resolve one narrow parameter type before constructing any geometry."""
     count("copy count", args.copy_count)
     cells = _part_dimensions(args)
@@ -714,7 +741,10 @@ def _part_specification(
     complete_edge_holes = _part_option(args, "complete_edge_holes", set(EDGE_FAMILIES), None)
     ramp_join = _part_option(args, "ramp_join", {"ramp"}, "female")
     rod_height = _part_option(args, "rod_height_mm", {"rod"}, 120.0)
-    peg_diameter = _part_option(args, "peg_diameter_mm", {"rod"}, 10.0)
+    peg_diameter = _part_option(args, "peg_diameter_mm", {"rod", CROSS_POST_FAMILY}, None)
+    post_arms = _part_option(args, "post_arms", {CROSS_POST_FAMILY}, "cross")
+    post_mount = _part_option(args, "post_mount", {CROSS_POST_FAMILY}, "pegs")
+    post_height = _part_option(args, "post_height_mm", {CROSS_POST_FAMILY}, 60.0)
     brace_spacing = _part_option(args, "brace_spacing_mm", {"rod-brace"}, 60.0)
     bore_diameter = _part_option(args, "bore_diameter_mm", {"rod-brace"}, 10.0)
     if args.family == "tile":
@@ -722,11 +752,13 @@ def _part_specification(
     if args.family == "rod":
         if interface.fit_offset:
             raise ValueError("rod uses --peg-diameter-mm, not --fit-offset-mm")
-        return Rod(rod_height, peg_diameter, interface.height)
+        return Rod(rod_height, 10.0 if peg_diameter is None else peg_diameter, interface.height)
     if args.family == "rod-brace":
         if interface.fit_offset:
             raise ValueError("rod-brace uses --bore-diameter-mm, not --fit-offset-mm")
         return RodBrace(brace_spacing, bore_diameter)
+    if args.family == CROSS_POST_FAMILY:
+        return CrossPost(post_arms, post_mount, post_height, peg_diameter, interface)
     return Accessory(
         args.family,
         *cells,
@@ -756,7 +788,13 @@ def main(argv: list[str] | None = None) -> int:
         stack = _stack_settings(args, bambu, build, interface)
         if args.command == "part":
             spec = _part_specification(args, interface, hole_diameter)
-            design = tile_design(spec) if isinstance(spec, Tile) else accessory_design(spec)
+            design = (
+                tile_design(spec)
+                if isinstance(spec, Tile)
+                else cross_post_design(spec)
+                if isinstance(spec, CrossPost)
+                else accessory_design(spec)
+            )
             design.quantity = args.copy_count
             print_size = design.bambu_size if bambu else design.size
             if build.placement(print_size) is None:
@@ -803,9 +841,14 @@ def main(argv: list[str] | None = None) -> int:
                     )
                     print(manifest)
                     return 0
-                if args.recipe == "pull-handle":
-                    _check_pull_handle_options(args)
-                    job = pull_handle_extras_job(
+                if args.recipe in ("pull-handle", "cross-post"):
+                    _check_no_tile_options(args)
+                    recipe_job = (
+                        pull_handle_extras_job
+                        if args.recipe == "pull-handle"
+                        else cross_post_extras_job
+                    )
+                    job = recipe_job(
                         build,
                         interface=interface,
                         placement_build=(printer.common_build() if printer else None),

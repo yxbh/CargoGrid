@@ -16,6 +16,10 @@ from zipfile import ZipFile
 
 from test_selection import ROOT, digest, environment, git, write_json
 
+# Every published archive/manifest pair for both printers. The weekly merge runs without the
+# project installed, so this can't come from tools/makerworld_exports.py; a contract keeps them equal.
+PUBLISHED_PAIRS = 28
+
 
 def manifest_changes(before, after, path=""):
     if isinstance(before, dict) and isinstance(after, dict):
@@ -48,13 +52,36 @@ def fingerprints(folder):
     }
 
 
-def validate_inventory(hashes):
+def validate_inventory(hashes, pairs=PUBLISHED_PAIRS):
     archives = {name.removesuffix(".3mf") for name in hashes if name.endswith(".3mf")}
     manifests = {
         name.removesuffix(".manifest.json") for name in hashes if name.endswith(".manifest.json")
     }
-    if len(hashes) != 48 or len(archives) != 24 or archives != manifests:
-        raise ValueError("publish guard requires all 24 archive/manifest pairs")
+    if len(hashes) != 2 * pairs or len(archives) != pairs or archives != manifests:
+        raise ValueError(f"publish guard requires all {pairs} archive/manifest pairs")
+
+
+def declared_pairs(source):
+    """Published variants that a source's export script declares for both printers."""
+    listing = subprocess.run(
+        [
+            sys.executable,
+            str(source / "tools/makerworld_exports.py"),
+            "--printer",
+            "h2d",
+            "--printer",
+            "x2d",
+            "--dry-run",
+            "--output",
+            str(source),
+        ],
+        cwd=source,
+        env={**os.environ, "PYTHONPATH": str(source / "src")},
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return sum(line.startswith("CargoGrid_") for line in listing.stdout.splitlines())
 
 
 def objects(archive):
@@ -159,11 +186,14 @@ def guard(args):
     args.output.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="publish-", dir=args.output) as temporary:
         scratch = Path(temporary)
+        declared = {}
         for label, commit in (("baseline", base), ("candidate", head)):
             source = scratch / f"{label}-source"
             source.mkdir()
             with tarfile.open(fileobj=io.BytesIO(git(ROOT, "archive", commit))) as archive:
                 archive.extractall(source, filter="data")
+            # Each side is complete against its own inventory, so added sets can be reviewed.
+            declared[label] = declared_pairs(source)
             build(source, scratch / label, args.jobs)
         changes = compare(scratch / "baseline", scratch / "candidate")
         if recorded_environment != environment(ROOT):
@@ -177,8 +207,8 @@ def guard(args):
             "changes": changes,
         }
         write_json(args.output / "report.json", report)
-        validate_inventory(report["baseline"])
-        validate_inventory(report["candidate"])
+        validate_inventory(report["baseline"], declared["baseline"])
+        validate_inventory(report["candidate"], declared["candidate"])
     print(
         f"{base}..{head}: {len(changes)} changed deliverables; "
         f"report: {args.output / 'report.json'}"
