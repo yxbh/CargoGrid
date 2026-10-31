@@ -45,8 +45,9 @@ GEOMETRY_FILES = (
 # CAD Explorer azimuth:elevation in degrees: azimuth 0 looks from the front (-Y) and 90 from the right (+X).
 CAMERA = "135:32"
 BACKGROUND = "#f9f9f6"
-# The Explorer fits a part's bounding sphere and draws without supersampling, so render at about twice the size
-# the pictures use; composing scales each render down to its family's scale.
+# The Explorer fits a part's bounding sphere and draws without supersampling, so render well above the pictures' size:
+# composing scales each render down to its family's scale, to about half for compact parts and only to about nine
+# tenths for the longest edge strips, whose bounding sphere is large for the picture they fill.
 RENDER_SIZES = {"overview": (2000, 1300), "thumbnail": (1200, 720)}
 # Picture-only part colours. The Explorer shows STEP colours as given under its Inspect lighting, so these are the
 # shades the pictures should show: green parts, grey-green strips, rails and rods, and lighter separate tiles.
@@ -964,13 +965,13 @@ def write_gallery(
         "",
         "## Reproduce the images",
         "",
-        "Use a CAD-Pilot checkout at the recorded workbench revision, with no uncommitted changes, set up as its README describes: Playwright's Chromium installed and CAD Explorer built. Node.js must be on the path. Cargo-Grid doesn't add any of these as dependencies. From this repository root, run:",
+        "Use a CAD-Pilot checkout at the recorded workbench revision, with no uncommitted changes, set up as its README describes, with its Python environment, CAD Explorer's packages and Playwright's Chromium installed; the script builds CAD Explorer itself. Node.js must be on the path. Cargo-Grid doesn't add any of these as dependencies. From this repository root, run:",
         "",
         "```sh",
         "uv run python tools/render_docs.py --workbench <workbench-checkout> --geometry-revision <committed-generator-revision> --workbench-revision <recorded-workbench-revision>",
         "```",
         "",
-        f"This project's environment runs the workbench's STEP and inspection tools, and Pillow composes the pictures; paths are supplied locally, not committed. A full run checks geometry modules against the recorded commit, generates and inspects each STEP, has CAD Explorer's `render` draw it orthographically from azimuth {CAMERA.split(':')[0]}, elevation {CAMERA.split(':')[1]} (the Explorer's convention: azimuth 0 looks from the front, 90 from the right) and takes each picture's scale from the camera that render reports. It then creates {len(IMAGE_NAMES)} overview PNGs and {len(items)} family-scaled thumbnails. `--compose-only` reuses verified local STEP-derived renders; `--check` verifies the committed files and their one-to-one inventory mapping without Pillow. Intermediate STEP files and raw renders remain ignored. Layout is deterministic; raster bytes can depend on the graphics stack and the Chromium and Pillow versions.",
+        f"This project's environment runs the workbench's STEP and inspection tools, and Pillow composes the pictures; paths are supplied locally, not committed. A full run checks geometry modules against the recorded commit, generates and inspects each STEP, has CAD Explorer's `render` draw it orthographically from azimuth {CAMERA.split(':')[0]}, elevation {CAMERA.split(':')[1]} (the Explorer's convention: azimuth 0 looks from the front, 90 from the right) and takes each picture's scale from the camera that render reports. It then creates {len(IMAGE_NAMES)} overview PNGs and {len(items)} family-scaled thumbnails. `--compose-only` reuses verified local STEP-derived renders; `--check` verifies the committed files and their one-to-one inventory mapping without Pillow. Intermediate STEP files and raw renders remain ignored. Layout is deterministic; raster bytes can depend on the graphics stack, the Chromium and Pillow versions, and the workbench's local Explorer packages and Python environment, which its revision does not pin.",
         "",
         "For a ramp-only update, add `--update-ramps --geometry-revision <committed-generator-revision> --workbench-revision <recorded-workbench-revision>`. This renders all ten ramps and recomposes only the ramp overview. Other pictures and their original provenance stay unchanged; no earlier render cache is needed.",
         "",
