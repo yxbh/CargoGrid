@@ -1,4 +1,4 @@
-"""Documentation coverage and assets without requiring a renderer or Pillow."""
+"""Documentation coverage and assets without requiring a renderer."""
 
 import importlib.util
 import json
@@ -263,7 +263,6 @@ def test_render_items_refuses_an_uncommitted_workbench(gallery, tmp_path):
 
 
 def test_placed_render_uses_the_reported_camera_scale(gallery, tmp_path):
-    pytest.importorskip("PIL")
     from PIL import Image, ImageChops
 
     renders = tmp_path / "renders"
