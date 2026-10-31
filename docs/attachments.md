@@ -204,13 +204,13 @@ Before packing, Bambu projects put plates broad-face-down at X=180, rail ends on
 
 ## Reproduce the images
 
-Use a CAD-Pilot checkout at the recorded workbench revision with its render dependencies installed. Cargo-Grid doesn't add them as runtime dependencies. From this repository root, run:
+Use a CAD-Pilot checkout at the recorded workbench revision, with no uncommitted changes, set up as its README describes: Playwright's Chromium installed and CAD Explorer built. Node.js must be on the path. Cargo-Grid doesn't add any of these as dependencies. From this repository root, run:
 
 ```sh
-PYTHONPATH=src <workbench-python> tools/render_docs.py --workbench <workbench-checkout> --geometry-revision <committed-generator-revision> --workbench-revision <recorded-workbench-revision>
+uv run python tools/render_docs.py --workbench <workbench-checkout> --geometry-revision <committed-generator-revision> --workbench-revision <recorded-workbench-revision>
 ```
 
-Use the workbench's Python interpreter with Pillow already available; paths are supplied locally, not committed. In PowerShell, set `$env:PYTHONPATH='src'` before invoking that interpreter. A full run checks geometry modules against the recorded commit, invokes STEP/inspection/render tools, then creates 7 overview PNGs and 107 family-scaled thumbnails. `--compose-only` reuses verified local STEP-derived renders; `--check` verifies the committed files and their one-to-one inventory mapping without Pillow. Intermediate STEP files and raw renders remain ignored. Layout is deterministic; raster bytes can depend on graphics/Pillow versions.
+This project's environment runs the workbench's STEP and inspection tools, and Pillow composes the pictures; paths are supplied locally, not committed. A full run checks geometry modules against the recorded commit, generates and inspects each STEP, has CAD Explorer's `render` draw it orthographically from azimuth 135, elevation 32 (looking from the back right) and takes each picture's scale from the camera that render reports. It then creates 7 overview PNGs and 107 family-scaled thumbnails. `--compose-only` reuses verified local STEP-derived renders; `--check` verifies the committed files and their one-to-one inventory mapping without Pillow. Intermediate STEP files and raw renders remain ignored. Layout is deterministic; raster bytes can depend on the graphics stack and the Chromium and Pillow versions.
 
 For a ramp-only update, add `--update-ramps --geometry-revision <committed-generator-revision> --workbench-revision <recorded-workbench-revision>`. This renders all ten ramps and recomposes only the ramp overview. Other pictures and their original provenance stay unchanged; no earlier render cache is needed.
 
@@ -220,6 +220,6 @@ For a repaired outer-corner-half update, use `--update-corner-halves` with those
 
 For a rod-and-brace update, use `--update-rods` with those revision options. It renders only the four rods and two nominal 10 mm braces, then creates their six thumbnails and one overview. All other image bytes and provenance stay unchanged.
 
-The manifest's top-level provenance belongs to the retained baseline images. Incrementally rendered thumbnails and overviews each carry their own provenance; this is not a full-gallery rerender. Rod and brace update source revision: <code>ff60ac12<wbr>22fb22a2<wbr>c592903b<wbr>9ad904c6<wbr>bcb5e088</code>. Generator tree: <code>9154f3d7<wbr>a39a1a12<wbr>fd53df81<wbr>9a96c3c9<wbr>35d9ac81</code>. Workbench revision: <code>96fe6a1a<wbr>50df362e<wbr>f5785e75<wbr>12812596<wbr>98df5339</code>.
+Generator source revision: <code>417a4ef7<wbr>cc7afc65<wbr>4575dc72<wbr>479810ea<wbr>3cbc7cb3</code>. Generator tree: <code>becdc091<wbr>570e8708<wbr>2d6354ef<wbr>d8e9a2ae<wbr>cf0f8ac6</code>. Workbench revision: <code>f5de8f59<wbr>f8031eee<wbr>4e12c5f6<wbr>7498c244<wbr>8b9c6078</code>.
 
 A clean render checks the picture and source inventory; it doesn't prove print quality or fit.
