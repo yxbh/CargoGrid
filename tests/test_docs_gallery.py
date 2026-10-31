@@ -216,6 +216,10 @@ def test_render_items_draws_each_step_with_the_explorer(gallery, tmp_path, monke
     monkeypatch.setattr(gallery, "run", run)
     monkeypatch.setattr(gallery, "verify_geometry_source", lambda revision: None)
     monkeypatch.setattr(gallery.shutil, "which", lambda name: f"/bin/{name}")
+    # A picture left by an earlier run that failed after drawing it is never reused.
+    stale = project / "outputs/work/renders/plate-1x1.png"
+    stale.parent.mkdir(parents=True)
+    stale.write_bytes(b"stale")
     gallery.render_items(
         workbench,
         project / "outputs/work",
@@ -224,11 +228,13 @@ def test_render_items_draws_each_step_with_the_explorer(gallery, tmp_path, monke
         workbench_revision=revision,
     )
     tools = workbench / ".agents/skills/cad/scripts"
-    assert [command[:2] for command in commands] == [
+    assert commands[0] == ["/bin/node", str(workbench / "explorer/scripts/build.mjs")]
+    assert [command[:2] for command in commands[1:]] == [
         [sys.executable, str(tools / "step")],
         [sys.executable, str(tools / "inspect")],
         ["/bin/node", str(workbench / "explorer/scripts/explorer.mjs")],
     ] * 2
+    assert not stale.exists()
     renders = [command[2:] for command in commands if command[2:3] == ["render"]]
     for (_, step, image, *options), size in zip(renders, ("2000x1300", "1200x720"), strict=True):
         assert Path(step).suffix == ".step" and Path(image).suffix == ".png"

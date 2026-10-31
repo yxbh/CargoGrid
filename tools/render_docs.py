@@ -486,7 +486,12 @@ def run(command, log: Path, environment: dict, answer: Path | None = None) -> No
     with log.open("w") as messages, answer.open("w") if answer else nullcontext(messages) as output:
         result = subprocess.run(command, cwd=ROOT, env=environment, stdout=output, stderr=messages)
     if result.returncode:
-        raise RuntimeError(f"Documentation tool failed; inspect {log.relative_to(ROOT)}")
+        where = (
+            log.relative_to(ROOT)
+            if answer is None
+            else f"{log.relative_to(ROOT)} and {answer.relative_to(ROOT)}"
+        )
+        raise RuntimeError(f"Documentation tool failed; inspect {where}")
 
 
 def render_items(
@@ -524,6 +529,12 @@ def render_items(
     environment["PYTHONDONTWRITEBYTECODE"] = "1"
     for subdir in ("source", "steps", "renders", "facts", "logs"):
         (work / subdir).mkdir(parents=True, exist_ok=True)
+    # The Explorer draws from its git-ignored build; rebuild it if its inputs differ from this checkout's.
+    run(
+        [node, str(workbench / "explorer/scripts/build.mjs")],
+        work / "logs" / "explorer-build.log",
+        environment,
+    )
     items = hero_items() + interface_scale_items() + inventory() + bracket_assembly_items()
     if only and not only <= {item.key for item in items}:
         raise ValueError("Unknown --only item")
@@ -546,6 +557,9 @@ def render_items(
             and json.loads(facts.read_text()).get("cache") == cache
         ):
             continue
+        # A picture is only reused when this run drew it, never left over from a run that failed later.
+        image.unlink(missing_ok=True)
+        camera.unlink(missing_ok=True)
         source.write_text(
             "import json\nfrom pathlib import Path\nfrom tools.render_docs import documentation_shape\n\n"
             "def gen_step():\n"
@@ -748,6 +762,7 @@ def thumbnail_entries(
         "workbench_commit": provenance["workbench_commit"],
         "catalogue_build_mm": {"width_x": 350, "depth_y": 320, "height_z": 325},
         "camera": CAMERA,
+        "camera_convention": "CAD Explorer azimuth:elevation in degrees; azimuth 0 looks from the front (-Y), 90 from the right (+X)",
         "scale": "Common physical scale within each family; families differ.",
         "source_render_recipe_sha256": provenance["recipe_sha256"],
         "overview_images": [
@@ -955,7 +970,7 @@ def write_gallery(
         "uv run python tools/render_docs.py --workbench <workbench-checkout> --geometry-revision <committed-generator-revision> --workbench-revision <recorded-workbench-revision>",
         "```",
         "",
-        f"This project's environment runs the workbench's STEP and inspection tools, and Pillow composes the pictures; paths are supplied locally, not committed. A full run checks geometry modules against the recorded commit, generates and inspects each STEP, has CAD Explorer's `render` draw it orthographically from azimuth {CAMERA.split(':')[0]}, elevation {CAMERA.split(':')[1]} (looking from the back right) and takes each picture's scale from the camera that render reports. It then creates {len(IMAGE_NAMES)} overview PNGs and {len(items)} family-scaled thumbnails. `--compose-only` reuses verified local STEP-derived renders; `--check` verifies the committed files and their one-to-one inventory mapping without Pillow. Intermediate STEP files and raw renders remain ignored. Layout is deterministic; raster bytes can depend on the graphics stack and the Chromium and Pillow versions.",
+        f"This project's environment runs the workbench's STEP and inspection tools, and Pillow composes the pictures; paths are supplied locally, not committed. A full run checks geometry modules against the recorded commit, generates and inspects each STEP, has CAD Explorer's `render` draw it orthographically from azimuth {CAMERA.split(':')[0]}, elevation {CAMERA.split(':')[1]} (the Explorer's convention: azimuth 0 looks from the front, 90 from the right) and takes each picture's scale from the camera that render reports. It then creates {len(IMAGE_NAMES)} overview PNGs and {len(items)} family-scaled thumbnails. `--compose-only` reuses verified local STEP-derived renders; `--check` verifies the committed files and their one-to-one inventory mapping without Pillow. Intermediate STEP files and raw renders remain ignored. Layout is deterministic; raster bytes can depend on the graphics stack and the Chromium and Pillow versions.",
         "",
         "For a ramp-only update, add `--update-ramps --geometry-revision <committed-generator-revision> --workbench-revision <recorded-workbench-revision>`. This renders all ten ramps and recomposes only the ramp overview. Other pictures and their original provenance stay unchanged; no earlier render cache is needed.",
         "",
